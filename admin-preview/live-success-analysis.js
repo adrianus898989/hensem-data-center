@@ -202,7 +202,7 @@
   if(!model.ready)return '<div class="live-status live-query-prompt">'+escape(model.message)+'</div>';
   if(!L.loading&&!L.restoredPage&&L.feeLookupRows===null&&!L.feeLookupLoading&&!L.feeLookupError)props.ensureFeeLookup?.();
   const windows=L.successWindows||[],windowGroups=[...new Set(windows.map(w=>(w.successFrom&&w.successTo?'创建 ':'')+w.from.replace('T',' ')+' 至 '+w.to.replace('T',' ')+(w.successFrom&&w.successTo?'；'+(w.successBasis==='source_updated'?'源订单更新 ':'成功 ')+w.successFrom.replace('T',' ')+' 至 '+w.successTo.replace('T',' '):'；按创建订单当前成功状态统计')+' · '+w.timezone+(w.clamped?'（截至查询时刻）':'')))],notices=[];
-  if(windowGroups.length)notices.push('已查询 '+windowGroups.map(escape).join('；')); 
+  const queriedWindow=windowGroups.length?'<details class="report-explanation" data-report-explanation="success-window"><summary>查询范围</summary><div>已查询 '+windowGroups.map(escape).join('；')+'</div></details>':'';
   if(L.error)notices.push(escape(L.error));
   if(L.loading||L.queryRetrying)notices.push(escape(L.progress||'正在读取平台成功率；当前为部分结果。'));
   if(L.queryPaused)notices.push('查询已暂停，保留已读取结果。<button class="link" onclick="liveRetryFailed(true)">继续查询</button>');
@@ -212,7 +212,7 @@
   const pandaBasis=model.columns.some(p=>source(p.source)==='panda');
   const updatedBasis=model.columns.some(p=>p.capabilities?.successTimeBasis==='order_updated_at')||(L.results||[]).some(r=>(r.capabilities||r.platform?.capabilities)?.successTimeBasis==='order_updated_at');
   const created=createdMode(L),secondaryLabel=L.successBasis==='source_updated'?'源订单更新时间':'成功时间',sections=[['charge','代收成功率',created?'创建日期订单的当前成功笔数 ÷ 这些订单的全部笔数；不代表期间实际到账。':secondaryLabel+'内成功笔数 ÷ 创建时间内全部笔数。'],['withdraw','代付成功率',created?'创建日期订单的当前成功笔数 ÷ 这些订单的全部笔数；未提供统计依据时显示 —。':secondaryLabel+'内成功笔数 ÷ 创建时间内全部笔数；未提供可核验时间时显示 —。'],['workorder','工单成功率','按所选自然日范围：已处理原支付单 ÷ 全部提交原支付单；按平台、业务、完整原单号去重，状态 4 计已处理，不代表实际到账。']];
-  return '<div class="live-success-analysis">'+(notices.length?'<div class="live-status">'+notices.join('<br>')+'</div>':'')+sections.map(([key,title,note])=>{
+  return '<div class="live-success-analysis">'+(notices.length?'<div class="live-status">'+notices.join('<br>')+'</div>':'')+queriedWindow+sections.map(([key,title,note])=>{
    if(key==='workorder'&&L.workordersTimeUnsupported)return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2></div><p>工单仅支持完整自然日汇总，自定义时段暂不提供。</p></section>'; 
    const ranked=rankedRows(model,key),sorted=props.sortTable?.('success-analysis-'+key,['总成功率'],ranked,[{value:row=>row.totals[key].value}])||{rows:ranked,headers:['总成功率']};
    const visibleRows=sorted.rows,withType=key!=='workorder',indexes=rankedColumnIndexes(model,key),head='<thead><tr><th scope="col">三方</th>'+(withType?'<th scope="col" class="success-provider-type">类型</th>':'')+indexes.map(index=>{const p=model.columns[index],volume=model.footers[key][index].volume;return '<th scope="col" title="'+escape(p.name+' · '+system(p.source)+' · '+p.id+' · 已读取提交笔数 '+(volume===null?'未提供':volume)+(model.footers[key][index].partial?'（部分）':''))+'">'+escape(p.name)+'<small>'+escape(system(p.source))+'</small></th>';}).join('')+'<th scope="col" class="success-total-rate">'+sorted.headers[0]+'</th></tr></thead>';

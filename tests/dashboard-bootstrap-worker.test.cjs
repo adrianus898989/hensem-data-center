@@ -193,3 +193,38 @@ test('preview preserves original doctype contract with comments or head-less leg
     assert.equal(response.status,200);assert.equal(await response.text(),html);
   }
 });
+
+test('shared-domain text/plain preview accepts validated HTML and gzip without stale headers', async () => {
+  const html='<!doctype html><html><body>Hensem authorized preview</body></html>';
+  for (const [body,encoding] of [[html,null],[gzipSync(html),'gzip'],[html,'gzip']]) {
+    const {response,remote}=await run(request('dashboard-preview'),()=>new Response(body,{headers:{'Content-Type':'text/plain; charset=utf-8',...(encoding?{'Content-Encoding':encoding}:{}),'Content-Length':'99'}}));
+    assert.equal(response.status,200);assert.equal(await response.text(),html);
+    assert.match(response.headers.get('content-type'),/^text\/html/);privateResponse(response);
+    assert.equal(remote.length,1);assert.equal(remote[0].url,'https://gmfyfzsxpxmaqtuuwgxb.supabase.co/functions/v1/owner-admin-preview');
+  }
+});
+test('text/plain compatibility is restricted to authorized successful complete preview documents', async () => {
+  const html='<!doctype html><html><body>Hensem</body></html>';
+  for (const [route,body,status,type] of [
+    ['dashboard-preview','private diagnostic',500,'text/plain'],
+    ['dashboard-preview','<html>Hensem invalid signature</html>',200,'text/plain'],
+    ['dashboard-preview','<!doctype html><html>unexpected</html>',200,'text/plain'],
+    ['dashboard-preview',new Uint8Array([0xff,0xfe,0xfd]),200,'text/plain'],
+    ['dashboard-preview',html,200,'application/octet-stream'],
+    ['dashboard-preview?check=1',html,200,'text/plain'],
+    ['dashboard-preview?action=access',html,200,'text/plain'],
+    ['dashboard-role-access','{}',200,'text/plain'],
+    ['dashboard-access-check','{}',200,'text/plain'],
+  ]) {
+    const post=/role-access|access-check/.test(route);
+    const {response,remote}=await run(request(route,post?{method:'POST',body:'{}',headers:{'Content-Type':'application/json'}}:{}),()=>new Response(body,{status,headers:{'Content-Type':type}}));
+    assert.equal(response.status,503,route);assert.deepEqual(await response.json(),{code:'bootstrap_unavailable'});privateResponse(response);assert.equal(remote.length,1);
+  }
+  const denied=await run(request('dashboard-preview'),()=>assert.fail('denied must not request preview'),{allowed:false});
+  assert.equal(denied.response.status,403);assert.equal(denied.remote.length,0);
+});
+test('gateway text/plain gzip does not bypass decompressed preview size limit', async () => {
+  const html='<!doctype html><html>Hensem'+'a'.repeat(16*1024*1024)+'</html>';
+  const {response}=await run(request('dashboard-preview'),()=>new Response(gzipSync(html),{headers:{'Content-Type':'text/plain','Content-Encoding':'gzip'}}));
+  assert.equal(response.status,503);assert.deepEqual(await response.json(),{code:'bootstrap_unavailable'});
+});

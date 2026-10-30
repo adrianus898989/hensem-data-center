@@ -1348,7 +1348,7 @@ test('filter coverage distinguishes directory membership from returned transacti
 
 test('pending and conflicting report ownership are status messages rather than selectable teams',async()=>{
  const h=await ready({reports:true,platforms:[{...P,team:'M8'}]});h.L.withdrawCatalog=[{name:'SUPERLG',country:'菲律宾',team:'M8',source:'withdraw'},{name:'PENDING',country:'巴基斯坦',team:null},{name:'CONFLICT',country:'印尼',team:'__team_conflict__'},{name:'LEGACY',country:'LG',team:'__unassigned__'}];h.c.render();
- const teams=()=>h.nodes.get('liveFilters').innerHTML.match(/<details[^>]+data-multi="team"[^]*?<\/details>/)[0];assert.match(teams(),/M8|未绑定团队/);assert.doesNotMatch(teams(),/__team_pending__|__team_conflict__|团队待读取|归属待核对/);assert.match(h.nodes.get('liveFilters').innerHTML,/部分平台团队待读取/);assert.match(h.nodes.get('liveFilters').innerHTML,/部分平台归属待核对/);
+ const teams=()=>h.nodes.get('liveFilters').innerHTML.match(/<details[^>]+data-multi="team"[^]*?<\/details>/)[0];assert.match(teams(),/M8|未绑定团队/);assert.doesNotMatch(teams(),/__team_pending__|__team_conflict__|团队待读取|归属待核对/);assert.match(h.nodes.get('liveFilters').innerHTML,/团队待读取/);assert.match(h.nodes.get('liveFilters').innerHTML,/归属待核对/);
  h.c.liveSet('team','M8');h.c.liveSet('country','菲律宾');assert.equal(h.L.team,'M8');assert.match(h.nodes.get('liveFilters').innerHTML,/1 团队/);assert.match(h.nodes.get('liveFilters').innerHTML,/SUPERLG/);
  h.setHandler(q=>{if(q.action==='collectedData')throw Error('Synthetic directory timeout');return {rows:[],feeds:[],summary:[],groups:{}}});await h.c.liveQuery();assert.equal(h.L.team,'M8');assert.deepEqual(Array.from(h.L.multi.team),['M8']);assert.equal(h.L.country,'菲律宾');assert.match(teams(),/M8/);assert.doesNotMatch(teams(),/__team_pending__|__team_conflict__/);
 });
@@ -1474,7 +1474,7 @@ test('compact time panel keeps exact drafts and manual shortcuts while chrome ke
  h.c.state.page='providers';h.c.render();html=h.nodes.get('liveFilters').innerHTML;const previous=businessCalls(h).length;
  for(const [,handler]of html.matchAll(/onclick="(livePeriod[^";]+)"/g))vm.runInContext(handler,h.c);
  await settle();assert.equal(businessCalls(h).length,previous,'date shortcuts only stage conditions even on provider pages');assert.equal(h.L.dirty,true);
- h.L.catalogReady=false;h.L.catalogLoading=true;h.c.render();html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/平台目录读取中/);assert.doesNotMatch(html,/可选目录 0|订单目录 0|0 三方|0 团队|0 国家/);
+ h.L.catalogReady=false;h.L.catalogLoading=true;h.c.render();html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/目录读取中/);assert.doesNotMatch(html,/可选目录 0|订单目录 0|0 三方|0 团队|0 国家/);
 });
 
 test('report empty states keep the filter Query action without a duplicate lower button',async()=>{
