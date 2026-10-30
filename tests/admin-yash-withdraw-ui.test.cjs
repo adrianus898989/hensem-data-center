@@ -111,3 +111,27 @@ test('YASH verified empty filters differ from an unverified missing order range'
   const f=fixture({rows:[yash({reasonAvailable:true,sourceNotesAvailable:true})]});f.page.state.reason={country:'印度',platform:'YASH.BET',date:'2026-10-08',kind:'blocking'};f.page.state.reasonData=sourceNotes({rows:[],total:0,noteCount:0,coverage:{complete}});const html=f.render();if(complete){assert.match(html,/当前筛选无记录/);assert.doesNotMatch(html,/不能据此推定源站没有数据/);}else assert.match(html,/不能据此推定源站没有数据/);
  }
 });
+const currentYash=(extra={})=>yash({source:'KB',total:648,success:641,rejected:5,autoCount:3,manualCount:645,unclassifiedCount:0,classificationAvailable:true,classificationBasis:'confirmed_latest_operator_auto_review',automaticWithdrawalEnabled:true,reasonAvailable:true,sourceNotesAvailable:true,...extra});
+const currentYashData=(extra={})=>({version:2,view:'auto',startDate:'2026-10-08',endDate:'2026-10-08',rows:[currentYash()],total:1,totals:currentYash(),...extra});
+const retiredYash=(extra={})=>currentYash({classificationBasis:'confirmed_manual_only',automaticWithdrawalEnabled:false,autoCount:0,manualCount:648,...extra});
+test('YASH explicit automatic-review counts render without changing independent source notes',async()=>{
+ const f=fixture({},false,()=>currentYashData());await f.page.load();f.render();let r=f.stats().rows[0];assert.deepEqual(r.slice(6,8),['3','645']);assert.match(r[8],/0.46%/);assert.match(r.at(-1),/风控备注.*驳回订单备注/);assert.equal(f.requests.length,1);const saved=f.page.capture();f.page.restore(saved);f.render();assert.deepEqual(f.stats().rows[0].slice(6,8),['3','645']);assert.equal(f.requests.length,1);assert.equal(f.page.state.data.rows[0].classificationBasis,'confirmed_latest_operator_auto_review');
+});
+test('retired YASH server results cannot become current or retry automatically',async()=>{
+ for(const extra of [{rows:[retiredYash()]},{yashCoverage:{classificationBasis:'confirmed_manual_only',days:[]}},{rows:[currentYash({previous:retiredYash()})]},{previousRows:[retiredYash()]}]){
+ const f=fixture({},false,()=>currentYashData(extra));f.page.state.data=null;await f.page.load();assert.equal(f.page.state.data,null);assert.equal(f.page.state.loading,false);assert.equal(f.requests.length,1);assert.match(f.render(),/统计口径已更新，请重新查询/);assert.equal(f.L.from,'2026-10-08T00:00:00');
+ }
+});
+test('retired YASH snapshots clear while filters and other-source policies remain',()=>{
+ const old=fixture({rows:[retiredYash()],totals:retiredYash()});const saved=old.page.capture();old.page.restore(saved);assert.match(old.render(),/统计口径已更新，请重新查询/);assert.equal(old.page.state.data,null);assert.equal(old.requests.length,0);assert.equal(old.L.country,'印度');
+ const other=fixture({rows:[retiredYash({platform:'OTHER-KB'})],totals:retiredYash({platform:'OTHER-KB'})});assert.doesNotMatch(other.render(),/统计口径已更新/);assert.deepEqual(other.stats().rows[0].slice(6,8),['0','648']);
+});
+test('failed stale refresh preserves newer result and retry uses existing request path',async()=>{
+ let stale=false;const f=fixture({},false,()=>currentYashData(stale?{rows:[retiredYash()]}:{}));await f.page.load();stale=true;await f.page.load();assert.deepEqual(f.page.state.data.rows.map(r=>[r.autoCount,r.manualCount]),[[3,645]]);assert.match(f.render(),/上次成功结果已保留.*统计口径已更新/);stale=false;await f.root.withdrawLoad();assert.equal(f.requests.length,3);assert.equal(f.page.state.error,'');
+});
+test('late retired results cannot overwrite a newer day',async()=>{
+ const first=deferred(),second=deferred();let reads=0;const f=fixture({},false,()=>++reads===1?first.promise:second.promise);f.page.state.data=null;const a=f.page.load();f.root.withdrawDate('from','2026-10-09');f.root.withdrawDate('to','2026-10-09');const b=f.page.load();second.resolve(currentYashData({startDate:'2026-10-09',endDate:'2026-10-09',rows:[currentYash({dataDate:'2026-10-09'})]}));await b;first.resolve(currentYashData({rows:[retiredYash()]}));await a;assert.equal(f.page.state.data.startDate,'2026-10-09');assert.equal(f.page.state.data.rows[0].autoCount,3);assert.equal(f.page.state.error,'');assert.equal(f.requests.length,2);
+});
+test('YASH classification preserves permission invalidation and cancelled-read isolation',async()=>{
+ const pending=deferred(),f=fixture({},false,()=>pending.promise);f.page.state.data=null;const load=f.page.load();f.root.hensemRoleAccess={canView:false};f.render();pending.resolve(currentYashData());await load;assert.equal(f.page.state.data,null);assert.equal(f.page.state.loading,false);assert.equal(f.requests.length,1);
+});

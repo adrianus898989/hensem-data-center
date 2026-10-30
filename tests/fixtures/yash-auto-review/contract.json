@@ -1,0 +1,22 @@
+[
+  {
+    "signature": "private.dashboard_admin_live_auto_withdraw(jsonb)",
+    "beforeHash": "9f51264084389551e2beeffaf7843c14",
+    "afterHash": "57da58b586ffe7a35550f2a36848124e"
+  },
+  {
+    "signature": "private.withdraw_prepared_render(jsonb,jsonb)",
+    "beforeHash": "06baadf5408d14fd71b12e93c7ee8b68",
+    "afterHash": "8035e437fd2421568754ec1005ca16d4"
+  },
+  {
+    "signature": "private.auto_team_previous_projection(jsonb,jsonb,jsonb,jsonb)",
+    "beforeHash": "13092e904fca6d7cef7ec75052e0abb7",
+    "afterHash": "9ee2927b3f363062b4c37e6df56f6ec4"
+  },
+  {
+    "signature": "private.withdraw_prepared_dependency()",
+    "beforeHash": "e339a7838ee2782a91efc72d69d6eb47",
+    "afterHash": "c64c59a036d36d07b2911eb4d16fec81"
+  }
+]
