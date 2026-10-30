@@ -100,6 +100,9 @@
    const keepPrepared=override?.preparedPoll>0&&S.prepared?.queryKey===key&&['missing','building','stale'].includes(S.prepared.status);
    const serial=++S.serial;stopRead();const controller=typeof root.AbortController==='function'?new root.AbortController():null;readController=controller;S.loadingKey=key;setLoading(true);if(!keepPrepared)S.prepared=null;S.error='';if(!keepPrepared)render();
    const wait=override?.preparedWait||{startedAt:Date.now(),reads:0,progress:null,extended:false,invalidated:false};
+   // A drill may read an applied row while the controls hold another draft.
+   // Keep the first draft stamp across polls without replacing the drill query.
+   if(!override?.preparedWait)try{wait.draftKey=filterKey(selectionKey(),query());}catch{wait.draftKey=null;}
    const startedAt=wait.startedAt,remaining=(wait.extended?180000:60000)-(Date.now()-startedAt);
    // Only verified progress on one generation extends the total wait. Every
    // request and the whole three-minute cycle remain independently bounded.
@@ -136,7 +139,7 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
         preparedTimer=null;
         if(serial!==S.serial)return;
         if(applied.accessKey!==accessKey()||applied.nativeStamp!==nativeStamp()||root.hensemRoleAccess?.canView===false){clearResult();render();return;}
-        try{if(filterKey(selectionKey(),query())!==filterKey(scope,targetQuery)){invalidate();render();return;}}catch{invalidate();render();return;}
+        try{if(typeof wait.draftKey!=='string'||filterKey(selectionKey(),query())!==wait.draftKey){invalidate();render();return;}}catch{invalidate();render();return;}
         void load(false,{applied,query:targetQuery,preparedPoll:(override?.preparedPoll||0)+1,preparedWait:wait});
        },Math.min(delay,Math.max(0,budget-elapsed)));
       }

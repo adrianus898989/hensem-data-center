@@ -244,3 +244,74 @@ test('restoring a left page cannot revive polling or advertise automatic complet
  f.page.restore(saved);assert.equal(f.page.state.prepared.status,'paused');assert.match(f.page.render(),/继续读取/);assert.doesNotMatch(f.page.render(),/完成后自动显示/);
  assert.equal(f.calls.length,1);assert.equal(clock.timers.size,0);
 });
+const pollDraft=async()=>{for(let i=0;i<12;i++)await Promise.resolve()};
+async function beginDailyOverride(f,clock,status='building'){
+ const original=f.page.load();f.pending.shift().resolve(data(3));await original;
+ f.context.withdrawDaily(0);const request=JSON.stringify(f.calls.at(-1).q);
+ assert.equal(f.calls.at(-1).q.daily,true);
+ f.pending.shift().resolve({prepared:{status}});await pollDraft();return request;
+}
+for(const view of ['auto_withdraw','withdraw_operators'])for(const status of ['missing','building','stale'])test(view+' daily drill preserves its override through repeated '+status+' preparation',async()=>{
+ const f=fixture(view),clock=budgetClock(f),expected=await beginDailyOverride(f,clock,status);
+ const draft=JSON.stringify([f.L.country,f.L.from,f.L.to,f.page.state.platforms,f.page.state.rowCountry,f.page.state.daily]);
+ assert.equal(f.page.state.applied.query.daily,false);assert.equal(f.page.state.data.totals.total,3);
+ clock.set(3000);assert.equal(clock.fire(),3000);assert.equal(f.calls.length,3);assert.equal(JSON.stringify(f.calls.at(-1).q),expected);
+ f.pending.shift().resolve({prepared:{status}});await pollDraft();assert.equal(f.page.state.prepared.status,status);
+ clock.set(6000);assert.equal(clock.fire(),3000);assert.equal(f.calls.length,4);assert.equal(JSON.stringify(f.calls.at(-1).q),expected);
+ f.pending.shift().resolve(data(8));await pollDraft();
+ assert.equal(f.page.state.data.totals.total,8);assert.equal(f.page.state.applied.query.daily,true);assert.equal(f.page.state.localSnapshot,false);assert.equal(f.page.state.prepared,null);assert.equal(f.page.state.error,'');assert.equal(clock.timers.size,0);
+ assert.equal(JSON.stringify([f.L.country,f.L.from,f.L.to,f.page.state.platforms,f.page.state.rowCountry,f.page.state.daily]),draft);
+});
+test('applied-row daily drill preserves its country/date beside a different draft',async()=>{
+ const f=fixture(),clock=budgetClock(f);f.L.catalog.push({name:'PK-A',country:'巴基斯坦',team:'M8',source:'ar',timezone:'Asia/Karachi'});
+ const first=f.page.load();f.pending.shift().resolve(data(3));await first;
+ f.context.withdrawCountry('巴基斯坦');f.context.withdrawDate('from','2026-10-14');f.context.withdrawDaily(0);
+ const q=JSON.stringify(f.calls.at(-1).q);assert.equal(f.calls.at(-1).q.country,'印度');assert.equal(f.calls.at(-1).q.startAt,'2026-10-15T00:00:00.000Z');
+ f.pending.shift().resolve({prepared:{status:'building'}});await pollDraft();clock.set(3000);clock.fire();assert.equal(f.calls.length,3);assert.equal(JSON.stringify(f.calls.at(-1).q),q);
+ f.pending.shift().resolve(data(8));await pollDraft();assert.equal(f.L.country,'巴基斯坦');assert.equal(f.L.from,'2026-10-14T00:00:00');assert.equal(f.page.state.applied.query.country,'印度');assert.equal(f.page.state.applied.query.daily,true);assert.equal(f.page.state.data.totals.total,8);assert.equal(clock.timers.size,0);
+});
+for(const change of ['date','platform','successWindow','operatorFilter'])test('daily override cancels when the real draft '+change+' changes',async()=>{
+ const f=fixture(change==='operatorFilter'?'withdraw_operators':'auto_withdraw'),clock=budgetClock(f);
+ if(change==='platform')f.L.catalog.push({name:'B',country:'印度',team:'M8',source:'ar',timezone:'Asia/Kolkata'});
+ await beginDailyOverride(f,clock);
+ if(change==='date')f.L.from='2026-10-14T00:00:00';
+ if(change==='platform')f.page.state.platforms=['B'];
+ if(change==='successWindow'){f.L.successFrom='2026-10-15T08:00:00';f.L.successTo='2026-10-15T09:00:00';}
+ if(change==='operatorFilter')f.page.state.account='different-operator';
+ clock.set(3000);clock.fire();await pollDraft();assert.equal(f.calls.length,2);assert.equal(f.page.state.prepared,null);assert.equal(f.page.state.loading,false);assert.equal(clock.timers.size,0);
+});
+for(const change of ['permission','identity','native'])test('daily override rejects changed '+change+' during preparation',async()=>{
+ const f=fixture(),clock=budgetClock(f);f.context.hensemDataScope={mode:'owner',identity:'first-actor'};await beginDailyOverride(f,clock);
+ if(change==='permission')f.context.hensemRoleAccess={canView:false};
+ if(change==='identity')f.context.hensemDataScope.identity='second-actor';
+ if(change==='native')f.L.catalog[0].timezone='UTC';
+ clock.set(3000);clock.fire();await pollDraft();assert.equal(f.calls.length,2);assert.equal(f.page.state.data,null);assert.equal(f.page.state.applied,null);assert.equal(clock.timers.size,0);
+});
+test('late daily replies cannot overwrite a new query or cancel its deadline',async()=>{
+ const f=fixture(),clock=budgetClock(f);await beginDailyOverride(f,clock);clock.set(3000);clock.fire();const late=f.pending.shift(),oldSignal=f.calls.at(-1).o.signal;
+ f.context.withdrawDate('from','2026-10-14');const fresh=f.page.load();assert.equal(oldSignal.aborted,true);const ownedTimer=[...clock.timers.keys()][0];
+ late.resolve(data(99));await pollDraft();assert.equal(f.page.state.loading,true);assert(clock.timers.has(ownedTimer));assert.equal(f.page.state.data.totals.total,3);
+ f.pending.shift().resolve({...data(8),startDate:'2026-10-14'});await fresh;assert.equal(f.page.state.applied.query.daily,false);assert.equal(f.page.state.data.totals.total,8);assert.equal(clock.timers.size,0);
+});
+for(const stop of ['transport','failed','pause','cancel'])test('daily override '+stop+' stops without automatic retry',async()=>{
+ const f=fixture(),clock=budgetClock(f);await beginDailyOverride(f,clock);clock.set(3000);clock.fire();const reply=f.pending.shift();
+ if(stop==='pause')f.page.pause();if(stop==='cancel')f.page.cancel();
+ if(stop==='transport')reply.reject(Error('synthetic daily failure'));else reply.resolve(stop==='failed'?{prepared:{status:'failed'}}:data(99));
+ await pollDraft();assert.equal(f.calls.length,3);assert.equal(f.page.state.loading,false);assert.equal(clock.timers.size,0);
+ if(stop==='cancel')assert.equal(f.page.state.data,null);else assert.equal(f.page.state.data.totals.total,3);
+ if(stop==='transport')assert.match(f.page.state.error,/synthetic daily failure/);
+ if(stop==='failed')assert.equal(f.page.state.prepared.status,'failed');
+});
+test('ready daily drill commits without timers or draft mutation',async()=>{
+ const f=fixture(),clock=budgetClock(f),first=f.page.load();f.pending.shift().resolve(data(3));await first;
+ f.context.withdrawDaily(0);f.pending.shift().resolve(data(8));await pollDraft();
+ assert.equal(f.calls.length,2);assert.equal(f.page.state.applied.query.daily,true);assert.equal(f.page.state.data.totals.total,8);assert.equal(f.page.state.daily,false);assert.equal(clock.timers.size,0);
+});
+test('invalid draft permits ready applied-row drill but cannot continue polling',async()=>{
+ for(const ready of [true,false]){
+  const f=fixture(),clock=budgetClock(f),first=f.page.load();f.pending.shift().resolve(data(3));await first;
+  f.L.multi.team=['missing'];f.L.team='missing';f.context.withdrawDaily(0);f.pending.shift().resolve(ready?data(8):{prepared:{status:'building'}});await pollDraft();
+  if(ready){assert.equal(f.page.state.data.totals.total,8);assert.equal(f.page.state.applied.query.daily,true);}else{clock.set(3000);clock.fire();await pollDraft();assert.equal(f.page.state.data.totals.total,3);}
+  assert.equal(f.calls.length,2);assert.equal(clock.timers.size,0);
+ }
+});
