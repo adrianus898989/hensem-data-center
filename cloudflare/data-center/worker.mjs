@@ -362,7 +362,10 @@ async function serveDashboardBootstrap(request, fetchRemote) {
       throw new Error('upstream_redirect');
     }
     const type = response.headers.get('content-type') || '';
-    const html = path === PREVIEW_PATH && !url.search && response.ok && /^text\/html(?:;|$)/i.test(type);
+    // Supabase rewrites GET HTML to text/plain on its shared function domain.
+    // Only the fixed successful full preview accepts that gateway type; its
+    // decoded size, UTF-8 and document signature are still validated below.
+    const html = path === PREVIEW_PATH && !url.search && response.ok && /^text\/(?:html|plain)(?:;|$)/i.test(type);
     if (!html && !/^application\/json(?:;|$)/i.test(type)) {
       try { response.body?.cancel().catch(() => {}); } catch { /* cleanup only */ }
       throw new Error('upstream_content_type');

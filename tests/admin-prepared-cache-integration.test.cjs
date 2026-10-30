@@ -26,9 +26,9 @@ test('denied prepared reads invalidate earlier completed exact results',async()=
  h.c.liveMetricTimeSet('to','2026-09-22T04:00:00');h.setHandler(q=>{if(q.action==='aggregatePrepared')throw Object.assign(Error('denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'});return {};});await h.c.liveQuery();await settle();assert.equal(h.L.results.length,0);
  h.setHandler(q=>q.action==='aggregatePrepared'?response(q):{});h.c.liveMetricTimeSet('to','2026-09-22T05:59:59');await h.c.liveQuery();await settle();assert.equal(count(),2);
 });
-test('routine directory details collapse, while coverage and real timestamps remain visible',async()=>{
- const h=await ready('time');let filters=h.nodes.get('liveFilters').innerHTML;const details=filters.match(/<details class="live-scope-description">[\s\S]*?<\/details>/);assert(details);assert.doesNotMatch(details[0],/\bopen(?:[ =>])/);assert.match(details[0],/可选目录/);assert.doesNotMatch(filters.replace(details[0],''),/手动查询更新|订单目录/);
- await h.c.liveQuery();await settle();filters=h.nodes.get('liveFilters').innerHTML.replace(/<details class="live-scope-description">[\s\S]*?<\/details>/,'');assert.match(filters,/所选日期有订单数据 1 平台/);assert.match(filters,/更新于/);
+test('routine directory, coverage and real timestamps remain accessible in collapsed details',async()=>{
+ const h=await ready('time');let filters=h.nodes.get('liveFilters').innerHTML;const details=filters.match(/<details class="live-scope-description report-scope-details">[\s\S]*?<\/details>/);assert(details);assert.doesNotMatch(details[0],/\bopen(?:[ =>])/);assert.match(details[0],/可选目录/);assert.doesNotMatch(filters.replace(details[0],''),/手动查询更新|订单目录/);
+ await h.c.liveQuery();await settle();filters=h.nodes.get('liveFilters').innerHTML.match(/<details class="live-scope-description report-scope-details">[\s\S]*?<\/details>/)[0];assert.match(filters,/所选日期有订单数据 1 平台/);assert.match(filters,/更新于/);
 });
 
 test('provider/time/latency reads discard unused amount bands, while amount/matrix analysis preserves them',async()=>{
