@@ -757,3 +757,25 @@ for(const [status,code]of[[500,'XX000'],[500,'57014'],[504,'57014']])test('HTTP 
  h.send(b.event('failed'));await flush();const first=b.replies[0].data;assert(first.error);assert(!['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED'].includes(first.code));assert.equal(first.result,undefined);assert.deepEqual(denied,[]);assert.doesNotMatch(JSON.stringify(first),/PRIVATE_DIAGNOSTIC/);
  h.send(b.event('retry'));await flush();assert.equal(b.replies.at(-1).data.result.total,13);assert.equal(h.calls.length,2);assert.equal(h.timers.size,0);b.cleanup();
 });
+
+test('submission member and order details keep filters on timeout and busy, while access denial stays distinct',async()=>{
+ const q={action:'submissionAnalysis',platformId:query.platformId,startAt:query.startAt,endAt:query.endAt,direction:'charge',threshold:15,level:'l0',providers:['Synthetic Pay'],currency:'INR',offset:0};
+ const cases=[
+  [500,'57014','canceling statement','57014','明细读取超时，当前筛选已保留'],
+  [504,'','gateway timeout','ADMIN_LIVE_TIMEOUT','明细读取超时，当前筛选已保留'],
+  [503,'55P03','lock not available',undefined,'明细查询繁忙，请稍后重试'],
+  [403,'42501','scope_denied','ADMIN_LIVE_PERMISSION_DENIED','当前账号没有此范围的刷单明细权限'],
+  [403,'platform_denied','forbidden','ADMIN_LIVE_PERMISSION_DENIED','当前账号没有此范围的刷单明细权限'],
+  [401,'55P03','login_required','ADMIN_LIVE_SESSION_DENIED','正式数据读取未获授权，或会话已失效']
+ ];
+ for(const op of [{operation:'members',limit:50},{operation:'memberOrders',limit:100,memberId:'synthetic-member',day:'2026-09-22'}]){
+  const request={...q,...op};
+  for(const [status,code,message,expectedCode,expectedMessage] of cases){
+   const h=load({fetch:async()=>({ok:false,status,json:async()=>({code,message})})});
+   await assert.rejects(h.api.adminLiveRequest(session,request,undefined,{assigned:true,page:'events'}),error=>error.code===expectedCode&&error.message===expectedMessage);
+   assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_page:'events',p_request:request});
+  }
+ }
+ const summary=load({fetch:async()=>({ok:false,status:500,json:async()=>({code:'57014'})})});
+ await assert.rejects(summary.api.adminLiveRequest(session,{...q,operation:'summary'}),e=>e.code==='57014'&&!e.message.includes('明细'));
+});

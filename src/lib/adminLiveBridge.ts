@@ -423,7 +423,11 @@ function isAdminLiveEnvelope(event:MessageEvent,source:Window|null|undefined,cha
 export function isAdminLiveMessage(event:MessageEvent,source:Window|null|undefined,channel:string):boolean {
  return isAdminLiveEnvelope(event,source,channel)&&event.data.type===LIVE_REQUEST;
 }
-function adminLiveTimeoutMessage(action:unknown,mode?:unknown):string {
+function isSubmissionDetail(action:unknown,operation:unknown):boolean {
+ return action==='submissionAnalysis'&&(operation==='members'||operation==='memberOrders');
+}
+function adminLiveTimeoutMessage(action:unknown,mode?:unknown,operation?:unknown):string {
+ if(isSubmissionDetail(action,operation))return '明细读取超时，当前筛选已保留';
  if(action==='collectorControl')return '采集管理响应超时，操作结果尚未确认；请刷新状态后核对';
  if(action==='submissionStreak')return '连续提交分析本日计算超时，已完成进度保留，请稍后继续；不能据此判断为0';
  if(action==='catalog')return '平台目录读取超时，请重试读取目录';
@@ -526,9 +530,14 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(request.action==="submissionStreak"&&/analysis_nonce_conflict/.test(code))throw Error("连续提交分析筛选已改变，请重新查询");
  if(request.action==="submissionStreak"&&/analysis_job_limit|analysis_day_limit/.test(code))throw Error("连续提交分析任务较多，请稍后继续已开始的查询");
  if(request.action==="submissionStreak"&&/scope_denied|preview_denied|platform_denied|job_denied/.test(code))throw permissionError("当前账号没有此平台或分析任务的查看权限",code);
+ if(isSubmissionDetail(request.action,request.operation)){
+  const denial=[code,serverCode].find(value=>value==='scope_denied'||value==='platform_denied');
+  if(denial)throw permissionError('当前账号没有此范围的刷单明细权限',denial);
+ }
  if(/configuration_denied|scope_denied/.test(code))throw permissionError("当前账号没有此范围的归类权限",code);
  if(/mapping_not_found|invalid_classification/.test(code))throw Error("归类来源或国家配置已改变，请刷新后重试");
  if([401,403].includes(response.status))throw new AdminLiveAccessError("正式数据读取未获授权，或会话已失效",'session');
+ if(isSubmissionDetail(request.action,request.operation)&&serverCode==='55P03')throw Error('明细查询繁忙，请稍后重试');
  if(request.action==="intakeCoverage"&&request.operation==="orderCatalog"&&code==="invalid_coverage_request")throw Error("订单采集目录操作暂不支持");
  if(request.durationVersion===2&&code==="invalid_request")throw Error("到账时效统计接口尚未更新，请更新后重试");
  // A retired reason selection is recoverable within the current drawer, never an empty result.
@@ -536,8 +545,8 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(/unsupported_filter/.test(code))throw Error("此来源未提供该检索字段，请清空该字段后查询");
  // Preserve only this explicit SQLSTATE, after all permission mappings. Text
  // mentioning a timeout is not evidence of a database query cancellation.
- if(queryCancelled)throw new AdminLiveReadError(adminLiveTimeoutMessage(request.action,request.mode),'57014');
- if(/timeout|57014/i.test(code)||response.status===504)throw new AdminLiveReadError(adminLiveTimeoutMessage(request.action,request.mode),'ADMIN_LIVE_TIMEOUT');
+ if(queryCancelled)throw new AdminLiveReadError(adminLiveTimeoutMessage(request.action,request.mode,request.operation),'57014');
+ if(/timeout|57014/i.test(code)||response.status===504)throw new AdminLiveReadError(adminLiveTimeoutMessage(request.action,request.mode,request.operation),'ADMIN_LIVE_TIMEOUT');
  throw Error("正式数据查询未完成，请重试；不能据此判断没有数据");}
  return response.json();
 }
@@ -551,7 +560,8 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
  const stop=(item:Pending,timeout=false)=>{
    if(item.settled)return;
    queued.delete(item.id);
-   finish(item,{error:timeout?adminLiveTimeoutMessage((item.request as {action?:unknown})?.action,(item.request as {mode?:unknown})?.mode):"查询已取消",code:timeout?"ADMIN_LIVE_TIMEOUT":"ADMIN_LIVE_CANCELLED"});
+   const request=item.request as Record<string,unknown>|undefined;
+   finish(item,{error:timeout?adminLiveTimeoutMessage(request?.action,request?.mode,request?.operation):"查询已取消",code:timeout?"ADMIN_LIVE_TIMEOUT":"ADMIN_LIVE_CANCELLED"});
    item.controller?.abort();
    drain();
  };
