@@ -11,6 +11,34 @@ test('WG never enters submission calculations without recharge member IDs and ex
  assert.match(h.ui.providerCell(null,['wg-only'],'rate',5,10),/WG充值明细未提供会员ID，刷单分析不可用/);global.liveSubmissionCoverage();assert.match(h.drawers.at(-1).body,/WG充值明细未提供会员ID，刷单分析不可用/);
  h.select([platform(),platform('wg-only','wg')]);await h.ui.load();assert.deepEqual(h.calls.map(q=>q.platformId),['a']);assert.equal(h.ui.metric().complete,false);assert.match(h.ui.providerCell(null,null,'rate',5,10),/>—</);
 });
+test('threshold cells preserve strict thresholds, provider scope and the detail permission',async()=>{
+ const h=harness();await h.ui.ensure();global.liveSubmissionToggle(0,'thresholds');
+ const table=h.ui.render().split('aria-label="各平台刷单门槛统计"')[1];
+ for(const threshold of [10,15,20,30,50,100]){
+  for(const provider of ['null','&quot;Pay A&quot;']){
+   assert(table.includes('liveSubmissionMembers(0,'+provider+','+threshold+',&quot;all&quot;)'));
+  }
+ }
+ try{
+  global.hensemRoleAllowed=(_resource,action)=>action!=='detail';
+  assert.doesNotMatch(h.ui.render(),/onclick="liveSubmission(?:Threshold)?Members\(/);
+ }finally{delete global.hensemRoleAllowed}
+});
+test('multi-platform threshold card opens a local platform breakdown before requesting member data',async()=>{
+ const h=harness();h.select([platform(),platform('b')]);await h.ui.load();const calls=h.calls.length;
+ await global.liveSubmissionThresholdMembers(50);
+ assert.equal(h.calls.length,calls);assert.match(h.drawers.at(-1).title,/>50 笔/);
+ const breakdown=h.tables.findLast(t=>t.classes==='submission-threshold-platforms');assert.equal(breakdown.rows.length,2);
+ for(let i=0;i<2;i++)assert(breakdown.rows[i][1].includes('liveSubmissionMembers('+i+',null,50,'));
+});
+test('single-platform card uses the detail request with original window and selected providers only',async()=>{
+ const h=harness({context:{dashboard:()=>false}});await h.ui.ensure();
+ h.handler(q=>response(q,{total:0,members:0,rows:[]}));
+ await global.liveSubmissionThresholdMembers(100);const q=h.calls.at(-1);
+ assert.equal(q.operation,'members');assert.equal(q.threshold,100);assert.deepEqual(q.providers,['Pay A','Pay B']);
+ assert.equal(q.charts,false);assert(!Object.hasOwn(q,'preparedVersion'));assert(!Object.hasOwn(q,'amountBands'));
+ assert.equal(q.startAt,h.calls[0].startAt);assert.equal(q.endAt,h.calls[0].endAt);
+});
 test('whole period platform totals use independently deduplicated IDs, never sum provider member counts',async()=>{
  const h=harness();await h.ui.ensure();assert.equal(h.calls.length,1);assert.equal(h.ui.metric().member_count,2);assert.equal(h.ui.metric('Pay A').member_count,2);assert.equal(h.ui.metric('Pay B').member_count,2);assert.match(h.ui.providerCell('Pay A',['a'],'members',65,200),/同平台 ID 在所选期间去重/);await h.ui.ensure();assert.equal(h.calls.length,1);assert.deepEqual(h.calls[0].providers,['Pay A','Pay B']);
 });
@@ -217,7 +245,7 @@ test('threshold member counts remain distinct from the whole-day order counts an
  const h=harness();h.handler(chartResponse);await h.ui.load();
  assert.equal(h.ui.metric().member_count,1);assert.equal(h.ui.metric().qualified_member_count,1);assert.equal(h.ui.metric().invalid_count,30);assert.equal(h.ui.metric(null,null,30).invalid_count,0);const html=h.ui.render(),table=thresholdTable(html);
  assert.match(html,/超过门槛的会员人数，符合条件当日全部提交计无效/);assert.match(html,/统计当天超过 10 笔且无成功的会员日；按全部提交次数分档/);assert.match(html,/共 1 个会员日/);
- assert.match(table,/<td>Synthetic a<\/td><td>1<\/td><td>1<\/td><td>1<\/td><td>0<\/td>/);assert.doesNotMatch(table,/liveSubmissionMembers\(0,null,10/);
+ assert.match(table.replace(/<button\b[^>]*>(.*?)<\/button>/g,'$1'),/<td>Synthetic a<\/td><td>1<\/td><td>1<\/td><td>1<\/td><td>0<\/td>/);
 });
 
 test('old response basis, version, exempt count and non-strict thresholds cannot populate the new exclusion metrics',async()=>{
