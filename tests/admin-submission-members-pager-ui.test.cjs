@@ -67,3 +67,15 @@ test('partial server pages cannot silently skip unseen rows, and repeat total dr
  h.set(memberReply);await global.liveSubmissionMemberRetry();await global.liveSubmissionMemberSize('20');let n=0;
  h.set(q=>{n++;return memberReply(q,dataset.slice(0,n===1?25:10));});await global.liveSubmissionMemberJump('4');assert.equal(n,2);assert.match(h.body(),/匹配总数已变化，请重新查询/);
 });
+
+test('retrying a failed member read retains the same platform, provider, level, threshold and page',async()=>{
+ const h=await fixture();
+ for(const [message,offset,memberId] of [['明细读取超时，当前筛选已保留',0,'ID-1'],['明细查询繁忙，请稍后重试',20,'']]){
+  h.set(()=>{throw Error(message)});
+  await h.ui.members(0,'Pay A',15,'l0',offset,20,memberId);
+  const failed=h.latest(),attempts=h.calls.length;
+  assert(h.body().includes(message));assert.match(h.body(),/liveSubmissionMemberRetry\(\)/);
+  h.set(memberReply);await global.liveSubmissionMemberRetry();
+  assert.deepEqual(h.latest(),failed);assert.equal(h.calls.length,attempts+1);assert.match(h.body(),/会员明细分页/);
+ }
+});
