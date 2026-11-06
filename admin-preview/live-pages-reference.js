@@ -197,7 +197,7 @@
   return dirs().flatMap(direction=>[...keys(direction),...[...new Set(rows.filter(r=>r.direction===direction).map(r=>r[field]))].filter(k=>!keys(direction).includes(k))].map(k=>{const row={...empty(),direction,[field]:k,...rows.find(r=>r.direction===direction&&r[field]===k)};return c.analysisRow?c.analysisRow(row,direction):row;}));
  }
  function analytical(kind){
-  const time=kind==='hourly',groupKind=time?'hourly':L.matrixMode==='range'?'amount_range':'amount',first=time?'时段':'金额档位 · '+E(L.currency),items=time?[['business','时段金额与状态'],['checks','时段费用与核对'],['trend','24 小时订单趋势']]:[['business','金额分布与订单状态'],['checks','金额档位费用与核对'],['trend','全部订单金额结构']],nav=choose(items),rows=groupedData(groupKind),label=r=>time?String(r.hour).padStart(2,'0')+':00–'+String(r.hour).padStart(2,'0')+':59:59':c.amountLabel?c.amountLabel(r.bucket,r.direction):r.bucket==='other'?'其他金额':r.bucket==='unknown'?'金额缺失':String(r.bucket);
+  const time=kind==='hourly',groupKind=time?'hourly':L.matrixMode==='range'?'amount_range':'amount',first=time?'时段':'金额档位 · '+E(L.currency),items=time?[['business','时段金额与状态'],['checks','时段费用与核对'],['trend','24 小时订单趋势']]:[['business','金额分布与订单状态']],nav=choose(items),rows=groupedData(groupKind),label=r=>time?String(r.hour).padStart(2,'0')+':00–'+String(r.hour).padStart(2,'0')+':59:59':c.amountLabel?c.amountLabel(r.bucket,r.direction):r.bucket==='other'?'其他金额':r.bucket==='unknown'?'金额缺失':String(r.bucket);
   let body='';const tools=time?'':'<div class="tabs"><button class="'+(L.matrixMode!=='range'?'on':'')+'" onclick="liveMatrixMode(\'exact\')">精确金额</button><button class="'+(L.matrixMode==='range'?'on':'')+'" onclick="liveMatrixMode(\'range\')">金额区间</button></div>';
   if(L.view==='business'){
    const id='analysis-state',columns=[textual('direction'),{value:r=>time?sorting.knownNumber(r.hour):/^(?:other|unknown)$/.test(String(r.bucket))?null:sorting.knownNumber(String(r.bucket).replaceAll(',','').match(/\d+(?:\.\d+)?/)?.[0]),ascending:true},...businessSortColumns()],sorted=sortTable(id,['方向',first,...c.businessHeaders],rows,columns),headers=sorted.headers,cells=r=>[name(r.direction),E(label(r)),...c.businessCells(r)];
@@ -208,8 +208,8 @@
    }else bodyTable=pageTable(id,headers,sorted.rows.map(cells));
    body=box(items[0][1],bodyTable,(time?'每小时 · 各平台当地时间':'金额 '+E(L.currency)+(L.matrixMode==='range'?' · 10档；下限含、上限不含，最后一档含上限':' · 精确金额'))+'；全部按创建时间，成功按成功时间；展开查看各平台占比'+(String(L.from||'').slice(0,10)!==String(L.to||'').slice(0,10)?'与每日对比':''),tools);
   }
-  if(L.view==='checks')body=box(items[1][1],pageTable('analysis-checks',['方向',first,'估算手续费','掉单金额','掉单笔数','掉单占比','异常金额','异常笔数','异常占比'],rows.map(r=>[name(r.direction),E(label(r)),...Array(7).fill(unavailable)])),'掉单、异常独立统计 · 正式核对标记未接入');
-  if(L.view==='trend')body=dirs().map(d=>box(name(d)+' · '+items[2][1],time?chart(rows.filter(r=>r.direction===d)):bars(rows.filter(r=>r.direction===d).map(r=>({name:E(label(r)),value:r.all_amount}))))).join('');
+  if(time&&L.view==='checks')body=box(items[1][1],pageTable('analysis-checks',['方向',first,'估算手续费','掉单金额','掉单笔数','掉单占比','异常金额','异常笔数','异常占比'],rows.map(r=>[name(r.direction),E(label(r)),...Array(7).fill(unavailable)])),'掉单、异常独立统计 · 正式核对标记未接入');
+  if(time&&L.view==='trend')body=dirs().map(d=>box(name(d)+' · '+items[2][1],chart(rows.filter(r=>r.direction===d)))).join('');
   return '<div class="analysis-compact">'+totals()+nav+(c.matrixCustom?.pageControls(time?'time':'amount')||'')+body+'</div>';
  }
  function bars(rows){const max=Math.max(1,...rows.map(r=>Number(r.value)||0));return '<div class="panel-body">'+rows.map(r=>'<div class="live-reference-bar"><span>'+r.name+'</span><div><i style="width:'+Math.max(0,(Number(r.value)||0)/max*100)+'%"></i></div><b>'+N(r.value)+'</b></div>').join('')+'</div>'}

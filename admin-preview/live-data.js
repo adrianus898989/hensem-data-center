@@ -885,7 +885,7 @@
    clearAggregateCache();reportData?.invalidateCatalog();const catalog=await foregroundRequest({action:'catalog'});L.catalog=catalog.platforms||[];platformLifecycle?.replace(catalog);L.dirty=true;L.results=[];L.providerOptionsKey='';
    await loadProviderOptions(true);if(type==='platform')await platformAssignmentsLoad();else if(state.page==='teams')await platformAssignmentsLoad();else await providerConfigLoad();
  }});
- const analysis=window.HensemAnalysisDrilldown?.create({L,E,N,C,R,query,formatTime,successTimeLabel,openDrawer:(title,html)=>openDrawer(title,html),customRows:segment=>matrixCustom?.detailRows(segment),customResults:segment=>matrixCustom?.customResults(segment),request:q=>foregroundRequest(q),render:()=>render()});
+ const analysis=window.HensemAnalysisDrilldown?.create({L,E,N,C,R,query,formatTime,successTimeLabel,openDrawer:(title,html)=>openDrawer(title,html),customRows:segment=>matrixCustom?.detailRows(segment),customResults:segment=>matrixCustom?.customResults(segment),request:(q,options)=>foregroundRequest(q,options),accessContext:()=>JSON.stringify([aggregateAccessContext(),supplementaryNativeContext()]),render:()=>render()});
  matrixCustom=window.HensemMatrixCustomRange?.create({L,E,N,C,R,analysis,page:()=>state.page,allowed:()=>roleAllowed(state.page,'query'),selected,query,request:(q,serial)=>readAggregate(q,serial,false,true),successUnavailable:successTimeUnavailable,render:()=>render()});
  // A completed request is not proof of source collection coverage. This is
  // strictly the requested platform-read state for the visible overview.
