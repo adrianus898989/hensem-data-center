@@ -37,8 +37,15 @@ test('amount tables use the selected group with raw labels for drilldown and esc
  f.L.matrixMode='range';f.render('amount');const range=f.calls[1];assert.equal(range.rows.length,9);assert.deepEqual(JSON.parse(JSON.stringify(range.segment(range.rows[0]))),{kind:'amount_range',direction:'charge',bucket:'100–200'});assert.deepEqual(f.groupCalls,['amount','amount_range']);
 });
 
-test('checks and trend keep existing rendering without requesting drilldown or extra data',()=>{
- const f=fixture({view:'checks',groups:{amount:[row({bucket:'<img src=x>'})]}});const checks=f.render('amount');assert.equal(f.calls.length,0);assert.match(checks,/掉单金额/);assert.match(checks,/&lt;img src=x&gt;/);f.L.view='trend';const trend=f.render('amount');assert.equal(f.calls.length,0);assert.match(trend,/live-reference-bar/);assert.doesNotMatch(trend,/<img src=x>/);assert.deepEqual(f.groupCalls,['amount','amount']);
+test('amount keeps only distribution and restores retired saved views to business',()=>{
+ for(const view of ['business','checks','trend']){
+  const f=fixture({view,groups:{amount:[row({bucket:'<img src=x>'})]}}),html=f.render('amount');
+  assert.equal(f.L.view,'business');assert.equal(f.calls.length,1);assert.match(html,/金额分布与订单状态/);assert.match(html,/&lt;img src=x&gt;/);assert.doesNotMatch(html,/金额档位费用与核对|全部订单金额结构|掉单金额|live-reference-bar|<img src=x>/);assert.deepEqual(f.groupCalls,['amount']);
+ }
+});
+test('hourly keeps its checks and trend without requesting drilldown or extra data',()=>{
+ const f=fixture({view:'checks',groups:{hourly:[row({hour:8})]}});const checks=f.render('time');assert.equal(f.calls.length,0);assert.match(checks,/时段费用与核对|掉单金额/);
+ f.L.view='trend';const trend=f.render('time');assert.equal(f.calls.length,0);assert.match(trend,/24 小时订单趋势/);assert.match(trend,/<figure>/);assert.deepEqual(f.groupCalls,['hourly','hourly']);
 });
 
 test('compact wrapper is restricted to time and amount pages; absent shared module retains data table',()=>{
