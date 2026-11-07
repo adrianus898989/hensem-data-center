@@ -4,10 +4,20 @@ const repo=path.resolve(__dirname,'..');
 const compile=file=>ts.transpileModule(fs.readFileSync(path.join(repo,file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
 const bridge={exports:{}};vm.runInNewContext(compile('src/lib/adminLiveBridge.ts'),{module:bridge,exports:bridge.exports,require:()=>({})});
 const source=compile('src/components/OfficialDashboard.tsx');
+const scopeModule={exports:{}}, authModule={exports:{}};
+const displayModule={exports:{}};
+vm.runInNewContext(compile('src/lib/platformDisplayCountry.ts'),{module:displayModule,exports:displayModule.exports});
+vm.runInNewContext(compile('src/lib/dashboardDataScope.ts'),{module:scopeModule,exports:scopeModule.exports,require:()=>displayModule.exports});
+vm.runInNewContext(compile('src/lib/dashboardAuthClient.ts'),{module:authModule,exports:authModule.exports,atob,require:()=>scopeModule.exports});
+const sessionId='00000000-0000-4000-8000-000000000001';
+function syntheticToken(account,id,exp){
+ return 'test.'+Buffer.from(JSON.stringify({sub:account,session_id:id,exp})).toString('base64url')+'.test';
+}
+
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 function harness(options={}){
  const profile={auth_user_id:'account-a',active:true,role:options.role||'viewer',...options.profile};
- let auth={profile,session:{user:{id:profile.auth_user_id},access_token:'synthetic-current'},logout:()=>{loggedOut++}},loggedOut=0;
+ let auth={profile,session:{user:{id:profile.auth_user_id},access_token:syntheticToken(profile.auth_user_id,sessionId,1)},logout:()=>{loggedOut++}},loggedOut=0;
  let slots=[],cursor=0,pending=[],dirty=true,tree,disposed=false;const listeners=new Map(),timers=new Map(),requests=[],replacements=[];
  const location={origin:'https://app.invalid',pathname:'/app/',search:'',hash:options.hash||''};
  const shell=function FormalFrame(){};
@@ -24,7 +34,8 @@ function harness(options={}){
   if(name==='./OwnerAdminPreview')return{default:shell};
   if(name.endsWith('/adminPreviewClient'))return{readAdminPreviewAccess:readAccess};
   if(name.endsWith('/adminLiveBridge'))return bridge.exports;
-  if(name.endsWith('/dashboardAuthClient'))return{canOpenAdminCenter:p=>p?.role==='owner'||p?.role==='admin'};
+  if(name.endsWith('/dashboardAuthClient'))return{...authModule.exports,canOpenAdminCenter:p=>p?.role==='owner'||p?.role==='admin'};
+  if(name.endsWith('/dashboardDataScope'))return scopeModule.exports;
   if(name.endsWith('/ownerPreviewShell'))return{OWNER_PREVIEW_HOST_CSS:'',mountOwnerPreviewHostShell:()=>()=>{}};
   throw Error(name);
  }});
@@ -54,8 +65,21 @@ test('account switches remount the authorization owner with the current account 
  assert(h.frame());assert.notEqual(h.frame().key,first);assert.equal(h.frame().props.profile.auth_user_id,'account-b');assert.equal(h.frame().props.session.user.id,'account-b');assert.equal(h.requests.length,0);h.dispose();
 });
 test('the preview alone owns periodic validation and receives refreshed tokens without remounting',()=>{
- const h=harness();const key=h.frame().key;h.setAuth({session:{user:{id:'account-a'},access_token:'synthetic-refreshed'}});
- assert.equal(h.frame().key,key);assert.equal(h.frame().props.session.access_token,'synthetic-refreshed');h.tick();h.send('focus');h.send('online');assert.equal(h.requests.length,0);assert.equal(h.frame().key,key);h.dispose();
+ const h=harness();const key=h.frame().key;const rotated=syntheticToken('account-a',sessionId,2);h.setAuth({session:{user:{id:'account-a'},access_token:rotated}});
+ assert.equal(h.frame().key,key);assert.equal(h.frame().props.session.access_token,rotated);h.tick();h.send('focus');h.send('online');assert.equal(h.requests.length,0);assert.equal(h.frame().key,key);h.dispose();
+});
+test('a new session, narrowed role or unidentifiable rotated token invalidates the mounted frame',()=>{
+ const h=harness();
+ const session=(token)=>({user:{id:'account-a'},access_token:token});
+ let key=h.frame().key;
+ for(const change of [
+  {session:session(syntheticToken('account-a','00000000-0000-4000-8000-000000000002',2))},
+  {profile:{auth_user_id:'account-a',active:true,role:'admin'}},
+  {session:session('opaque-a')},{session:session('opaque-b')},
+ ]){
+  h.setAuth(change);assert.notEqual(h.frame().key,key);key=h.frame().key;assert(!String(key).includes('opaque'));
+ }
+ h.dispose();
 });
 test('account-menu navigation remounts the current page without an extra access preflight',()=>{
  const h=harness({role:'admin'});const first=h.frame().key;h.send('hensem:open-admin');assert.equal(h.location.hash,'#admin/access');assert.notEqual(h.frame().key,first);const second=h.frame().key;h.send('hensem:open-admin');assert.notEqual(h.frame().key,second);assert.equal(h.requests.length,0);h.dispose();

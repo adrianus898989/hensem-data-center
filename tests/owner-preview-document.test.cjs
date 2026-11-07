@@ -608,7 +608,7 @@ test('an extended outage retains hidden state and reconnects with fresh HTML; de
 
 const deferredRead=()=>{let resolve;const promise=new Promise(r=>{resolve=r});return {promise,resolve}};
 const protectedResponse=html=>({ok:true,status:200,text:async()=>html,json:async()=>({ok:true,canView:true,canManage:true})});
-test('suspended account workspace discards all directories and reopens only its current tab after unchanged-frame verification',async()=>{
+test('suspended account workspace is hidden until matching authorization and document restore its active tab and scroll',async()=>{
  const clock=retryClock();let failNext=false;
  const h=componentHarness('account-reverification',{commitEffects:true,...clock,fetch:async()=>{if(failNext){failNext=false;return{ok:false,status:503,json:async()=>({code:'profile_unavailable'})}}return protectedResponse(HTML)}});
  const send=data=>{h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),...data}});return h.commit()};
@@ -619,13 +619,16 @@ test('suspended account workspace discards all directories and reopens only its 
   elements(h.draw()).find(n=>n.props?.id==='owner-backend-panel').props.onScroll({currentTarget:{scrollTop:720}});
   assert.equal(elements(h.draw()).filter(n=>n.props?.role==='tabpanel').length,2);
   failNext=true;h.checkPermission();await flush();h.commit();
-  assert(!elements(h.draw()).some(n=>n.props?.className?.includes('owner-preview-account-workspace')));
+  const masked=elements(h.draw()).find(n=>n.props?.className?.includes('owner-preview-account-workspace'));
+  assert.equal(masked.props.hidden,true);assert.equal(masked.props['aria-hidden'],true);
+  for(const component of elements(h.draw()).filter(n=>['WorkOrderAccountAdmin','AdminControlCenter','DashboardRoleManager'].includes(n.type?.name)))assert.equal(component.props.active,false);
+  assertBridgeCounts(h,0);
   clock.next();await flush();h.commit();
   assert.equal(h.child,source,'frame geometry did not change and need not be sent again');
-  const panels=elements(h.draw()).filter(n=>n.props?.role==='tabpanel');assert.equal(panels.length,1);assert.equal(panels[0].props.id,'owner-backend-panel');
-  const scroll={scrollTop:720};panels[0].props.ref(scroll);assert.equal(scroll.scrollTop,0,'reverification does not revive old directory scroll state');
+  const panels=elements(h.draw()).filter(n=>n.props?.role==='tabpanel');assert.equal(panels.length,2);const backend=panels.find(n=>n.props.id==='owner-backend-panel');assert(backend);
+  const scroll={scrollTop:0};backend.props.ref(scroll);assert.equal(scroll.scrollTop,720);
   assert.equal(elements(h.draw()).find(n=>n.type?.name==='AdminControlCenter').props.active,true);
-  assert(!elements(h.draw()).some(n=>n.type?.name==='WorkOrderAccountAdmin'),'the inactive pre-verification directory is not revived');
+  assert.equal(elements(h.draw()).find(n=>n.type?.name==='WorkOrderAccountAdmin').props.active,false);
  }finally{h.dispose()}
 });
 const liveEnvelope=(h,id,source=h.child,channel=h.channel())=>({source,origin:'null',data:{type:'hensem-admin-live-request',id,channel,request:{action:'catalog'},page:'overview'}});
