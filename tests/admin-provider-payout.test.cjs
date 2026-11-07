@@ -259,3 +259,43 @@ test('55FIVE preserves unlabeled methods, multiple parts and the independent suc
  const parts={...r,items:[r,r],all_count:262,success_count:230};delete parts.payment_method_rows;assert.equal(split(parts).rows[0].all_count,262);assert.equal(split(parts).rows[0].success_amount,null);
  const mixed={...parts,items:[r,lgData()],all_count:272,success_count:208};const scope=new Map([...fiveMap(),...lgResults()]);assert.equal(split(mixed,scope).complete,true);assert.equal(split({...mixed,items:[r,lgData({all_amount:1})]},scope).complete,false);
 });
+
+const duoliPlatforms=[
+ ['FB168','b82bdd0d-59fe-361d-bbb7-2982231e5d0e'],['FB333','45785d2c-9a68-cd4a-6420-72b7a3004df5'],
+ ['HOT985','f5c0d911-9277-ddad-58d3-a0fbe086ebcf'],['IND666','c0c3d321-c0b1-b115-cf15-0f336a793257'],
+ ['UANG','143b5aa9-2f27-2405-ab40-99ffc25c56f2']
+].map(([name,id])=>({id,name,source:'duoli',country:'印尼',currency:'IDR',timezone:'Asia/Jakarta'}));
+function duoliLeaf(platform){
+ return {provider:'NativePay',platformId:platform.id,platform:platform.name,source:platform.source,country:platform.country,
+  direction:'charge',currency:platform.currency,all_count:5,all_amount:1200,success_count:2,success_amount:480,
+  payment_method_rows:[methodChild('QRIS',3,700,2,480),methodChild('DANA',1,300,0,0),methodChild(null,1,200,0,0)]};
+}
+test('five native DOLI sites display the selected platform totals and expand received methods without requests',()=>{
+ const groups=duoliPlatforms.map(duoliLeaf),h=fixture(groups);
+ Object.assign(h.L,{country:'印尼',currency:'IDR',results:duoliPlatforms.map(platform=>({platform,successBasis:'created'}))});
+ h.render('charge');assert.ok(h.html().includes('QRIS / DANA / 未标注'));
+ h.root.providerSummaryToggle(0);const html=h.html();
+ assert.equal((html.match(/class="provider-platform-row"/g)||[]).length,5);
+ assert.equal((html.match(/<td>QRIS<\/td><td>700\.00<\/td><td>3<\/td><td>480\.00<\/td><td>2<\/td>/g)||[]).length,5);
+ assert.equal(h.networkCalls(),0);
+ const rows=h.api.indonesiaMethods({provider:'NativePay',direction:'charge',currency:'IDR',
+   all_count:25,all_amount:6000,success_count:10,success_amount:2400,items:groups},
+   new Map(h.L.results.map(result=>[result.platform.id,result]))).rows;
+ assert.equal(rows.find(r=>r.method==='QRIS').all_amount,3500);
+});
+test('DOLI rejects wrong identities, incomplete old artifacts and leaked filter results; success uses the selected time basis',()=>{
+ const platform=duoliPlatforms[0],leaf=duoliLeaf(platform),h=fixture([leaf]);
+ const split=(row=leaf,p=platform,basis='created')=>h.api.indonesiaMethods(row,new Map([[p.id,{platform:p,successBasis:basis}]]));
+ const {payment_method_rows,...old}=leaf;assert.equal(split(old).complete,false);
+ assert.equal(split({...leaf,payment_method_rows:payment_method_rows.slice(1)}).complete,false);
+ assert.equal(split(leaf,{...platform,name:'FB333'}),null);
+ assert.equal(split(leaf,{...platform,source:'ar'}),null);
+ assert.equal(split({...leaf,direction:'withdraw'}),null);
+ assert.equal(split({...leaf,platform:'FB333'}).complete,false);
+ assert.equal(split({...leaf,payment_method_rows:payment_method_rows.map(row=>({...row,platformId:duoliPlatforms[1].id}))}).complete,false);
+ const independent={...leaf,success_count:6,success_amount:970,payment_method_rows:payment_method_rows.map((row,i)=>i?row:{...row,success_count:6,success_amount:970})};
+ assert.equal(split(independent).complete,false);
+ assert.equal(split(independent,platform,'success').rows[0].success_amount,970);
+ const unknown={...leaf,all_amount:null,payment_method_rows:payment_method_rows.map((row,i)=>i?row:{...row,all_amount:null})};
+ assert.equal(split(unknown).rows[0].all_amount,null);
+});

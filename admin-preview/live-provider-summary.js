@@ -98,6 +98,13 @@
  const methodMetrics=['all_count','all_amount','success_count','success_amount'];
  const countMetrics=['all_count','success_count'];
  const fiveId='acdeebb2-fb0a-e01b-e00d-c18506ecbe19';
+ const duoliSites=new Map([
+  ['b82bdd0d-59fe-361d-bbb7-2982231e5d0e','FB168'],
+  ['45785d2c-9a68-cd4a-6420-72b7a3004df5','FB333'],
+  ['f5c0d911-9277-ddad-58d3-a0fbe086ebcf','HOT985'],
+  ['c0c3d321-c0b1-b115-cf15-0f336a793257','IND666'],
+  ['143b5aa9-2f27-2405-ab40-99ffc25c56f2','UANG']
+ ]);
  function methodTotalsMatch(item,sums,countsOnly){
   return (countsOnly?countMetrics:methodMetrics).every(key=>{
    if(!Object.hasOwn(item,key))return false;
@@ -118,12 +125,12 @@
    const source=String(platform?.source||'').toLowerCase();
    const countOnly=platformId===fiveId&&platform?.id===fiveId&&platform.name==='55FIVE'&&source==='ar';
    const lg=platform?.name==='LG111'&&source==='lg';
-   if((!lg&&!countOnly)||(lg&&!isProviderBusiness(row.provider))||platform.country!=='印尼'||platform.currency!=='IDR'){outside=true;return;}
+   const duoli=source==='duoli'&&platform.id===platformId&&duoliSites.has(platformId)&&duoliSites.get(platformId)===platform.name;
+   if((!lg&&!countOnly&&!duoli)||(lg&&!isProviderBusiness(row.provider))||platform.country!=='印尼'||platform.currency!=='IDR'){outside=true;return;}
    eligible=true;
-   if(countOnly){
-    hasCountOnly=true;
-    if(platform.reportOnly===true||item.platform&&item.platform!==platform.name||item.payment_method_amount_basis!=='unverified_source_currency'){unavailable=true;return;}
-   }
+   if((duoli||countOnly)&&(platform.reportOnly===true||item.platform&&item.platform!==platform.name)){unavailable=true;return;}
+   if(countOnly&&item.payment_method_amount_basis!=='unverified_source_currency'){unavailable=true;return;}
+   if(countOnly)hasCountOnly=true;
    if(item.nativeFeeIdentityVerified===false||item.direction&&item.direction!=='charge'||item.currency&&item.currency!=='IDR'||item.source&&String(item.source).toLowerCase()!==source||item.country&&item.country!==platform.country||!Array.isArray(item.payment_method_rows)||!['created','success'].includes(result.successBasis)){unavailable=true;return;}
    const inputs=result.successBasis==='created'?['all_count','all_amount','created_success_count','created_success_amount']:methodMetrics;
    const sums=Object.fromEntries(methodMetrics.map(k=>[k,0]));
@@ -136,16 +143,17 @@
      if(upper==='QRIS-QR')method='QRIS';
      else if(['QRIS','DANA','GOPAY','OVO','VA'].includes(upper))method=upper;
     }
-    if(countOnly){
-     const wrongPlatform=child.platformId&&child.platformId!==fiveId||child.platform&&child.platform!==platform.name||
+    if(countOnly||duoli){
+     const wrongPlatform=child.platformId&&child.platformId!==platformId||child.platform&&child.platform!==platform.name||
       child.source&&String(child.source).toLowerCase()!==source||child.country&&child.country!==platform.country;
-     if(wrongPlatform||child.all_amount!==null||child.success_amount!==null||child.created_success_amount!=null){unavailable=true;return;}
+     if(wrongPlatform){unavailable=true;return;}
     }
+    if(countOnly&&(child.all_amount!==null||child.success_amount!==null||child.created_success_amount!=null)){unavailable=true;return;}
     const metrics=methods.get(method)||Object.fromEntries(methodMetrics.map(k=>[k,0]));
     for(let i=0;i<methodMetrics.length;i++){
      const key=methodMetrics[i],field=inputs[i];if(!Object.hasOwn(child,field)){unavailable=true;return;}
      const v=child[field],n=knownNumber(v);
-     if(countOnly&&key.endsWith('_count')&&(n===null||typeof v!=='number'&&typeof v!=='string')){unavailable=true;return;}
+     if((countOnly||duoli)&&key.endsWith('_count')&&(n===null||typeof v!=='number'&&typeof v!=='string')){unavailable=true;return;}
      if(v!==null&&(n===null||(key.endsWith('_count')&&(!Number.isSafeInteger(n)||n<0)))){unavailable=true;return;}
      sums[key]=sums[key]===null||n===null?null:sums[key]+n;
      metrics[key]=metrics[key]===null||n===null?null:metrics[key]+n;
