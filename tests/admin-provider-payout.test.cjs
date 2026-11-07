@@ -224,3 +224,38 @@ test('method groups reconcile independent success-window fields including zero s
  assert.equal(api.lg111Methods(row,lgResults('success')).rows[0].success_count,3);
  assert.equal(api.lg111Methods(row,lgResults('created')).complete,false);
 });
+
+const fiveId='acdeebb2-fb0a-e01b-e00d-c18506ecbe19';
+const fivePlatform={id:fiveId,name:'55FIVE',country:'印尼',source:'ar',currency:'IDR',timezone:'Asia/Jakarta'};
+const fiveMap=(basis='created')=>new Map([[fiveId,{platform:fivePlatform,successBasis:basis}]]);
+const fiveMethod=(label,n,success)=>methodChild(label,n,null,success,null);
+function fiveLeaf(extra={}){return {provider:'CoverPay',platformId:fiveId,platform:'55FIVE',currency:'IDR',country:'印尼',direction:'charge',source:'ar',
+ nativeFeeIdentityVerified:true,payment_method_amount_basis:'unverified_source_currency',
+ all_count:1395,all_amount:1200000,success_count:998,success_amount:950000,
+ payment_method_rows:[fiveMethod('QRIS',1354,998),fiveMethod('OVO',41,0)],...extra};}
+test('55FIVE uses verified IDR method counts without distributing the provider amount',()=>{
+ const leaf=fiveLeaf(),h=fixture([leaf]);Object.assign(h.L,{country:'印尼',currency:'IDR',results:[...fiveMap().values()]});
+ h.render('charge');assert.match(h.html(),/QRIS \/ OVO/);h.root.providerSummaryToggle(0);
+ const html=h.html(),section=html.slice(html.indexOf('provider-method-breakdown')).split('</table>')[0];
+ assert.match(section,/<td>QRIS<\/td><td>—<\/td><td>1,354<\/td><td>—<\/td><td>998<\/td>/);
+ assert.match(section,/<td>OVO<\/td><td>—<\/td><td>41<\/td><td>—<\/td><td>0<\/td>/);
+ assert.match(html,/1,200,000\.00/);assert.match(html,/950,000\.00/);assert.doesNotMatch(section,/1,200,000|950,000/);
+ assert.equal(h.networkCalls(),0);assert.equal((html.match(/class="provider-platform-row"/g)||[]).length,1);
+});
+test('55FIVE requires exact registration, count-only proof, currency, counts and unknown amounts',()=>{
+ const api=fixture([]).api,r=fiveLeaf(),map=fiveMap(),split=(x,m=map)=>api.indonesiaMethods(x,m);
+ for(const change of [{payment_method_amount_basis:null},{payment_method_rows:undefined},{payment_method_rows:r.payment_method_rows.slice(1)},{nativeFeeIdentityVerified:false},{source:'lg'},{platform:'Other'},{success_count:997},{all_count:1394}])assert.equal(split({...r,...change}).complete,false);
+ for(const change of [{all_count:null},{all_count:1354.1},{all_count:false},{all_count:[1354]},{all_amount:10},{success_amount:10},{created_success_amount:10},{platformId:'other'}])assert.equal(split({...r,payment_method_rows:[{...r.payment_method_rows[0],...change},r.payment_method_rows[1]]}).complete,false);
+ for(const change of [{name:'OTHER'},{source:'newar'},{country:'印度'},{currency:'INR'},{id:'other'}])assert.equal(split(r,new Map([[fiveId,{platform:{...fivePlatform,...change},successBasis:'created'}]])),null);
+ for(const change of [{platformId:'x'},{currency:'INR'},{direction:'withdraw'}])assert.equal(split({...r,...change}),null);
+ assert.equal(split({...r,items:[r],payment_method_rows:undefined}).complete,false);
+ const combined={...r,items:[r],all_count:0};delete combined.payment_method_rows;assert.equal(split(combined).complete,false);
+});
+test('55FIVE preserves unlabeled methods, multiple parts and the independent success basis',()=>{
+ const h=fixture([]),r=fiveLeaf({provider:'BRI (PayIng)',all_count:131,success_count:115,payment_method_rows:[fiveMethod(null,131,115)]});
+ const split=(x,map=fiveMap())=>h.api.indonesiaMethods(x,map);assert.equal(split(r).rows[0].method,'未标注');
+ assert.equal(split({...r,provider:'未识别通道'}).rows[0].all_count,131);
+ const independent={...r,success_count:137,payment_method_rows:[{...fiveMethod(null,131,115),success_count:137}]};assert.equal(split(independent,fiveMap('created')).complete,false);assert.equal(split(independent,fiveMap('success')).rows[0].success_count,137);
+ const parts={...r,items:[r,r],all_count:262,success_count:230};delete parts.payment_method_rows;assert.equal(split(parts).rows[0].all_count,262);assert.equal(split(parts).rows[0].success_amount,null);
+ const mixed={...parts,items:[r,lgData()],all_count:272,success_count:208};const scope=new Map([...fiveMap(),...lgResults()]);assert.equal(split(mixed,scope).complete,true);assert.equal(split({...mixed,items:[r,lgData({all_amount:1})]},scope).complete,false);
+});
