@@ -190,3 +190,37 @@ test('successful retry clears missing-platform warning even when old failure evi
  h.L.results.push({platform:b,groups:{provider:[]}});h.render();assert.equal(h.api.queryCoverage(h.L).partial,false);assert.doesNotMatch(h.html(),/provider-api-coverage/);h.root.providerSummaryPlatformCoverage();assert.equal((h.drawers.at(-1).html.match(/<td>已读取<\/td>/g)||[]).length,2);assert.doesNotMatch(h.html(),/缺失 1 个平台|provider-kpi-warning/);
  h.root.providerSummaryPlatformCoverage();assert.doesNotMatch(h.drawers.at(-1).html,/timeout|读取失败/);assert.equal(h.networkCalls(),0);
 });
+
+function methodChild(channel_type,count,amount,success_count,success_amount){return {channel_type,all_count:count,all_amount:amount,created_success_count:success_count,created_success_amount:success_amount,success_count,success_amount};}
+const lgMethods=[methodChild('QRIS-QR',120,120000,90,85000),methodChild('DANA',12,12000,2,1600),methodChild('OVO',6,6000,0,0),methodChild('LinkAja',3,3000,1,700)];
+const lgPlatform={id:'local-lg',name:'LG111',country:'印尼',source:'lg',currency:'IDR',timezone:'Asia/Jakarta'};
+function lgData(extra={}){return {provider:'ExamplePay',platformId:'local-lg',platform:'LG111',currency:'IDR',country:'印尼',direction:'charge',source:'lg',all_count:141,all_amount:141000,success_count:93,success_amount:87300,payment_method_rows:lgMethods,...extra}}
+function lgResults(basis='created'){return new Map([['local-lg',{platform:lgPlatform,successBasis:basis}]]);}
+test('LG111 uses actual source methods without additional reads or double counting',()=>{
+ const leaf=lgData(),h=fixture([leaf]);Object.assign(h.L,{country:'印尼',currency:'IDR',results:[...lgResults().values()]});
+ h.render('charge');assert.match(h.html(),/QRIS \/ DANA \/ OVO \/ LinkAja/);assert.doesNotMatch(h.html(),/provider-method-breakdown/);
+ h.root.providerSummaryToggle(0);const html=h.html(),section=html.slice(html.indexOf('provider-method-breakdown'));
+ assert.match(section,/85,000\.00/);assert.match(section,/120/);assert.match(section,/LinkAja/);assert.equal(h.networkCalls(),0);
+ assert.equal((html.match(/class="provider-platform-row"/g)||[]).length,1);
+ assert.equal(h.api.buildRows({orders:[leaf],issues:null,rates:[],country:'印尼',direction:'charge',plus,combine}).length,1);
+ h.root.providerSummaryToggle(0);assert.doesNotMatch(h.html(),/provider-method-breakdown/);
+});
+test('method details respect existing query and distinguish missing rows, unknown amounts and other native platforms',()=>{
+ const api=fixture([]).api,map=lgResults(),r=lgData();
+ assert.equal(api.lg111Methods(r,map).rows.length,4);
+ const bad=lgData({payment_method_rows:lgMethods.slice(1)});assert.equal(api.lg111Methods(bad,map).complete,false);
+ const {payment_method_rows,...old}=r;assert.equal(api.lg111Methods(old,map).complete,false);
+ assert.equal(api.lg111Methods({...r,platformId:'other'},map),null);
+ assert.equal(api.lg111Methods({...r,direction:'withdraw'},map),null);
+ assert.equal(api.lg111Methods({...r,currency:'INR'},map),null);
+ assert.equal(api.lg111Methods({...r,nativeFeeIdentityVerified:false},map).complete,false);
+ const nullRows=[methodChild('Bank',2,null,1,null)];const n=api.lg111Methods(lgData({all_count:2,all_amount:null,success_count:1,success_amount:null,payment_method_rows:nullRows}),map);
+ assert.equal(n.complete,true);assert.equal(n.rows[0].method,'Bank');assert.equal(n.rows[0].success_amount,null);
+ const nested={...r,items:[r,old]};delete nested.payment_method_rows;assert.equal(api.lg111Methods(nested,map).complete,false);
+});
+test('method groups reconcile independent success-window fields including zero separately from the creation cohort',()=>{
+ const api=fixture([]).api;const rows=[{...methodChild('DANA',2,1000,1,300),success_count:3,success_amount:1200}];
+ const row=lgData({all_count:2,all_amount:1000,success_count:3,success_amount:1200,payment_method_rows:rows});
+ assert.equal(api.lg111Methods(row,lgResults('success')).rows[0].success_count,3);
+ assert.equal(api.lg111Methods(row,lgResults('created')).complete,false);
+});

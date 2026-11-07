@@ -95,6 +95,49 @@
   const label=mismatch?'待核对':types.size>1?'多种类型':types.size?[...types][0]:'未标注';
   return {label,types:[...types],state:mismatch?'review':types.size>1?'mixed':types.size?'known':'empty',detail:[...new Set(details)].join('；')+(mismatch?'；源表三方名称与当前三方不一致，类型待核对':'')||'原表未标注业务类型'};
  }
+ const methodMetrics=['all_count','all_amount','success_count','success_amount'];
+ function lg111Methods(row,platformResults){
+  if(row.direction!=='charge'||row.currency!=='IDR'||!isProviderBusiness(row.provider))return null;
+  const methods=new Map();let eligible=false,outside=false,unavailable=false;
+  function visit(item,platformId){
+   platformId=item.platformId||platformId;
+   if(!Object.hasOwn(item,'payment_method_rows')&&Array.isArray(item.items)&&item.items.length){
+    for(const child of item.items)visit(child,platformId);return;
+   }
+   const result=platformResults.get(platformId),platform=result?.platform;
+   if(!platform||platform.name!=='LG111'||String(platform.source).toLowerCase()!=='lg'||platform.country!=='印尼'||platform.currency!=='IDR'){outside=true;return;}
+   eligible=true;
+   if(item.nativeFeeIdentityVerified===false||item.direction&&item.direction!=='charge'||item.currency&&item.currency!=='IDR'||item.source&&String(item.source).toLowerCase()!=='lg'||item.country&&item.country!==platform.country||!Array.isArray(item.payment_method_rows)||!['created','success'].includes(result.successBasis)){unavailable=true;return;}
+   const inputs=result.successBasis==='created'?['all_count','all_amount','created_success_count','created_success_amount']:methodMetrics;
+   const sums=Object.fromEntries(methodMetrics.map(k=>[k,0]));
+   for(const child of item.payment_method_rows){
+    if(!child||typeof child!=='object'||!Object.hasOwn(child,'channel_type')||(child.channel_type!=null&&typeof child.channel_type!=='string')||(child.currency&&child.currency!=='IDR')||(child.direction&&child.direction!=='charge')){unavailable=true;return;}
+    let method=child.channel_type==null||child.channel_type===''?'未标注':String(child.channel_type).trim();
+    if(!method||method.length>140||/[\u0000-\u001f\u007f]/.test(method)){unavailable=true;return;}
+    const upper=method.toUpperCase();
+    if(upper==='QRIS-QR')method='QRIS';
+    else if(['QRIS','DANA','GOPAY','OVO','VA'].includes(upper))method=upper;
+    const metrics=methods.get(method)||Object.fromEntries(methodMetrics.map(k=>[k,0]));
+    for(let i=0;i<methodMetrics.length;i++){
+     const key=methodMetrics[i],field=inputs[i];if(!Object.hasOwn(child,field)){unavailable=true;return;}
+     const v=child[field],n=knownNumber(v);
+     if(v!==null&&(n===null||(key.endsWith('_count')&&(!Number.isSafeInteger(n)||n<0)))){unavailable=true;return;}
+     sums[key]=sums[key]===null||n===null?null:sums[key]+n;
+     metrics[key]=metrics[key]===null||n===null?null:metrics[key]+n;
+    }
+    methods.set(method,metrics);
+   }
+   for(const key of methodMetrics){const n=knownNumber(item[key]),v=sums[key];
+    if(!Object.hasOwn(item,key)||(n===null||v===null?n!==v:Math.abs(n-v)>Math.max(1e-8,Math.abs(n)*Number.EPSILON*8))){unavailable=true;return;}}
+  }
+  visit(row,row.platformId);
+  if(!eligible||outside)return null;
+  for(const key of methodMetrics){const values=[...methods.values()].map(v=>v[key]),total=values.includes(null)?null:values.reduce((s,v)=>s+v,0),expected=knownNumber(row[key]);if(!Object.hasOwn(row,key)||(expected===null||total===null?expected!==total:Math.abs(expected-total)>Math.max(1e-8,Math.abs(expected)*Number.EPSILON*8)))unavailable=true;}
+  if(unavailable)return {complete:false,label:'未提供',rows:[]};
+  const rows=[...methods].map(([method,metrics])=>({method,...metrics})).sort((a,b)=>b.all_count-a.all_count||a.method.localeCompare(b.method));
+  return {complete:true,label:rows.map(r=>r.method).join(' / ')||'—',rows};
+ }
+
  function providerTypeCell(row,rates,country,E,status={}){const value=status.feeLookupError?{label:'读取失败',state:'review',detail:status.feeLookupError}:status.feeLookupLoading?{label:'读取中…',state:'empty',detail:'正在读取原表业务类型'}:providerType(row,rates,country);return '<span class="provider-business-type '+value.state+'" title="'+E(value.detail)+'">'+E(value.label)+'</span>'}
  function parseFee(percent,single){
   const rate=String(percent??'').trim(),fixed=String(single??'').trim();let p=0,f=0;
@@ -686,6 +729,25 @@
   const feeMode=L.feeEstimateMode==='historical'?'historical':'current',feeNote=feeMode==='current'?'按当前费率估算 · 非历史实际手续费':'按订单创建时生效费率';
   root.providerSummaryFeeMode=function(value){const page=direction==='charge'?'providers':'provider_payout';if(!['current','historical'].includes(value)||L.dirty||typeof root.hensemCurrentAdminPage==='function'&&root.hensemCurrentAdminPage()!==page||typeof root.hensemRoleAllowed==='function'&&!root.hensemRoleAllowed(page,'view'))return;L.feeEstimateMode=value;ctx.render()};
   const feeControls=()=>'<label>费率 <select class="btn small" aria-label="三方手续费估算口径" onchange="providerSummaryFeeMode(this.value)"><option value="current" '+(feeMode==='current'?'selected':'')+'>当前费率估算</option><option value="historical" '+(feeMode==='historical'?'selected':'')+'>历史生效费率</option></select></label><button type="button" class="link" title="手续费已匹配 '+(fees.matchedCount==null?'—':C(fees.matchedCount))+' / '+(fees.successCount==null?'—':C(fees.successCount))+' 笔；点击查看统计依据" onclick="providerSummaryBasis()">统计口径</button>'+(L.feeLookupError?'<button type="button" class="btn small" aria-label="重试读取费率" onclick="liveRetryFeeLookup()" title="'+E(L.feeLookupError)+'" '+(L.feeLookupLoading?'disabled':'')+'>重试费率</button>':'');
+
+  const platformsById=new Map((L.results||[]).map(result=>[result.platform?.id,result])),methodCache=new WeakMap();
+  function methodsOf(row){
+   if(!methodCache.has(row))methodCache.set(row,lg111Methods(row,platformsById));
+   return methodCache.get(row);
+  }
+  function summaryTypeCell(row,index,toggle){
+   const split=methodsOf(row);
+   if(!split)return providerTypeCell(row,L.feeLookupRows,L.country,E,L);
+   if(!split.complete)return '<span class="provider-business-type empty" title="当前查询未提供完整支付方式分项">未提供</span>';
+   const label=E(split.label);
+   return toggle&&split.rows.length?'<button class="link" title="展开支付方式明细" onclick="providerSummaryToggle('+index+')">'+label+'</button>':label;
+  }
+  function methodDetails(row,colspan){
+   const split=methodsOf(row);if(!split?.complete||!split.rows.length)return '';
+   const formatted=(v,format)=>v===null?'—':format(v);
+   const details=split.rows.map(r=>[E(row.platform),E(row.provider),E(r.method),formatted(r.all_amount,N),formatted(r.all_count,C),formatted(r.success_amount,N),formatted(r.success_count,C)]);
+   return '<tr class="provider-expanded-row"><td colspan="'+colspan+'">'+table(['平台','统一三方','支付方式','创建金额','创建笔数','成功金额','成功笔数'],details,'provider-method-breakdown')+'</td></tr>';
+  }
   const orderRows=groupRows('provider');let rows=buildRows({orders:orderRows,issues:L.workorders?.byProvider||null,rates:L.feeLookupRows,country:L.country,direction,plus,combine,coverage:L.workorders?.coverage,feeMode});
   const total=scopedTotal(ctx,rows,direction),fees=scopedFees(ctx,rows,direction),knownFee=fees.amount,readState=queryCoverage(L),intake=intakeCoverage(L,direction),partial=readState.partial||intake.partial;
   const sourceBasis=ctx.sourceBasis||'创建金额和笔数按各平台当地创建时间；成功金额和笔数按来源提供的成功统计时间，可能含跨日成功。';
@@ -694,7 +756,7 @@
   const submissionFact=r=>{const m=submissionAnalysis?.metric(r._submissionTotal?null:r.provider,submissionIds(r));return m?.complete?m:null};
   const submissionCells=r=>['rate','members','count'].map(kind=>r._submissionUnavailable?'—':submissionAnalysis?.providerCell(r._submissionTotal?null:r.provider,submissionIds(r),kind,r.success_count,r.all_count)||'—');
   const sortValues={provider:r=>sortText(r.provider),platform_count:r=>r.platforms?.length??null,platform:r=>sortText(r.platform),source:r=>sortText(r.source),
-   type:r=>{const type=providerType(r,L.feeLookupRows,L.country);return L.feeLookupLoading||L.feeLookupError||type.state==='review'?null:sortText(type.label)},
+   type:r=>{const split=methodsOf(r);if(split)return split.complete?sortText(split.label):null;const type=providerType(r,L.feeLookupRows,L.country);return L.feeLookupLoading||L.feeLookupError||type.state==='review'?null:sortText(type.label)},
    all_amount:r=>knownNumber(r.all_amount),invalid_members:r=>submissionFact(r)?.member_count??null,invalid_count:r=>submissionFact(r)?.invalid_count??null,adjusted_rate:r=>{const fact=submissionFact(r);return fact?fraction(r.success_count,Number(r.all_count)-fact.invalid_count):null},success_amount:r=>knownNumber(r.success_amount),success_count:r=>knownNumber(r.success_count),all_count:r=>knownNumber(r.all_count),
    success_rate:r=>fraction(r.success_count,r.all_count),amount_share:r=>fraction(r.success_amount,total.success_amount),count_share:r=>fraction(r.success_count,total.success_count),
    pending_amount:r=>knownNumber(r.pending_amount),pending_count:r=>knownNumber(r.pending_count),fee_rate:feeSortValue,estimated_fee:r=>knownNumber(r.estimated_fee),fee_share:r=>fraction(r.estimated_fee,knownFee),
@@ -844,7 +906,7 @@
   };
   const cells=(r,label,summary=false,index=0)=>{
    const w=r.uniqueOrders,rate=R(r.success_count,r.all_count);
-   return [label,'<span title="'+E(summary?'去重平台数':(r.sources.join(' / ')||'仅工单记录')+' · '+r.platforms.join('、'))+'">'+C(r.platforms.length)+'</span>',summary?'—':providerTypeCell(r,L.feeLookupRows,L.country,E,L),
+   return [label,'<span title="'+E(summary?'去重平台数':(r.sources.join(' / ')||'仅工单记录')+' · '+r.platforms.join('、'))+'">'+C(r.platforms.length)+'</span>',summary?'—':summaryTypeCell(r,index,true),
     readState.empty?'—':N(r.all_amount),readState.empty?'—':C(r.all_count),readState.empty?'—':N(r.success_amount),readState.empty?'—':C(r.success_count),readState.empty?'—':R(r.success_amount,total.success_amount),readState.empty?'—':R(r.success_count,total.success_count),'<span title="按成功 / 创建：'+C(r.success_count)+' / '+C(r.all_count)+' 笔">'+(readState.empty?'—':rate)+'</span>',...(direction==='charge'?submissionCells(r):[]),
     ...(direction==='withdraw'?[readState.empty?'—':N(r.pending_amount),readState.empty?'—':C(r.pending_count)]:[]),summary?'—':rateButton(displayedRate(r,feeForRow(r)),index),feeCell(r),r.estimated_fee==null?'—':R(r.estimated_fee,knownFee),
     ...issueKeys.map(key=>uniqueCell(r.uniqueOrders,displayedIssueKeys[key])),...(direction==='charge'?kycIssueKeys.map(key=>kycCell(r.uniqueOrders,key)):[]),
@@ -897,13 +959,13 @@
    const details=items.map(r=>{
     const w=r.uniqueOrders,unknown=r.issueOnly,rate=R(r.success_count,r.all_count);
     const amount=key=>unknown?'—':N(r[key]),count=key=>unknown?'—':C(r[key]);
-    const values=[E(r.platform)+(unknown?'<small class="cell-sub">仅有工单数据</small>':''),E(r.source||'未提供'),providerTypeCell({...r,provider:row.provider},L.feeLookupRows,L.country,E,L),
+    const values=[E(r.platform)+(unknown?'<small class="cell-sub">仅有工单数据</small>':''),E(r.source||'未提供'),summaryTypeCell(r,index,false),
      amount('all_amount'),count('all_count'),amount('success_amount'),count('success_count'),unknown?'—':share(r.success_amount,row.success_amount),unknown?'—':share(r.success_count,row.success_count),
      '<span title="按成功 / 创建：'+C(r.success_count)+' / '+C(r.all_count)+' 笔">'+(unknown?'—':rate)+'</span>',...(direction==='charge'?(unknown?['—','—','—']:submissionCells(r)):[]),
      ...(direction==='withdraw'?[amount('pending_amount'),count('pending_count')]:[]),rateButton(displayedRate(r,r.fee_reference_label||'—'),index),unknown?'—':feeCell(r),unknown?'—':share(r.estimated_fee,row.estimated_fee),
      ...issueKeys.map(key=>uniqueCell(r.uniqueOrders,displayedIssueKeys[key])),...(direction==='charge'?kycIssueKeys.map(key=>kycCell(r.uniqueOrders,key)):[]),
      issueRate(w),!unknown&&r.platformId&&(Number(r.success_count)>0||Number(r.all_count)>0)?'<button class="link" title="'+E(r.platform+' · 查看'+row.provider+'原始通道与订单')+'" onclick="providerSummaryOrders('+index+','+E(JSON.stringify(r.platformId))+')">查看订单</button>':'—'];
-    return '<tr class="provider-platform-row">'+values.map(value=>'<td>'+value+'</td>').join('')+'</tr>';
+    return '<tr class="provider-platform-row">'+values.map(value=>'<td>'+value+'</td>').join('')+'</tr>'+methodDetails(r,headers.length);
    }).join('');
    const issueNote=!Array.isArray(L.workorders?.byPlatformProvider)?' 工单平台明细尚未返回，显示 —；不使用分页记录推算。':items.some(r=>r.issueOnly)?' 仅有工单或包网归属不明的平台单列，不计入交易平台数，未重复分摊。':'';
    const definition=issueOnly(row)?'此处为已读取的平台工单汇总；该汇总接口不提供工单号，不能据此判断逐笔记录是否已入库。'+workorderBasis:'第一列为平台，第二列为包网。'+E(ctx.sourceBasis||'成功金额、成功笔数按成功时间；成功率为本期成功笔数 / 本期创建笔数，含跨日成功。')+'金额、笔数占比以'+(partial?'已读取平台范围':'当前筛选范围')+'内此三方为分母；手续费占比以此三方已匹配手续费为分母；'+feeNote+'。'+issueNote;
@@ -927,6 +989,6 @@
    '<div class="provider-report-panel">'+box(name+'三方汇总'+(partial?'（部分结果）':'')+' · '+issueLabel+'工单'+(publishedWindow(L)?.intraday?'（完整自然日独立统计）':''),toolbar+(uniqueCoverageNote||workorderGapNote||detailOnlyNote?'<div class="provider-workorder-notices">'+uniqueCoverageNote+workorderGapNote+detailOnlyNote+'</div>':'')+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
     '')+'</div></div>';
  }
- root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,currentReferenceFeeFacts,feeModeRow,tieredFeeRule,feeSummary,feeCoverageText,feeHistoryLabel,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
+ root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,currentReferenceFeeFacts,feeModeRow,tieredFeeRule,feeSummary,feeCoverageText,feeHistoryLabel,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,lg111Methods,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;
 })(typeof window!=='undefined'?window:globalThis);
