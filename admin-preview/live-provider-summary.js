@@ -96,43 +96,72 @@
   return {label,types:[...types],state:mismatch?'review':types.size>1?'mixed':types.size?'known':'empty',detail:[...new Set(details)].join('；')+(mismatch?'；源表三方名称与当前三方不一致，类型待核对':'')||'原表未标注业务类型'};
  }
  const methodMetrics=['all_count','all_amount','success_count','success_amount'];
- function lg111Methods(row,platformResults){
-  if(row.direction!=='charge'||row.currency!=='IDR'||!isProviderBusiness(row.provider))return null;
-  const methods=new Map();let eligible=false,outside=false,unavailable=false;
+ const countMetrics=['all_count','success_count'];
+ const fiveId='acdeebb2-fb0a-e01b-e00d-c18506ecbe19';
+ function methodTotalsMatch(item,sums,countsOnly){
+  return (countsOnly?countMetrics:methodMetrics).every(key=>{
+   if(!Object.hasOwn(item,key))return false;
+   const n=knownNumber(item[key]),v=sums[key];
+   if(countsOnly)return Number.isSafeInteger(n)&&n>=0&&v===n;
+   return n===null||v===null?n===v:Math.abs(n-v)<=Math.max(1e-8,Math.abs(n)*Number.EPSILON*8);
+  });
+ }
+ function indonesiaMethods(row,platformResults){
+  if(row.direction!=='charge'||row.currency!=='IDR'||feeExempt(row.provider))return null;
+  const methods=new Map();let eligible=false,outside=false,unavailable=false,hasCountOnly=false;
   function visit(item,platformId){
    platformId=item.platformId||platformId;
    if(!Object.hasOwn(item,'payment_method_rows')&&Array.isArray(item.items)&&item.items.length){
     for(const child of item.items)visit(child,platformId);return;
    }
    const result=platformResults.get(platformId),platform=result?.platform;
-   if(!platform||platform.name!=='LG111'||String(platform.source).toLowerCase()!=='lg'||platform.country!=='印尼'||platform.currency!=='IDR'){outside=true;return;}
+   const source=String(platform?.source||'').toLowerCase();
+   const countOnly=platformId===fiveId&&platform?.id===fiveId&&platform.name==='55FIVE'&&source==='ar';
+   const lg=platform?.name==='LG111'&&source==='lg';
+   if((!lg&&!countOnly)||(lg&&!isProviderBusiness(row.provider))||platform.country!=='印尼'||platform.currency!=='IDR'){outside=true;return;}
    eligible=true;
-   if(item.nativeFeeIdentityVerified===false||item.direction&&item.direction!=='charge'||item.currency&&item.currency!=='IDR'||item.source&&String(item.source).toLowerCase()!=='lg'||item.country&&item.country!==platform.country||!Array.isArray(item.payment_method_rows)||!['created','success'].includes(result.successBasis)){unavailable=true;return;}
+   if(countOnly){
+    hasCountOnly=true;
+    if(platform.reportOnly===true||item.platform&&item.platform!==platform.name||item.payment_method_amount_basis!=='unverified_source_currency'){unavailable=true;return;}
+   }
+   if(item.nativeFeeIdentityVerified===false||item.direction&&item.direction!=='charge'||item.currency&&item.currency!=='IDR'||item.source&&String(item.source).toLowerCase()!==source||item.country&&item.country!==platform.country||!Array.isArray(item.payment_method_rows)||!['created','success'].includes(result.successBasis)){unavailable=true;return;}
    const inputs=result.successBasis==='created'?['all_count','all_amount','created_success_count','created_success_amount']:methodMetrics;
    const sums=Object.fromEntries(methodMetrics.map(k=>[k,0]));
    for(const child of item.payment_method_rows){
     if(!child||typeof child!=='object'||!Object.hasOwn(child,'channel_type')||(child.channel_type!=null&&typeof child.channel_type!=='string')||(child.currency&&child.currency!=='IDR')||(child.direction&&child.direction!=='charge')){unavailable=true;return;}
     let method=child.channel_type==null||child.channel_type===''?'未标注':String(child.channel_type).trim();
     if(!method||method.length>140||/[\u0000-\u001f\u007f]/.test(method)){unavailable=true;return;}
-    const upper=method.toUpperCase();
-    if(upper==='QRIS-QR')method='QRIS';
-    else if(['QRIS','DANA','GOPAY','OVO','VA'].includes(upper))method=upper;
+    if(lg){
+     const upper=method.toUpperCase();
+     if(upper==='QRIS-QR')method='QRIS';
+     else if(['QRIS','DANA','GOPAY','OVO','VA'].includes(upper))method=upper;
+    }
+    if(countOnly){
+     const wrongPlatform=child.platformId&&child.platformId!==fiveId||child.platform&&child.platform!==platform.name||
+      child.source&&String(child.source).toLowerCase()!==source||child.country&&child.country!==platform.country;
+     if(wrongPlatform||child.all_amount!==null||child.success_amount!==null||child.created_success_amount!=null){unavailable=true;return;}
+    }
     const metrics=methods.get(method)||Object.fromEntries(methodMetrics.map(k=>[k,0]));
     for(let i=0;i<methodMetrics.length;i++){
      const key=methodMetrics[i],field=inputs[i];if(!Object.hasOwn(child,field)){unavailable=true;return;}
      const v=child[field],n=knownNumber(v);
+     if(countOnly&&key.endsWith('_count')&&(n===null||typeof v!=='number'&&typeof v!=='string')){unavailable=true;return;}
      if(v!==null&&(n===null||(key.endsWith('_count')&&(!Number.isSafeInteger(n)||n<0)))){unavailable=true;return;}
      sums[key]=sums[key]===null||n===null?null:sums[key]+n;
      metrics[key]=metrics[key]===null||n===null?null:metrics[key]+n;
     }
     methods.set(method,metrics);
    }
-   for(const key of methodMetrics){const n=knownNumber(item[key]),v=sums[key];
-    if(!Object.hasOwn(item,key)||(n===null||v===null?n!==v:Math.abs(n-v)>Math.max(1e-8,Math.abs(n)*Number.EPSILON*8))){unavailable=true;return;}}
+   if(!methodTotalsMatch(item,sums,countOnly))unavailable=true;
   }
   visit(row,row.platformId);
   if(!eligible||outside)return null;
-  for(const key of methodMetrics){const values=[...methods.values()].map(v=>v[key]),total=values.includes(null)?null:values.reduce((s,v)=>s+v,0),expected=knownNumber(row[key]);if(!Object.hasOwn(row,key)||(expected===null||total===null?expected!==total:Math.abs(expected-total)>Math.max(1e-8,Math.abs(expected)*Number.EPSILON*8)))unavailable=true;}
+  const totals={};
+  for(const key of methodMetrics){
+   const values=[...methods.values()].map(v=>v[key]);
+   totals[key]=values.includes(null)?null:values.reduce((s,v)=>s+v,0);
+  }
+  if(!methodTotalsMatch(row,totals,hasCountOnly))unavailable=true;
   if(unavailable)return {complete:false,label:'未提供',rows:[]};
   const rows=[...methods].map(([method,metrics])=>({method,...metrics})).sort((a,b)=>b.all_count-a.all_count||a.method.localeCompare(b.method));
   return {complete:true,label:rows.map(r=>r.method).join(' / ')||'—',rows};
@@ -732,7 +761,7 @@
 
   const platformsById=new Map((L.results||[]).map(result=>[result.platform?.id,result])),methodCache=new WeakMap();
   function methodsOf(row){
-   if(!methodCache.has(row))methodCache.set(row,lg111Methods(row,platformsById));
+   if(!methodCache.has(row))methodCache.set(row,indonesiaMethods(row,platformsById));
    return methodCache.get(row);
   }
   function summaryTypeCell(row,index,toggle){
@@ -989,6 +1018,6 @@
    '<div class="provider-report-panel">'+box(name+'三方汇总'+(partial?'（部分结果）':'')+' · '+issueLabel+'工单'+(publishedWindow(L)?.intraday?'（完整自然日独立统计）':''),toolbar+(uniqueCoverageNote||workorderGapNote||detailOnlyNote?'<div class="provider-workorder-notices">'+uniqueCoverageNote+workorderGapNote+detailOnlyNote+'</div>':'')+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
     '')+'</div></div>';
  }
- root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,currentReferenceFeeFacts,feeModeRow,tieredFeeRule,feeSummary,feeCoverageText,feeHistoryLabel,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,lg111Methods,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
+ root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,currentReferenceFeeFacts,feeModeRow,tieredFeeRule,feeSummary,feeCoverageText,feeHistoryLabel,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,indonesiaMethods,lg111Methods:indonesiaMethods,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;
 })(typeof window!=='undefined'?window:globalThis);
