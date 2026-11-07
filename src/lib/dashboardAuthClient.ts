@@ -153,14 +153,29 @@ function publicConfig() {
   return { url: parsed.origin, anonKey };
 }
 
-function jwtExpiresAt(accessToken: string): number | null {
+function jwtClaims(accessToken: string): {exp?: unknown; sub?: unknown; session_id?: unknown} | null {
   try {
     const encoded = accessToken.split(".")[1];
     if (!encoded || encoded.length > 65536) return null;
     const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
     const payload = JSON.parse(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "=")));
-    return typeof payload?.exp === "number" && Number.isFinite(payload.exp) && payload.exp > 0 ? payload.exp : null;
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
   } catch { return null; }
+}
+
+function jwtExpiresAt(accessToken: string): number | null {
+  const exp = jwtClaims(accessToken)?.exp;
+  return typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp : null;
+}
+
+// Used only to invalidate mounted UI. Authorization is always verified on the server.
+export function dashboardViewSession(session: DashboardSession | null): string | null {
+  if (!session) return null;
+  const claims = jwtClaims(session.access_token);
+  const id = claims?.session_id;
+  if (claims?.sub === session.user.id && typeof id === "string"
+      && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id)) return "session:" + id;
+  return "token:" + session.access_token;
 }
 
 function sessionExpiry(session: DashboardSession): number | null {

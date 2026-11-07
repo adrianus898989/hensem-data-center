@@ -10,6 +10,18 @@
  root.HensemLiveCollectedData={create({L,E,C,N,table,box,request,render}){
   const S={rows:[],loaded:false,busy:false,error:'',serial:0,team:'all',country:'all',query:'',page:1,detail:null,detailRows:null,detailError:'',detailBusy:false,detailSerial:0,offset:0,from:'',to:'',rangeFrom:'2026-09-01',rangeTo:'',dataset:'all',status:'all',coverage:{},coverageBusy:false,coverageSerial:0,coverageError:'',coverageCheckedAt:'',coverageTotal:0,coverageDone:0,coverageFailed:[],coverageApplied:null,coverageDirty:false,expanded:{}};
   const initialState={...S};
+  let coverageController=null,coverageDrain=null;
+  function abortCoverage(){
+    coverageController?.abort();
+    coverageController=null;
+  }
+  function pauseCoverage(){
+    if(!S.coverageBusy)return;
+    S.coverageSerial++;
+    abortCoverage();
+    S.coverageBusy=false;
+    S.coverageDirty=true;
+  }
   const identity=row=>root.HensemLiveReportData?.normalizeIdentity(row)||row;
   const identityKey=row=>root.HensemLiveReportData?.identityKey(row)||JSON.stringify([row.identityCountry??row.country,row.name]);
   const platformRows=()=>[...(L.catalog||[]),...(L.withdrawCatalog||[])].filter(p=>p.name&&!['胖虎巴西','BR_PANGHU','PANGHU BRAZIL'].includes(String(p.name).toUpperCase())).map(p=>({...p,dataset:'catalog',name:p.name,country:p.country,rawCountry:p.rawCountry??p.country,rawPlatform:p.sourceName||(String(p.source||'').toLowerCase()==='wg'?p.source_name:null)||p.name,team:p.team||'待归类',system:p.source,platformId:p.id}));
@@ -31,7 +43,7 @@
   function fallbackEnd(){const d=new Date();d.setDate(d.getDate()-1);return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
   function scopeFeeds(){return filtered().flatMap((g,i)=>g.feeds.map((f,j)=>({g,f,i,j})).filter(({f})=>f.id&&eligible(f)&&(S.dataset==='all'||f.dataset===S.dataset)))}
   function defaults(){return {from:'2026-09-01',to:S.rows.map(f=>f.defaultEnd).filter(validDate).sort().at(-1)||fallbackEnd()}}
-  function dirtyCoverage(){S.coverageSerial++;S.coverageBusy=false;S.coverageDirty=true;S.coverageError='';S.expanded={};S.page=1;clearDetail()}
+  function dirtyCoverage(){S.coverageSerial++;abortCoverage();S.coverageBusy=false;S.coverageDirty=true;S.coverageError='';S.expanded={};S.page=1;clearDetail()}
   function days(from,to){const result=[];for(let t=Date.parse(from+'T00:00:00Z'),end=Date.parse(to+'T00:00:00Z');t<=end;t+=86400000)result.push(new Date(t).toISOString().slice(0,10));return result}
   function checkedYesterday(at,timezone){if(typeof timezone!=='string'||!timezone)return null;try{const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:timezone,calendar:'gregory',numberingSystem:'latn',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(at)).filter(p=>['year','month','day'].includes(p.type)).map(p=>[p.type,p.value]));return new Date(Date.UTC(Number(parts.year),Number(parts.month)-1,Number(parts.day))-86400000).toISOString().slice(0,10)}catch{return null}}
   function validateCoverage(result,feeds,from,to){
@@ -46,11 +58,28 @@
    if(!validDate(from)||!validDate(to)||to<from||(Date.parse(to)-Date.parse(from))/86400000>=93){S.coverageError='请选择有效日期，单次最多核对 93 天';render();return}
    const all=scopeFeeds().map(x=>x.f),ids=all.map(f=>f.id);let feeds=retry?all.filter(f=>S.coverageFailed.includes(f.id)):all;
    if(retry&&(S.coverageDirty||!S.coverageApplied||S.coverageApplied.from!==from||S.coverageApplied.to!==to)){S.coverageError='筛选已修改，请点击查询重新核对';render();return}
-   const serial=++S.coverageSerial;clearDetail();S.coverageBusy=true;S.coverageDirty=false;S.coverageError='';S.coverageTotal=ids.length;S.coverageDone=retry?ids.filter(id=>S.coverage[id]).length:0;
+   const serial=++S.coverageSerial;
+   const controller=typeof AbortController==='function'?new AbortController():null;
+   const previous=coverageDrain;
+   let release;
+   const drain=new Promise(resolve=>{release=resolve;});
+   coverageDrain=drain;
+   coverageController=controller;
+   clearDetail();S.coverageBusy=true;S.coverageDirty=false;S.coverageError='';S.coverageTotal=ids.length;S.coverageDone=retry?ids.filter(id=>S.coverage[id]).length:0;
    if(!retry){S.coverage={};S.coverageFailed=[];S.expanded={};S.coverageApplied={from,to,ids};S.page=1}
-   const batches=[];for(let i=0;i<feeds.length;i+=8)batches.push(feeds.slice(i,i+8));let index=0;render();
-   async function worker(){while(index<batches.length&&serial===S.coverageSerial){const batch=batches[index++];try{const result=await request({action:'intakeCoverage',operation:'rows',feedIds:batch.map(f=>f.id),startAt:from,endAt:to});if(serial!==S.coverageSerial)return;const grouped=validateCoverage(result,batch,from,to);Object.assign(S.coverage,grouped);S.coverageFailed=S.coverageFailed.filter(id=>!batch.some(f=>f.id===id));S.coverageCheckedAt=result.checkedAt}catch(e){if(serial!==S.coverageSerial)return;S.coverageFailed=[...new Set([...S.coverageFailed,...batch.map(f=>f.id)])];S.coverageError=e.message||'部分来源读取失败'}finally{if(serial===S.coverageSerial){S.coverageDone=ids.filter(id=>S.coverage[id]||S.coverageFailed.includes(id)).length;render()}}}}
-   await Promise.all([worker(),worker()]);if(serial===S.coverageSerial){S.coverageBusy=false;render()}
+   const batches=[];for(let i=0;i<feeds.length;i+=8)batches.push(feeds.slice(i,i+8));let index=0;
+   async function worker(){while(index<batches.length&&serial===S.coverageSerial){const batch=batches[index++];try{const result=await request({action:'intakeCoverage',operation:'rows',feedIds:batch.map(f=>f.id),startAt:from,endAt:to},controller?{signal:controller.signal}:undefined);if(serial!==S.coverageSerial)return;const grouped=validateCoverage(result,batch,from,to);Object.assign(S.coverage,grouped);S.coverageFailed=S.coverageFailed.filter(id=>!batch.some(f=>f.id===id));S.coverageCheckedAt=result.checkedAt}catch(e){if(serial!==S.coverageSerial)return;S.coverageFailed=[...new Set([...S.coverageFailed,...batch.map(f=>f.id)])];S.coverageError=e.message||'部分来源读取失败'}finally{if(serial===S.coverageSerial){S.coverageDone=ids.filter(id=>S.coverage[id]||S.coverageFailed.includes(id)).length;render()}}}}
+   try{
+    render();
+    if(previous)await previous;
+    if(serial!==S.coverageSerial)return;
+    await Promise.all([worker(),worker()]);
+   }finally{
+    release();
+    if(coverageDrain===drain)coverageDrain=null;
+    if(coverageController===controller)coverageController=null;
+    if(serial===S.coverageSerial){S.coverageBusy=false;render();}
+   }
   }
   async function load(force=false){if(S.busy||S.loaded&&!force){render();return}if(force)dirtyCoverage();const serial=++S.serial;S.busy=true;S.error='';render();try{const result=await request({action:'intakeCoverage',operation:'catalog'});if(serial!==S.serial)return;
    if(result?.complete!==true||result.version!==1||!Array.isArray(result.feeds)||new Set(result.feeds.map(f=>f.id)).size!==result.feeds.length||result.feeds.some(f=>typeof f.id!=='string'||!f.id||typeof f.dataset!=='string'||typeof f.name!=='string'||typeof f.rawCountry!=='string'||typeof f.rawPlatform!=='string'))throw Error('接入目录返回不完整，请重试');
@@ -95,6 +124,6 @@
   root.collectedToday=()=>{const date=sourceToday(S.detail);if(!date)return;S.from=S.to=date;S.detailSerial++;S.detailBusy=false;S.detailRows=null;S.detailError='';S.offset=0;render()};
   root.collectedQuery=()=>detailLoad();root.collectedDetailPage=delta=>{S.offset=Math.max(0,S.offset+delta*50);detailLoad(false)};
   root.collectedRefresh=()=>load(true);
-  return {load,render:draw,state:S,clear(){const serial=S.serial+1,detailSerial=S.detailSerial+1,coverageSerial=S.coverageSerial+1;Object.assign(S,initialState,{rows:[],coverage:{},expanded:{},coverageFailed:[],serial,detailSerial,coverageSerial});}};
+  return {load,render:draw,state:S,pauseCoverage,clear(){abortCoverage();const serial=S.serial+1,detailSerial=S.detailSerial+1,coverageSerial=S.coverageSerial+1;Object.assign(S,initialState,{rows:[],coverage:{},expanded:{},coverageFailed:[],serial,detailSerial,coverageSerial});}};
  }};
 })(typeof window!=='undefined'?window:globalThis);

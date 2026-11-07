@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import OwnerAdminPreview from "./OwnerAdminPreview";
 import { adminPreviewPageFromHash } from "@/lib/adminLiveBridge";
-import { canOpenAdminCenter } from "@/lib/dashboardAuthClient";
+import { canOpenAdminCenter, dashboardViewSession, normalizedManagementPermissions } from "@/lib/dashboardAuthClient";
 import { OWNER_PREVIEW_HOST_CSS, mountOwnerPreviewHostShell } from "@/lib/ownerPreviewShell";
+
+import { dashboardScopeIdentity } from "@/lib/dashboardDataScope";
 
 const legacyPages: Record<string, string> = {
   "#home": "overview", "#auto": "auto_withdraw", "#config": "payout_config",
@@ -29,6 +31,12 @@ export default function OfficialDashboard() {
   // before mounting any HTML. A separate access preflight repeats that same gate.
   const allowed = active;
   const canManage = active && canOpenAdminCenter(profile);
+  const identity = JSON.stringify([accountId, dashboardViewSession(session), profile?.active, profile?.role,
+    dashboardScopeIdentity(profile), normalizedManagementPermissions(profile)]);
+  const boundary = useRef({identity, version: 0});
+  if (boundary.current.identity !== identity) {
+    boundary.current = {identity, version: boundary.current.version + 1};
+  }
 
   useEffect(() => mountOwnerPreviewHostShell(), []);
 
@@ -49,7 +57,7 @@ export default function OfficialDashboard() {
   }, [allowed, accountId, canManage]);
 
   if (allowed && route?.accountId === accountId && session && profile) {
-    return <OwnerAdminPreview key={accountId + ":" + route.page + ":" + route.revision} session={session} profile={profile} canView={allowed} onLogout={logout} />;
+    return <OwnerAdminPreview key={boundary.current.version + ":" + route.page + ":" + route.revision} session={session} profile={profile} canView={allowed} onLogout={logout} />;
   }
   return <section className="owner-preview-shell" aria-label="数据中控后台">
     <style>{OWNER_PREVIEW_HOST_CSS}</style>

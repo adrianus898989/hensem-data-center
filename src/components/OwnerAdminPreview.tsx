@@ -36,11 +36,13 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   const [accountView,setAccountView]=useState<AccountView|null>(null);
   const [securityBounds,setSecurityBounds]=useState<{top:number;left:number;width:number}|null>(null);
   const [accountBounds,setAccountBounds]=useState<{top:number;left:number;width:number}|null>(null);
-  const canManageAccounts=profile.active===true&&(owner||(roleAccess?.mode==="assigned"?dashboardRoleAllows(roleAccess,"access"):profile.role==="admin"&&normalizedManagementPermissions(profile).manage_viewers));
-  const canViewRoles=owner||roleAccess?.mode==="assigned"&&dashboardRoleAllows(roleAccess,"access");
+  const retainedViewPolicy=useRef<DashboardRoleAccess|null>(null);
+  const directoryPolicy=roleAccess??retainedViewPolicy.current;
+  const canManageAccounts=profile.active===true&&(owner||(directoryPolicy?.mode==="assigned"?dashboardRoleAllows(directoryPolicy,"access"):profile.role==="admin"&&normalizedManagementPermissions(profile).manage_viewers));
+  const canViewRoles=owner||directoryPolicy?.mode==="assigned"&&dashboardRoleAllows(directoryPolicy,"access");
   const activeAccountView=accountView||(owner?"workorder":"accounts");
   const [accountWorkspace,setAccountWorkspace]=useState<AccountWorkspace|null>(null);
-  const directoryIdentity=JSON.stringify([accountId,scopeIdentity,profile.role,normalizedManagementPermissions(profile),roleAccess]);
+  const directoryIdentity=JSON.stringify([accountId,scopeIdentity,profile.role,normalizedManagementPermissions(profile),directoryPolicy]);
   const accountScrollRef=useRef<{identity:string;positions:Partial<Record<AccountView,number>>}>({identity:directoryIdentity,positions:{}});
   if(accountScrollRef.current.identity!==directoryIdentity)accountScrollRef.current={identity:directoryIdentity,positions:{}};
   const accountViewRef=useRef(activeAccountView);accountViewRef.current=activeAccountView;
@@ -63,7 +65,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   const rolesPanelRef=useCallback((node:HTMLDivElement|null)=>{accountPanels.current.roles=node;if(node)node.scrollTop=accountScrollRef.current.positions.roles||0},[]);
   const accountPageVisible=!!accountBounds;
   useEffect(()=>{const node=accountPanels.current[activeAccountView];if(accountPageVisible&&node)node.scrollTop=accountScrollRef.current.positions[activeAccountView]||0},[accountPageVisible,activeAccountView,directoryIdentity]);
-  const rememberAccountScroll=(view:AccountView,top:number)=>{if(accountBounds&&activeAccountView===view&&accountScrollRef.current.identity===directoryIdentity)accountScrollRef.current.positions[view]=top};
+  const rememberAccountScroll=(view:AccountView,top:number)=>{if(!suspendedRef.current&&accountBounds&&activeAccountView===view&&accountScrollRef.current.identity===directoryIdentity)accountScrollRef.current.positions[view]=top};
   const [verificationStatus,setVerificationStatus]=useState("");
   const [suspended,setSuspended]=useState(false);
   const [releaseAvailable,setReleaseAvailable]=useState(false);
@@ -76,8 +78,14 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   const readDrafts=useCallback(()=>{const values:Record<string,string>={};for(const key of OWNER_PREVIEW_DRAFT_KEYS){try{const value=localStorage.getItem(storagePrefix+key);if(value!==null&&ownerPreviewDraftAllowed(key,value))values[key]=value}catch{}}return values},[storagePrefix]);
   useEffect(()=>{
     const stopBridges=()=>{liveStopRef.current?.();liveStopRef.current=null;presenceStopRef.current?.();presenceStopRef.current=null};
-    const suspendPreview=()=>{suspendedRef.current=true;setSuspended(true);stopBridges();roleAccessRef.current=null;setRoleAccess(null);setAccountWorkspace(null);accountScrollRef.current.positions={}};
-    const clearPreview=()=>{stopBridges();suspendedRef.current=false;setSuspended(false);
+    const suspendPreview=()=>{
+      suspendedRef.current=true;
+      setSuspended(true);
+      stopBridges();
+      roleAccessRef.current=null;
+      setRoleAccess(null);
+    };
+    const clearPreview=()=>{stopBridges();retainedViewPolicy.current=null;suspendedRef.current=false;setSuspended(false);
       setDocumentHtml("");roleAccessRef.current=null;setRoleAccess(null);setAccountBounds(null);setSecurityBounds(null);setAccountView(null);setAccountWorkspace(null);accountScrollRef.current.positions={}};
     clearPreview();setError("");setVerificationStatus("");if(!allowed)return;
     let cancelled=false,checking=false,retrying=false,revision=0,published=false,accessRechecked=false;
@@ -101,7 +109,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
           if(stale()||attemptSignal.aborted)throw abandon();
           if(!policy.canView)throw Error("当前角色没有可用目录，请联系管理员分配角色。");
           const changed=check&&published&&JSON.stringify(policy)!==publishedPolicy;
-          if(changed){published=false;clearPreview();setVerificationStatus("角色权限已更新，正在重新验证后台…")}
+          if(changed){published=false;clearPreview();channel.current=crypto.randomUUID();setVerificationStatus("角色权限已更新，正在重新验证后台…")}
           const quick=check&&published&&!changed&&!recovering&&!suspendedRef.current;
           stage="preview-request";const response=await adminPreviewRequest(beginAuthority(),quick?"?check=1":"",{signal:attemptSignal},observeSession);
           if(stale()||attemptSignal.aborted)throw abandon();
@@ -125,9 +133,13 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
         if(obsolete(mine))return;if(staleAuthority())throw abandon();
         // Format checks and source transformations are deliberately outside retry.
         const unchanged=published&&result.html===publishedSource&&JSON.stringify(result.policy)===publishedPolicy;
+        if(published&&result.html!==null&&!unchanged){
+          clearPreview();
+          channel.current=crypto.randomUUID();
+        }
         const html=result.html===null||unchanged?null:makeOwnerPreviewDocument(makeOwnerPreviewShellDocument(makeDashboardPresenceDocument(makeAdminLiveDocument(restoreApprovedAdmin(result.html),channel.current,result.policy,{mode:dataScope.mode,identity:scopeIdentity}),channel.current,window.location.origin),channel.current,owner),readDrafts(),channel.current);
         if(obsolete(mine))return;if(staleAuthority())throw abandon();
-        retrying=false;suspendedRef.current=false;setSuspended(false);roleAccessRef.current=result.policy;setRoleAccess(result.policy);setVerificationStatus("");setError("");
+        retrying=false;suspendedRef.current=false;setSuspended(false);roleAccessRef.current=result.policy;retainedViewPolicy.current=result.policy;setRoleAccess(result.policy);setVerificationStatus("");setError("");
         publishedPolicy=JSON.stringify(result.policy);
         if(result.html!==null)publishedSource=result.html;
         if(html!==null){published=true;setDocumentHtml(html)}
@@ -155,8 +167,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   },[allowed,accountId,reload,readDrafts,owner,scopeIdentity]);
   useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{if(suspendedRef.current||!roleAccessRef.current)return;const data=event.data;const activity=ownerPreviewActivityTime(event,frame.current?.contentWindow,channel.current);if(activity!==null){recordDashboardActivity(activity);return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){visitAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);if(accountPage.active)rememberAccountPage(accountPage.bounds);return}const securityPage=ownerPreviewSecurityPage(event,frame.current?.contentWindow,channel.current);if(securityPage){setSecurityBounds(securityPage.active?securityPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,canManageAccounts,owner]);
   const hasDocument=Boolean(documentHtml);
-  // Reverification clears directories even when the iframe is reused. Its layout
-  // bridge may have no new geometry to send, so reopen only the currently visible tab.
+  // Restore the visible directory when a verified frame retains its geometry.
   useEffect(()=>{if(allowed&&hasDocument&&!suspended&&accountBounds&&dashboardRoleAllows(roleAccess,"access"))rememberAccountPage(accountBounds)},[allowed,hasDocument,suspended,accountBounds,directoryIdentity]);
   useEffect(()=>{
     setReleaseAvailable(false);
@@ -176,15 +187,15 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
     </div>}
     {allowed&&documentHtml&&<iframe key={channel.current} ref={frame} title="数据中控后台" sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" srcDoc={documentHtml} style={suspended?{display:"none"}:undefined} aria-hidden={suspended||undefined} className="owner-preview-shell-frame"/>}
     {(!allowed||!documentHtml||suspended)&&<div role={error?"alert":"status"} className="owner-preview-shell-status">{!allowed?"当前账号没有后台查看权限":error||verificationStatus||"正在验证查看权限并加载后台…"}<div className="owner-preview-shell-status-actions"><button type="button" className="owner-preview-shell-return" onClick={onLogout}>退出登录</button>{error&&<button type="button" className="owner-preview-shell-return" onClick={()=>suspended&&documentHtml?reconnectRef.current?.():setReload(x=>x+1)}>{suspended&&documentHtml?"重新连接":"重新加载"}</button>}</div></div>}
-    {allowed&&hasDocument&&!suspended&&accountWorkspace&&accountWorkspace.identity===directoryIdentity&&dashboardRoleAllows(roleAccess,"access")&&<section key={accountWorkspace.identity} aria-label="账号与角色权限" className="owner-preview-account-page owner-preview-account-workspace" hidden={!accountBounds} style={{top:Math.max(48,accountWorkspace.bounds.top),left:accountWorkspace.bounds.left,width:accountWorkspace.bounds.width}}>
+    {allowed&&hasDocument&&accountWorkspace&&accountWorkspace.identity===directoryIdentity&&dashboardRoleAllows(directoryPolicy,"access")&&<section key={accountWorkspace.identity} aria-label="账号与角色权限" className="owner-preview-account-page owner-preview-account-workspace" hidden={suspended||!accountBounds} aria-hidden={suspended||undefined} style={{top:Math.max(48,accountWorkspace.bounds.top),left:accountWorkspace.bounds.left,width:accountWorkspace.bounds.width}}>
       <div role="tablist" aria-label="账号类型" className="owner-preview-account-tabs">
         <button type="button" role="tab" id="owner-workorder-tab" aria-controls="owner-workorder-panel" aria-selected={activeAccountView==="workorder"} disabled={!owner} title={owner?undefined:"仅总管理员可管理前端工单账号"} onClick={()=>visitAccountView("workorder")}>前端工单账号</button>
         <button type="button" role="tab" id="owner-backend-tab" aria-controls="owner-backend-panel" aria-selected={activeAccountView==="accounts"} disabled={!canManageAccounts} onClick={()=>visitAccountView("accounts")}>后台账号</button>
         {canViewRoles&&<button type="button" role="tab" id="owner-roles-tab" aria-controls="owner-roles-panel" aria-selected={activeAccountView==="roles"} onClick={()=>visitAccountView("roles")}>角色管理</button>}
       </div>
-      {accountWorkspace.visited.includes("workorder")&&owner&&<div role="tabpanel" id="owner-workorder-panel" aria-labelledby="owner-workorder-tab" hidden={!accountBounds||activeAccountView!=="workorder"} className="owner-preview-account-body" ref={workorderPanelRef} onScroll={event=>rememberAccountScroll("workorder",event.currentTarget.scrollTop)}><WorkOrderAccountAdmin session={session} onAccessDenied={()=>accessDeniedRef.current?.("permission")} manualQuery active={!!accountBounds&&activeAccountView==="workorder"} refreshVersion={accountWorkspace.versions.workorder} onDirectoryChanged={()=>directoryChanged("workorder")}/></div>}
-      {accountWorkspace.visited.includes("accounts")&&canManageAccounts&&<div role="tabpanel" id="owner-backend-panel" aria-labelledby="owner-backend-tab" hidden={!accountBounds||activeAccountView!=="accounts"} className="owner-preview-account-body" ref={backendPanelRef} onScroll={event=>rememberAccountScroll("accounts",event.currentTarget.scrollTop)}><AdminControlCenter open session={session} onAccessDenied={()=>accessDeniedRef.current?.("permission")} profile={profile} roleAccess={roleAccess} section="accounts" embedded accountsOnlyLoading manualQuery active={!!accountBounds&&activeAccountView==="accounts"} refreshVersion={accountWorkspace.versions.accounts} onDirectoryChanged={()=>directoryChanged("accounts")} onClose={()=>{}}/></div>}
-      {accountWorkspace.visited.includes("roles")&&canViewRoles&&<div role="tabpanel" id="owner-roles-panel" aria-labelledby="owner-roles-tab" hidden={!accountBounds||activeAccountView!=="roles"} className="owner-preview-account-body" ref={rolesPanelRef} onScroll={event=>rememberAccountScroll("roles",event.currentTarget.scrollTop)}><DashboardRoleManager session={session} onAccessDenied={()=>accessDeniedRef.current?.("permission")} profile={profile} roleAccess={roleAccess} active={!!accountBounds&&activeAccountView==="roles"} refreshVersion={accountWorkspace.versions.roles} onDirectoryChanged={()=>directoryChanged("roles")}/></div>}
+      {accountWorkspace.visited.includes("workorder")&&owner&&<div role="tabpanel" id="owner-workorder-panel" aria-labelledby="owner-workorder-tab" hidden={!accountBounds||activeAccountView!=="workorder"} className="owner-preview-account-body" ref={workorderPanelRef} onScroll={event=>rememberAccountScroll("workorder",event.currentTarget.scrollTop)}><WorkOrderAccountAdmin session={session} onAccessDenied={()=>accessDeniedRef.current?.("permission")} manualQuery active={!suspended&&!!accountBounds&&activeAccountView==="workorder"} refreshVersion={accountWorkspace.versions.workorder} onDirectoryChanged={()=>directoryChanged("workorder")}/></div>}
+      {accountWorkspace.visited.includes("accounts")&&canManageAccounts&&<div role="tabpanel" id="owner-backend-panel" aria-labelledby="owner-backend-tab" hidden={!accountBounds||activeAccountView!=="accounts"} className="owner-preview-account-body" ref={backendPanelRef} onScroll={event=>rememberAccountScroll("accounts",event.currentTarget.scrollTop)}><AdminControlCenter open session={session} onAccessDenied={()=>accessDeniedRef.current?.("permission")} profile={profile} roleAccess={directoryPolicy} section="accounts" embedded accountsOnlyLoading manualQuery active={!suspended&&!!accountBounds&&activeAccountView==="accounts"} refreshVersion={accountWorkspace.versions.accounts} onDirectoryChanged={()=>directoryChanged("accounts")} onClose={()=>{}}/></div>}
+      {accountWorkspace.visited.includes("roles")&&canViewRoles&&<div role="tabpanel" id="owner-roles-panel" aria-labelledby="owner-roles-tab" hidden={!accountBounds||activeAccountView!=="roles"} className="owner-preview-account-body" ref={rolesPanelRef} onScroll={event=>rememberAccountScroll("roles",event.currentTarget.scrollTop)}><DashboardRoleManager session={session} onAccessDenied={()=>accessDeniedRef.current?.("permission")} profile={profile} roleAccess={directoryPolicy} active={!suspended&&!!accountBounds&&activeAccountView==="roles"} refreshVersion={accountWorkspace.versions.roles} onDirectoryChanged={()=>directoryChanged("roles")}/></div>}
       {((activeAccountView==="workorder"&&!owner)||(activeAccountView==="accounts"&&!canManageAccounts)||(activeAccountView==="roles"&&!canViewRoles))&&<p role="alert" className="owner-preview-account-denied">当前账号没有此项账号管理权限。</p>}
     </section>}
 

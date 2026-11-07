@@ -5,7 +5,7 @@ const plain=x=>JSON.parse(JSON.stringify(x));
 const feed=(i=0,extra={})=>({id:'f'+i,dataset:'volume',system:'REPORT',sourceKind:'direct',rawCountry:'IN',rawPlatform:'RAW-'+i,country:'印度',name:'PLATFORM-'+i,team:'M8',direction:'charge',timezone:'Asia/Kolkata',defaultEnd:'2026-09-25',lastDate:'2026-09-24',...extra});
 function day(feedId,date,status='received',extra={}){return {feedId,date,status,received:['received','partial','complete'].includes(status),complete:['complete','zero_complete'].includes(status),zeroConfirmed:status==='zero_complete',expected:status!=='not_expected',evidence:'source_full_day_not_published',recordReceivedAt:status==='not_received'?null:'2026-09-26T01:00:00Z',...extra}}
 function response(q,feeds,custom,checkedAt='2026-09-26T01:00:00Z'){return {version:1,complete:true,checkedAt,feedIds:q.feedIds,startAt:q.startAt,endAt:q.endAt,rows:q.feedIds.flatMap(id=>{const f=feeds.find(x=>x.id===id);if(!f.defaultEnd)return [day(id,null,'unverified',{expected:false,received:false})];const rows=[];for(let t=Date.parse(q.startAt),end=Date.parse(q.endAt<f.defaultEnd?q.endAt:f.defaultEnd);t<=end;t+=86400000){const date=new Date(t).toISOString().slice(0,10);rows.push(custom?custom(id,date):day(id,date))}return rows})}}
-function fixture(feeds=[feed()],handler,options={}){class Clock extends Date{constructor(...args){super(...(args.length?args:[options.now||Date.now()]))}static now(){return Date.parse(options.now)||Date.now()}}const calls=[],navigation=[],c={Date:Clock,document:{activeElement:null,querySelector:()=>null},liveSet:(...x)=>navigation.push(['set',...x]),liveChoosePlatform:x=>navigation.push(['orders',x]),setPage:x=>navigation.push(['page',x])};vm.createContext(c);vm.runInContext(source,c);const page=c.HensemLiveCollectedData.create({L:{catalog:[],to:'2026-09-25T23:59:59'},E,C:String,N:String,table:()=>'',box:(t,b,n)=>'<h2>'+t+'</h2>'+b+'<p>'+n+'</p>',render:()=>{},request:async q=>{calls.push(plain(q));if(q.operation==='catalog')return {version:1,complete:true,feeds};if(q.action==='collectedData')return options.detailHandler?options.detailHandler(q):{total:0,rows:[]};return handler?handler(q):response(q,feeds)}});return {page,c,calls,navigation}}
+function fixture(feeds=[feed()],handler,options={}){class Clock extends Date{constructor(...args){super(...(args.length?args:[options.now||Date.now()]))}static now(){return Date.parse(options.now)||Date.now()}}const calls=[],navigation=[],c={AbortController,Date:Clock,document:{activeElement:null,querySelector:()=>null},liveSet:(...x)=>navigation.push(['set',...x]),liveChoosePlatform:x=>navigation.push(['orders',x]),setPage:x=>navigation.push(['page',x])};vm.createContext(c);vm.runInContext(source,c);const page=c.HensemLiveCollectedData.create({L:{catalog:[],to:'2026-09-25T23:59:59'},E,C:String,N:String,table:()=>'',box:(t,b,n)=>'<h2>'+t+'</h2>'+b+'<p>'+n+'</p>',render:()=>{},request:async (q,transport)=>{calls.push(plain(q));if(q.operation==='catalog')return {version:1,complete:true,feeds};if(q.action==='collectedData')return options.detailHandler?options.detailHandler(q):{total:0,rows:[]};return handler?handler(q,calls,transport):response(q,feeds)}});return {page,c,calls,navigation}}
 const tick=()=>new Promise(setImmediate);
 test('source-record Today stages the source local day without changing complete-day coverage',async()=>{
  for(const [timezone,date]of [['Asia/Kolkata','2026-10-01'],['America/Sao_Paulo','2026-09-30'],['Pacific/Auckland','2026-10-01']]){
@@ -46,3 +46,30 @@ test('crossing the source midnight admits the completed day while missing that n
  checkedAt='2026-09-25T18:30:00Z';await h.c.collectedCoverageQuery();assert.deepEqual(plain(h.page.state.coverageFailed),['f0'],'the new source-local day must be present after midnight');includeNew=true;await h.c.collectedCoverageRetry();assert.equal(h.page.state.coverage.f0.length,2);assert.deepEqual(plain(h.page.state.coverageFailed),[]);
 });
 test('a stale default date never permits dated coverage without a known source timezone',async()=>{const feeds=[feed(0,{timezone:null})],h=fixture(feeds);await h.page.load();await h.c.collectedCoverageQuery();assert.deepEqual(plain(h.page.state.coverageFailed),['f0']);assert.equal(h.page.state.coverage.f0,undefined)});
+
+test('new coverage waits for old reads to drain and ignores stale results after a filter change',async()=>{
+ const feeds=Array.from({length:16},(_,i)=>feed(i));
+ const pending=[];
+ let peak=0,active=0;
+ const h=fixture(feeds,(q,_calls,transport)=>new Promise(resolve=>{
+  peak=Math.max(peak,++active);
+  pending.push({signal:transport.signal,release(){active--;resolve(response(q,feeds));}});
+ }));
+ await h.page.load();
+ const old=h.c.collectedCoverageQuery();
+ assert.equal(pending.length,2);
+ h.c.collectedRange('from','2026-09-24');
+ const current=h.c.collectedCoverageQuery();
+ assert(pending.every(x=>x.signal.aborted));
+ assert.equal(pending.length,2);
+ pending[0].release();pending[1].release();
+ await old;await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(pending.length,4);
+ assert.equal(Object.keys(h.page.state.coverage).length,0);
+ h.page.pauseCoverage();
+ assert(pending.slice(2).every(x=>x.signal.aborted));
+ pending[2].release();pending[3].release();
+ await current;
+ assert.equal(peak,2);assert.equal(h.page.state.coverageDirty,true);
+ assert.equal(Object.keys(h.page.state.coverage).length,0);
+});
