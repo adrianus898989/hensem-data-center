@@ -128,11 +128,11 @@
    if(!isActive()||!Number.isInteger(i))return;
    const s=state();synchronize(s);
    const r=s.result?.rows?.[i];if(!r||!mayOpen(s)||!s.filters||s.busy||signature(s.draft)!==signature(s.filters))return;
-   const payment=[['支付订单号',r.orderNo],['来源订单号',r.sourceOrderNo],...(r.source==='NEW_AR'?[['源存款订单号',r.depositOrderNo],['源充值编号',r.rechargeNumber],['表单订单号',r.formOrderReference],['关联号来源',r.orderReferenceSource==='DHANIWIN:type4:jsonData.490'?'DhaniWin 工单表单（字段 490）':r.orderReferenceSource]]:[]),['工单金额',amount(r.amount)],['申请金额',amount(r.requestedAmount)],['申请币种',r.requestedCurrency],['采集币种',r.collectedCurrency],['实付金额',amount(r.paidAmount)],['实付币种',r.paidCurrency],['来源充值状态',receipt(r)],['来源支付时间',timestamp(r,'paidAt')],['支付三方',r.provider],['支付渠道',r.channelType]];
+   const payment=[['支付订单号',r.orderNo],['来源订单号',r.sourceOrderNo],...(r.source==='NEW_AR'?[['源存款订单号',r.depositOrderNo],['源充值编号',r.rechargeNumber],['表单订单号',r.formOrderReference],['关联号来源',r.orderReferenceSource==='DHANIWIN:type4:jsonData.490'?'DhaniWin 工单表单（字段 490）':r.orderReferenceSource]]:[]),['工单金额',amount(r.amount)],['申请金额',amount(r.requestedAmount)],['申请币种',r.requestedCurrency],['采集币种',r.collectedCurrency],['实付金额',amount(r.paidAmount)],['实付币种',r.paidCurrency],['来源充值状态',receipt(r)],['来源支付时间',timestamp(r,'paidAt')],['支付三方',r.provider],['支付渠道',r.channelType],...(r.source==='AR'?[['支付类型编号',r.sourcePayTypeId]]:[])];
    if(isIndia(s.filters.country))payment.push(['UTR',r.utr],['UTR 匹配',bool(r.utrMatched)],['KYC 连接',bool(r.kycConnected)]);
    detailsOpen=true;
    openDrawer('存款工单 · '+text(r.workorderNo||r.workorderId),
-    section('工单信息',[['团队',r.team],['国家 / 地区',r.country],['平台',r.platform],['来源系统',sourceName(r.source)],['来源平台',r.sourcePlatform],['工单 ID',r.workorderId],['工单号',r.workorderNo],['工单类型',r.workorderType],['工单状态',status(r)],['来源状态码',r.statusCode]])+
+    section('工单信息',[['团队',r.team],['国家 / 地区',r.country],['平台',r.platform],['来源系统',sourceName(r.source)],['来源平台',r.sourcePlatform],['工单 ID',r.workorderId],['工单号',r.workorderNo],['工单类型',r.workorderType],...(r.source==='AR'?[['工单名称',r.workorderName],['工单类型编号',r.workorderTypeId],['附件类型',Array.isArray(r.attachmentTypes)?r.attachmentTypes.map(t=>({image:'图片',pdf:'PDF',video:'视频'}[t])).filter(Boolean).join(' / '):null]]:[]),['工单状态',status(r)],['来源状态码',r.statusCode]])+
     section('支付信息',payment)+section('处理记录',[['提交时间',timestamp(r,'submittedAt')],['处理时间',timestamp(r,'operatedAt')],['处理人',r.operatorAccount],['催单次数',r.reminderCount],['来源更新时间',timestamp(r,'sourceUpdatedAt')],['采集时间',timestamp(r,'collectedAt')],['时区',r.timezone]]));
   }
   root.workorderDepositPage=changePage;root.workorderDepositSize=changeSize;root.workorderDepositDetail=detail;
