@@ -48,3 +48,14 @@ test('retired stability links redirect to the formal provider page in host and f
  assert.equal(api.adminPreviewPageUrl('channelquality',{origin:'https://dashboard.invalid',pathname:'/app/'}),'https://dashboard.invalid/app/#admin/providers');
  const f=frame({origin:'https://dashboard.invalid',pathname:'/app/',hash:'#admin/channelquality'});assert.equal(f.context.hensemAdminInitialPage,'providers');assert.equal(f.context.hensemAdminPageUrl('channelquality'),'https://dashboard.invalid/app/#admin/providers');assert.equal(f.context.hensemRoleAllowed('channelquality'),false);
 });
+
+test('saved deposit page URLs open workorders and never grant the old routes',()=>{
+ for(const key of ['deposit_tracking','deposit_statistics']){
+  for(const prefix of ['#admin/','#owner-admin-preview/'])assert.equal(api.adminPreviewPageFromHash(prefix+key),'workorders');
+  const location={origin:'https://dashboard.invalid',pathname:'/app/',hash:'#admin/'+key};
+  const f=frame(location);assert.equal(f.context.hensemAdminInitialPage,'workorders');
+  assert.equal(f.context.hensemRoleAllowed(key),false);
+  assert.equal(api.adminPreviewPageUrl(key,location),'https://dashboard.invalid/app/#admin/workorders');
+  assert.equal(f.context.hensemAdminPageUrl(key),api.adminPreviewPageUrl(key,location));
+ }
+});

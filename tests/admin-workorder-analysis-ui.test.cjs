@@ -5,6 +5,8 @@ const escape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>'
 const record={platform:'SYNTHETIC',country:'印度',currency:'INR',workorderId:'ID-1',workorderNo:'WORK-1',orderNo:'RC20260901SYNTHETIC',amount:'1234567890123456.12345678',statusCode:4,issueKind:'deposit',attachmentTypes:['pdf'],fieldGaps:['payment_order_no_missing'],provider:'<script>bad</script>'};
 function harness(){let active='workorders',html='',drawer='',renders=0,response={sourceStatus:'ready',rows:[record],total:1,platforms:['SYNTHETIC']};const calls=[],root={closeDrawer:()=>{drawer=''}},L={catalogReady:true,country:'印度',catalog:[{name:'SYNTHETIC',country:'印度',timezone:'Asia/Kolkata'}],from:'2026-09-01T00:00:00',to:'2026-09-27T23:59:59'};vm.runInNewContext(source,{window:root});let module;
  module=root.HensemLiveWorkorderOperations.create({L,E:escape,C:v=>String(v??0),formatTime:v=>v,box:(title,body)=>'<h2>'+title+'</h2>'+body,table:(headers,rows)=>'<table>'+headers.join('|')+rows.map(r=>r.join('|')).join('\n')+'</table>',request:async q=>{calls.push(q);return typeof response==='function'?response(q):response},render:()=>{renders++;html=module.render()},page:()=>active,openDrawer:(title,body)=>{drawer=title+body},renderDaily:()=>'OLD_DAILY_ONLY',loadDaily:async()=>{calls.push({action:'workorders'})}});
+ // These cases exercise the original-order view by explicit selection.
+ root.workorderOperationsMode('orders');
  return {root,module,L,calls,html:()=>html,drawer:()=>drawer,renders:()=>renders,setPage:p=>{active=p},respond:r=>{response=r}};
 }
 const metricKeys=['ticketCount','ticketAmount','processedTicketCount','processedTicketAmount','unprocessedTicketCount','unprocessedTicketAmount','uniqueOrderCount','uniqueOrderAmount','uniqueProcessedCount','uniqueProcessedAmount','uniqueUnprocessedCount','uniqueUnprocessedAmount','kycYesCount','kycNoCount','kycUnknownCount','utrYesCount','utrNoCount','utrUnknownCount'];
@@ -49,7 +51,7 @@ test('Enter handlers ignore IME, key repeat and unrelated controls but retain va
 test('closing original or ticket drawer prevents late reads from reopening it',async()=>{for(const original of [true,false]){const h=harness();response(h);await h.module.load();let finish;h.respond(()=>new Promise(r=>{finish=r}));const pending=original?h.root.workorderOperationsOriginal(0):h.root.workorderOperationsDetail(0);assert(h.drawer());h.root.closeDrawer();assert.equal(h.drawer(),'');finish(original?{rows:[record],total:1}:{row:record});await pending;assert.equal(h.drawer(),'');}});
 
 test('country-specific columns, complete remaining statuses and action header keep rows aligned',async()=>{
- const h=harness();h.L.country='马来';h.L.catalog.push({name:'MY-TEST',country:'马来',timezone:'Asia/Kuala_Lumpur'});
+ const h=harness();h.L.country='马来';h.L.catalog.push({name:'MY-TEST',country:'马来',timezone:'Asia/Kuala_Lumpur'});h.root.workorderOperationsSet('country','马来');
  h.respond(q=>q.operation==='summary'?summary({currency:'MYR'}):{rows:[{...record,platform:'MY-TEST',country:'马来',ticketCount:3,processedTicketCount:0,rejectedTicketCount:2,statusCounts:{1:0,2:1,3:2,4:0,5:0},providers:['FPay']}],total:1});
  await h.module.load();assert.match(h.html(),/处理中 1/);assert.match(h.html(),/其他状态/);assert.match(h.html(),/最后处理时间.*操作/);assert.doesNotMatch(h.html(),/KYC连接|UTR匹配|>UTR</);
  h.root.workorderOperationsSet('utr','INDIA-ONLY',false);h.root.workorderOperationsSet('kyc','yes',false);h.root.workorderOperationsSet('country','马来');assert.equal(h.module.state().draft.utr,'');assert.equal(h.module.state().draft.kyc,'');

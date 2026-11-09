@@ -53,3 +53,12 @@ test('the stable stuck permission and deep link live under data analysis without
  assert.equal(h.c.groupForV3('stuck')[0],'analysis');assert.deepEqual(h.calls.filter(q=>q.action!=='catalog'),[]);
  h.c.render();assert.match(h.nodes.get('nav').innerHTML,/stuck/);assert.match(h.nodes.get('crumbTitle').textContent,/数据分析.*代付中分析/);
 });
+
+test('retired deposit grants neither reopen the subpages nor grant access to workorders',async()=>{
+ for(const key of ['deposit_tracking','deposit_statistics']){
+  const old=harness(options([key+'.view',key+'.query','amount.view'],key));await settle();
+  assert.equal(old.c.state.page,'amount');assert.equal(old.c.state.navGroup,old.c.groupForV3('amount')[0]);old.c.setPage(key);await settle();assert.equal(old.c.state.page,'amount');
+  assert(!old.c.navGroupsV3.some(g=>g[3].includes(key)));assert(!old.calls.some(q=>q.action==='workorderRecords'));
+  const allowed=harness(options(['workorders.view','workorders.query'],key));await settle();assert.equal(allowed.c.state.page,'workorders');
+ }
+});

@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "retiredPages": ["deposit_tracking", "deposit_statistics"],
   "pages": [
     {
       "id": "overview",

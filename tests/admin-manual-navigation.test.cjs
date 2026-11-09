@@ -32,19 +32,11 @@ test('withdrawal quick dates, reset, sort and page size never initiate an unsubm
   await h.c.liveQuery();await settle();assert(h.calls.length>n,page+' explicit Query starts reading');
  }
 });
-test('workorder records, original orders and daily tabs wait for Query, and reset is also local',async()=>{
- const h=harness({page:'workorders'});await settle();const n=h.calls.length;
- for(const mode of ['orders','records','daily','orders']){h.c.workorderOperationsMode(mode);await settle();assert.equal(h.calls.length,n,mode)}
- h.c.workorderOperationsSize(50);h.c.workorderOperationsPage(1);h.c.workorderOperationsReset();await settle();assert.equal(h.calls.length,n);
- await h.c.liveQuery();await settle();assert(h.calls.some(q=>q.action==='workorderRecords'));
-});
-test('deposit statistics tabs and reset only change the selected view until Query',async()=>{
- for(const page of ['deposit_tracking','deposit_statistics']){
-  const h=harness({page});await settle();const n=h.calls.length;
-  for(const section of ['summary','details','providers','daily'])h.c.depositIssuesSection(section);
-  h.c.depositIssuesReset();h.c.depositIssuesSize(50);h.c.depositIssuesPage(1);await settle();assert.equal(h.calls.length,n,page);assert.match(h.html(),/点击查询/);
-  await h.c.liveQuery();await settle();assert(h.calls.some(q=>q.action===(page==='deposit_tracking'?'depositIssues':'depositStatistics')));
- }
+test('opening original orders waits for Query, while returning to deposit tickets reads once',async()=>{
+ const h=harness({page:'workorders',roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true,beforeLive(c){c.hensemDataScope={mode:'all',identity:'test-account'}}});await settle();
+ const n=h.calls.length;h.c.workorderOperationsMode('orders');await settle();assert.equal(h.calls.length,n);
+ h.c.workorderOperationsMode('depositTickets');await settle();assert.equal(h.calls.length,n+1);
+ assert.equal(h.calls.at(-1).action,'workorderRecords');assert.equal(h.calls.at(-1).view,'depositTickets');
 });
 test('configuration deep links wait for a query then source tabs reuse the authorized cache',async()=>{
  const h=harness();await settle();const n=h.calls.length,api=h.c.HensemLivePayoutConfig;

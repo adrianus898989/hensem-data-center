@@ -59,14 +59,14 @@ test('integration waits for a manual page query and its main loading states',asy
  const phaseDeclaration=live.match(/ const phasedReadBusy=\(\)=>[^\n]+;/)?.[0];
  assert(phaseDeclaration,'use the real query-owned phase classifier in the extracted readiness expression');
  assert(live.indexOf(phaseDeclaration)<live.indexOf(' window.HensemLiveSyncHealth?.configure('),'the production declaration exists before readiness is configured');
- const evaluate=(page,L,modules={},reportState={},readPhase=null,submissionAnalysis=null)=>vm.runInNewContext(supervisorDeclarations+'\n'+phaseDeclaration+'\n'+ready,{pages:[],state:{page},roleAllowed:()=>true,L,readPhase,submissionAnalysis,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
+ const evaluate=(page,L,modules={},reportState={},readPhase=null,submissionAnalysis=null)=>vm.runInNewContext(supervisorDeclarations+'\n'+phaseDeclaration+'\n'+ready,{pages:[],state:{page},roleAllowed:()=>true,L,readPhase,submissionAnalysis,workorderOperations:null,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
  const L={serial:7,catalogReady:true,initialReadComplete:true,loading:false,overviewQueried:false,pageQueried:true};
- for(const page of ['auto_withdraw','rates','collected_data','payout_config','workorders','deposit_tracking','deposit_statistics','workorder_reconciliation','workorder_workload','workorder_operation_logs'])assert.equal(evaluate(page,L),true,page);
+ for(const page of ['auto_withdraw','rates','collected_data','payout_config','workorders','workorder_reconciliation','workorder_workload','workorder_operation_logs'])assert.equal(evaluate(page,L),true,page);
  for(const page of ['workorder_permissions','channel_status']){
   assert.equal(evaluate(page,L),false,page+' has no automatic health request contract after a completed query');
   const h=setup();h.setReady(evaluate(page,L));h.api.schedule(page);await h.run();assert.equal(h.calls.length,0,page);
  }
- for(const page of ['workorders','deposit_tracking']){
+ for(const page of ['workorders','workorder_workload']){
   const h=setup();h.setReady(evaluate(page,L));h.api.schedule(page);await h.run();assert.equal(h.calls.length,1,page+' retains its existing health check');
  }
  for(const page of ['overview','amount','time','risk','rates','workorders','collected_data'])assert.equal(evaluate(page,{...L,pageQueried:false}),false,'an unqueried '+page+' must not start an independent health read');
@@ -161,7 +161,7 @@ test('real health-to-iframe-to-host cancellation frees its occupied transport sl
 test('real shared-page modules use the central adapter; render and local sorting do not preempt health',async()=>{
  const prefix=fs.readFileSync(path.join(__dirname,'admin-navigation-performance.test.cjs'),'utf8').split(/\ntest\(/)[0];
  const {harness,settle}=new Function('require','__dirname',prefix+';return {harness,settle};')(require,__dirname),configs=new Map(),cancelled=[];
- const names=['HensemLiveReportData','HensemLiveCollectedData','HensemLiveWithdrawPages','HensemLiveDepositIssues','HensemLiveWorkorderOperations','HensemLiveConfiguration','HensemAnalysisDrilldown','HensemProviderOrders','HensemLiveDailyComparison','HensemLiveChannelStatus','HensemPreparedAggregates'];
+ const names=['HensemLiveReportData','HensemLiveCollectedData','HensemLiveWithdrawPages','HensemLiveWorkorderOperations','HensemLiveConfiguration','HensemAnalysisDrilldown','HensemProviderOrders','HensemLiveDailyComparison','HensemLiveChannelStatus','HensemPreparedAggregates'];
  const h=harness({reports:true,roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true,extraModules:['live-statistic-windows.js','live-prepared-aggregates.js','live-daily-comparison.js','live-channel-status.js'],beforeLive(c){
   c.HensemLiveSyncHealth={configure(){},cancel:o=>cancelled.push(o),badge:()=>'',schedule(){}};
   for(const name of names){const object=c[name];assert(object,name);const method=object.configure?'configure':'create',original=object[method];object[method]=function(options){configs.set(name,options);return original.call(this,options)}}
@@ -171,4 +171,16 @@ test('real shared-page modules use the central adapter; render and local sorting
  for(const [name,config]of configs){assert.equal(config.request(q),answer,name);assert.equal(calls.at(-1).request,q,name);assert.equal(cancelled.at(-1).preservePanel,true,name)}
  const count=cancelled.length;h.c.render();h.c.render();assert.equal(cancelled.length,count,'render does not cancel or request');assert.equal(calls.length,names.length);
  h.c.setPage('amount');assert(cancelled.some(x=>x.preservePanel===false),'navigation closes health through existing cancellation lifecycle');
+});
+
+test('the deposit ticket read takes priority over a ready health probe until the page request settles',async()=>{
+ const prefix=fs.readFileSync(path.join(__dirname,'admin-navigation-performance.test.cjs'),'utf8').split(/\ntest\(/)[0];
+ const {harness,settle,P}=new Function('require','__dirname',prefix+';return {harness,settle,P};')(require,__dirname);
+ const held=deferred(),cancelled=[];let health;
+ const h=harness({page:'workorders',roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true,
+  handler:q=>q.action==='catalog'?{platforms:[P]}:held.promise,
+  beforeLive(c){c.hensemDataScope={mode:'all',identity:'ticket-user'};c.HensemLiveSyncHealth={configure:config=>health=config,cancel:arg=>cancelled.push(arg),badge:()=>'',schedule(){}};}});
+ await settle();assert.equal(h.calls.filter(q=>q.view==='depositTickets').length,1);
+ h.L.pageQueried=true;h.L.initialReadComplete=true;assert(!health.ready());assert(cancelled.some(o=>o.preservePanel));
+ held.resolve({rows:[],hasMore:false,sourceStatus:'captured'});await settle();assert(health.ready());
 });

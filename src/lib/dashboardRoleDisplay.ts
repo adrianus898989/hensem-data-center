@@ -1,14 +1,14 @@
-import { dashboardRolePages } from "./dashboardRoleClient";
+import { dashboardRoleHiddenPageIds, dashboardRolePages } from "./dashboardRoleClient";
 
 // Presentation only: keep retired permission codes in the canonical catalog,
-// saved drafts and authorization checks. The old route now opens merchants.
+// saved drafts and delegation checks. Hidden pages never appear in the editor.
 const displayPageLabels: Readonly<Record<string, string>> = {
   merchants: "商户经营",
   teamcountries: "团队经营 · 国家表现",
   teamplatforms: "团队经营 · 平台经营",
 };
 export const dashboardRoleDisplayPages = dashboardRolePages
-  .filter(page => page.id !== "merchantproviders")
+  .filter(page => !dashboardRoleHiddenPageIds.has(page.id))
   .map(page => ({
     ...page,
     label: displayPageLabels[page.id] || page.label,

@@ -12,6 +12,7 @@ import { dashboardScopeIdentity } from "@/lib/dashboardDataScope";
 const legacyPages: Record<string, string> = {
   "#home": "overview", "#auto": "auto_withdraw", "#config": "payout_config",
   "#operator": "withdraw_operators", "#volume": "providers", "#orders": "orders",
+  "#deposit_tracking": "workorders", "#deposit_statistics": "workorders",
   "#channelquality": "providers", "#provider-anomalies": "risk", "#work": "workorders", "#admin": "access",
 };
 

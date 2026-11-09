@@ -87,7 +87,7 @@ test('account-menu navigation remounts the current page without an extra access 
 });
 test('old module links and hash changes redirect to safe formal pages without legacy rendering',()=>{
  const h=harness({role:'owner'});
- const cases={'#channelquality':'providers','#admin/channelquality':'providers','#owner-admin-preview/channelquality':'providers','#home':'overview','#auto':'auto_withdraw','#config':'payout_config','#operator':'withdraw_operators','#volume':'providers','#work':'workorders','#orders':'orders','#provider-anomalies':'risk','#admin':'access','#owner-admin-preview/stuck':'stuck','#admin/providers':'providers','#admin/../../foreign':'overview','#https://evil.invalid':'overview'};
+ const cases={'#deposit_tracking':'workorders','#deposit_statistics':'workorders','#channelquality':'providers','#admin/channelquality':'providers','#owner-admin-preview/channelquality':'providers','#home':'overview','#auto':'auto_withdraw','#config':'payout_config','#operator':'withdraw_operators','#volume':'providers','#work':'workorders','#orders':'orders','#provider-anomalies':'risk','#admin':'access','#owner-admin-preview/stuck':'stuck','#admin/providers':'providers','#admin/../../foreign':'overview','#https://evil.invalid':'overview'};
  for(const [hash,page] of Object.entries(cases)){const old=h.frame().key;h.location.hash=hash;h.send('hashchange');assert.equal(h.location.hash,'#admin/'+page);assert(h.frame());assert.notEqual(h.frame().key,old)}assert.equal(h.requests.length,0);h.frame().props.onLogout();assert.equal(h.loggedOut(),1);h.dispose();
 });
 

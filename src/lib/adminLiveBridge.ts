@@ -632,12 +632,20 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
  target.addEventListener("message",receive);
  return dispose;
 }
+const retiredAdminRoutes: Record<string, string> = {
+ deposit_tracking: "workorders",
+ deposit_statistics: "workorders",
+ channelquality: "providers",
+};
+function currentAdminRoute(page:string):string {
+ return Object.prototype.hasOwnProperty.call(retiredAdminRoutes,page) ? retiredAdminRoutes[page] : page;
+}
 // A hash route only selects presentation. The host's existing active-account
 // and preview-grant checks still run before any document or data is returned.
 export function adminPreviewPageFromHash(hash:unknown):string|null {
  if(typeof hash!=="string")return null;
  const match=/^#(?:admin|owner-admin-preview)(?:\/([a-z][a-z0-9_-]{0,63}))?$/.exec(hash);
- return match?(match[1]==="channelquality"?"providers":match[1]||"overview"):null;
+ return match?currentAdminRoute(match[1]||"overview"):null;
 }
 export function adminPreviewPageUrl(page:unknown,location:{origin:string;pathname?:string}):string {
  if(typeof page!=="string"||!/^[a-z][a-z0-9_-]{0,63}$/.test(page))return "";
@@ -646,7 +654,7 @@ export function adminPreviewPageUrl(page:unknown,location:{origin:string;pathnam
    ||!pathname.startsWith("/")||/[\\\u0000-\u001f\u007f?#]/.test(pathname))throw Error("后台页面来源无效");
  const target=new URL(pathname,origin);
  if(target.origin!==origin.origin||target.username||target.password)throw Error("后台页面来源无效");
- target.hash="admin/"+(page==="channelquality"?"providers":page);
+ target.hash="admin/"+currentAdminRoute(page);
  return target.href;
 }
 export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:DashboardRoleAccess,dataScope?:{mode:"all"|"selected";identity:string}):string{
@@ -666,11 +674,13 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
  window.HENSEM_PROVIDER_SNAPSHOT_SHADOW=${providerSnapshotShadow};
  window.hensemRoleAccess=${JSON.stringify(roleAccess||{mode:"legacy",permissions:[],canView:true}).replace(/</g,"\\u003c")};
  window.hensemDataScope=${JSON.stringify({mode:dataScope?.mode==="all"?"all":"selected",identity:typeof dataScope?.identity==="string"?dataScope.identity.slice(0,1000):"unverified"}).replace(/</g,"\\u003c").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029")};
- window.hensemRoleAllowed=function(page,action='view'){const access=window.hensemRoleAccess;if(page==='collector_control'||page==='channel_status')return access.canView===true&&(access.mode==='owner'||access.mode==='assigned'&&access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action));return page!=='channelquality'&&access.canView===true&&(access.mode!=='assigned'||access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action))};
+ const retiredAdminRoutes=${encode(retiredAdminRoutes)};
+ const isRetiredRoute=page=>Object.prototype.hasOwnProperty.call(retiredAdminRoutes,page);
+ window.hensemRoleAllowed=function(page,action='view'){const access=window.hensemRoleAccess;if(page==='collector_control'||page==='channel_status')return access.canView===true&&(access.mode==='owner'||access.mode==='assigned'&&access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action));return !isRetiredRoute(page)&&access.canView===true&&(access.mode!=='assigned'||access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action))};
  window.hensemAdminInitialPage=${encode(initialPage)};
  // No arbitrary URL, host query string or authentication fragment crosses the
  // frame boundary. The menu independently validates its allowed page IDs.
- window.hensemAdminPageUrl=function(page){return typeof page==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(page)?${encode(pageBase)}+'#admin/'+(page==='channelquality'?'providers':page):''};
+ window.hensemAdminPageUrl=function(page){return typeof page==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(page)?${encode(pageBase)}+'#admin/'+(isRetiredRoute(page)?retiredAdminRoutes[page]:page):''};
  window.hensemLiveRequest=function(request,options={}){return new Promise((resolve,reject)=>{
    if(accessDeniedCode){reject(error('后台访问权限已改变，请重新验证',accessDeniedCode));return;}
    // Configuration batches continue while the user browses another page. Keep

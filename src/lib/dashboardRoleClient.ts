@@ -4,7 +4,8 @@ import { isDashboardDataScopeValid, normalizeDashboardDataScope } from "./dashbo
 import catalog from "./dashboardRoleCatalog.json";
 
 export type DashboardRolePage = { id:string; moduleId:string; moduleLabel:string; label:string; actions:{id:string;label:string;sensitive?:boolean}[]; requests:string[] };
-export const dashboardRolePages: DashboardRolePage[] = (Array.isArray(catalog) ? catalog : (catalog as {pages:DashboardRolePage[]}).pages) as DashboardRolePage[];
+export const dashboardRolePages: DashboardRolePage[] = catalog.pages;
+export const dashboardRoleHiddenPageIds = new Set<string>(["merchantproviders", ...catalog.retiredPages]);
 export const dashboardRolePermissionCodes = new Set(dashboardRolePages.flatMap(page => page.actions.map(action => page.id+"."+action.id)));
 const retiredPermissionCodes = new Set(["channelquality.view", "channelquality.query", "channelquality.detail", "channelquality.export"]);
 export type DashboardCustomRole = { id:string; name:string; description:string; permissions:string[]; active:boolean; version:number };
@@ -30,7 +31,7 @@ function roleValid(value:unknown):value is DashboardCustomRole {
   &&typeof value.description==="string"&&value.description.length<=500&&permissionsValid(value.permissions)&&typeof value.active==="boolean"&&version(value.version,1);
 }
 // Existing saved roles can contain retired directory keys during a rolling update.
-// Drop only those four keys on reads; never accept new unknown permissions or send
+// Drop only these retired keys on reads; never accept new unknown permissions or send
 // retired keys back when creating/updating a role.
 function readableRole(value:unknown):unknown {
  if(!record(value)||!Array.isArray(value.permissions))return value;
