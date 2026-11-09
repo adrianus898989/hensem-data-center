@@ -144,8 +144,8 @@ test('real menu handles no assigned directories without issuing reads, preservin
 test('assigned empty or malformed host page is rejected before auth or transport',async()=>{
  for(const page of ['',undefined,'bad/page','Rates']){const h=load();await assert.rejects(h.api.adminLiveRequest(session,{action:'rates'},undefined,{assigned:true,page}),/当前角色/);assert.equal(h.authCalls.length,0);assert.equal(h.calls.length,0);}
 });
-test('iframe detail prechecks match SQL for raw query, workorders and deposit statistics',async()=>{
- for(const [page,request] of [['orders',{action:'query'}],['workorders',{action:'workorderRecords',operation:'detail'}],['workorders',{action:'workorderRecords',operation:'orderDetail'}],['deposit_statistics',{action:'depositStatistics',section:'details'}],['deposit_statistics',{action:'depositStatistics',section:'kyc',dimension:'orders'}],['deposit_statistics',{action:'depositIssues'}]]){
+test('iframe detail prechecks match SQL for raw query and workorders',async()=>{
+ for(const [page,request] of [['orders',{action:'query'}],['workorders',{action:'workorderRecords',operation:'detail'}],['workorders',{action:'workorderRecords',operation:'orderDetail'}]]){
   const h=frame(assigned([page+'.view',page+'.query']),page);await assert.rejects(h.c.hensemLiveRequest(request),/没有查看明细权限/);assert.equal(h.posts.length,0);
  }
 });
@@ -169,4 +169,14 @@ test('role policy lookup preserves revoked application-session errors instead of
 test('pending capture order action requires detail permission inside the iframe before any post',async()=>{
  const h=frame(assigned(['stuck.view','stuck.query']),'stuck');
  await assert.rejects(h.c.hensemLiveRequest({action:'pendingOrders'}),/查看明细权限/);assert.equal(h.posts.length,0);
+});
+
+test('retiring deposit pages preserves unrelated grants without upgrading them to workorder access',()=>{
+ const {api}=roleModule();
+ for(const key of ['deposit_tracking','deposit_statistics']){
+  const access=api.validateDashboardRoleAccess(assigned([key+'.view',key+'.export','amount.view']));
+  assert.deepEqual(Array.from(access.permissions),[key+'.view',key+'.export','amount.view']);assert.equal(api.dashboardRoleAllows(access,key),false);assert.equal(api.dashboardRoleAllows(access,'workorders'),false);
+  assert.equal(api.validateDashboardRoleAccess(assigned([key+'.view'])).canView,false);
+  for(const mode of ['owner','legacy'])assert.equal(api.dashboardRoleAllows({mode,permissions:[],canView:true},key),false);
+ }
 });

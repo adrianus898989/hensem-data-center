@@ -201,14 +201,23 @@ test('merchant directory display uses the current sidebar title without changing
  const h=ui();await h.load();h.button('配置权限').props.onClick();nodes(h.findLabel('角色权限模块')).find(node=>node.type==='button'&&text(node).startsWith('运营中心')).props.onClick();
  assert(h.findLabel('商户经营 · 查看目录与页面'));assert(h.findLabel('每日对比 · 查看目录与页面'));assert(h.findLabel('平台通道调整 · 查看目录与页面'));assert.doesNotMatch(text(h.draw()),/平台汇总/);assert(h.calls.every(call=>call.operation==='list'));
 });
-test('display catalog hides only the retired merchant page without altering canonical validation or saved permissions',async()=>{
+test('display catalog hides retired pages without altering canonical validation or saved permissions',async()=>{
  const before=JSON.stringify(catalog),permissions=[...role.permissions,...legacyMerchantCodes],snapshot=[...permissions];
- assert.deepEqual(plain(display.dashboardRoleDisplayPages.map(page=>page.id)),catalog.pages.filter(page=>page.id!=='merchantproviders').map(page=>page.id));
+ assert.deepEqual(plain(display.dashboardRoleDisplayPages.map(page=>page.id)),catalog.pages.filter(page=>!['merchantproviders',...catalog.retiredPages].includes(page.id)).map(page=>page.id));
  assert.equal(display.dashboardRoleDisplayPermissionCount(permissions),2);assert.equal(display.dashboardRoleDisplayPageCount(permissions),1);
  assert.equal(display.dashboardRoleDisplayPermissionCount(legacyMerchantCodes),0);assert.deepEqual(permissions,snapshot);assert.equal(JSON.stringify(catalog),before);
  const h=client({response:{role:{...role,permissions,version:3}}});
  await h.api.dashboardRoleRequest(session,{operation:'update',roleId,expectedVersion:2,name:role.name,description:role.description,permissions});
  assert.deepEqual(JSON.parse(h.calls[0].init.body).p_request.permissions,permissions);assert(!permissions.some(code=>code.startsWith('merchants.')));
+});
+test('old deposit grants survive an unrelated role update without granting workorder access',async()=>{
+ const old=catalog.retiredPages.flatMap(id=>[id+'.view',id+'.detail']),permissions=[...role.permissions,...old];
+ assert.equal(display.dashboardRoleDisplayPermissionCount(old),0);
+ assert.equal(display.dashboardRoleDisplayPageCount(old),0);
+ const h=client({response:{role:{...role,name:'Renamed',description:'',permissions,version:3}}});
+ await h.api.dashboardRoleRequest(session,{operation:'update',roleId,expectedVersion:2,name:'Renamed',description:'',permissions});
+ assert.deepEqual(JSON.parse(h.calls[0].init.body).p_request.permissions,permissions);
+ assert(!permissions.some(key=>key.startsWith('workorders.')));
 });
 test('retired merchant permissions are absent from role editor and all display counts but survive visible selection and save',async()=>{
  const saved={...role,permissions:[...role.permissions,...legacyMerchantCodes]},h=ui(async q=>q.operation==='list'?{roles:[saved],accounts:[account,owner]}:{role:{...saved,name:q.name,permissions:q.permissions,version:3}});await h.load();

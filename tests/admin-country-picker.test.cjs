@@ -44,17 +44,10 @@ test('retired country clears a pending provider directory and ignores its late r
 test('country selection keeps the native query target and does not merge neighboring countries',async()=>{
  const h=await setup();h.c.withdrawCountry('墨西哥');const before=h.calls.length;await h.c.liveQuery();const query=h.calls.slice(before).find(q=>q.action==='autoWithdraw');assert(query);assert.equal(query.country,'墨西哥');assert.equal(query.scopeTargets,undefined);assert.equal(h.L.catalog.find(p=>p.id==='sa').country,'南美');
 });
-test('workorder and deposit filters omit the bucket and old values cannot issue record reads',async()=>{
- for(const page of ['workorders','deposit_tracking']){
-  const h=await setup(page);h.L.pageQueried=true;h.c.render();
-  if(page==='workorders'){
-   assertCountries(choices(h.html(),/<select[^>]*aria-label="国家 \/ 地区"[^>]*>([\s\S]*?)<\/select>/));
-   h.c.workorderOperationsSet('country','南美');const before=h.calls.length;await h.c.workorderOperationsLoad(true);assert.equal(h.calls.length,before);assert.match(h.html(),/请选择具体国家/);
-  }else{
-   assertCountries(choices(h.html(),/<select[^>]*onchange="depositIssuesSet\('country',this.value\)"[^>]*>([\s\S]*?)<\/select>/));
-   h.L.country='南美';const before=h.calls.length;await h.c.liveQuery();assert.equal(h.calls.length,before);assert.match(h.L.depositIssuesError,/请选择具体国家/);
-  }
- }
+test('workorder filters omit the bucket and old values cannot issue record reads',async()=>{
+ const h=await setup('workorders');h.c.hensemRoleAccess={mode:'owner',canView:true};h.c.hensemRoleAllowed=()=>true;h.c.hensemDataScope={mode:'all',identity:'test-account'};h.L.pageQueried=true;h.c.render();
+ assertCountries(choices(h.html(),/<select[^>]*aria-label="国家 \/ 地区"[^>]*>([\s\S]*?)<\/select>/));
+ h.c.workorderOperationsSet('country','南美');const before=h.calls.length;await h.c.workorderOperationsLoad(true);assert.equal(h.calls.length,before);assert.match(h.html(),/请选择具体国家/);
 });
 test('configuration searches reject old regional filters while retaining native records for administration',async()=>{
  for(const [page,key,load]of [['provider_config','providerConfigCountry','providerConfigLoad'],['teams','teamPlatformCountry','platformAssignmentsLoad']]){

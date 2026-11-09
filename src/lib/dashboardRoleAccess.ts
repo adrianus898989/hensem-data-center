@@ -11,8 +11,8 @@ export type DashboardRoleAccess = {
   permissions: string[];
   canView: boolean;
 };
+const retiredPages = new Set<string>(["channelquality", ...catalog.retiredPages]);
 const codes = new Set(catalog.pages.flatMap(page => page.actions.map(action => page.id + "." + action.id)));
-const retiredCodes = new Set(["channelquality.view", "channelquality.query", "channelquality.detail", "channelquality.export"]);
 export function validateDashboardRoleAccess(value: unknown): DashboardRoleAccess {
   const v = value as DashboardRoleAccess;
   if (!v || typeof v !== "object" || !["owner", "legacy", "assigned"].includes(v.mode)
@@ -24,12 +24,12 @@ export function validateDashboardRoleAccess(value: unknown): DashboardRoleAccess
   // During a rolling release the server may know newer permissions. Unknown
   // read keys grant nothing locally; role creation/assignment still uses the
   // separate strict catalog validator and the authoritative SQL gateway.
-  const permissions = Array.from(new Set(v.permissions.filter(key => codes.has(key) && !retiredCodes.has(key))));
-  return {...v, permissions, canView: v.canView && (v.mode !== "assigned" || permissions.some(key => key.endsWith(".view")))};
+  const permissions = Array.from(new Set(v.permissions.filter(key => codes.has(key))));
+  return {...v, permissions, canView: v.canView && (v.mode !== "assigned" || permissions.some(key => key.endsWith(".view") && !retiredPages.has(key.split(".")[0])))};
 }
 export function dashboardRoleAllows(access: DashboardRoleAccess | null | undefined, page: string, action = "view"): boolean {
   if(page === "collector_control")return !!access && access.canView && (access.mode === "owner" || access.mode === "assigned" && access.permissions.includes(page + ".view") && access.permissions.includes(page + "." + action));
-  return page !== "channelquality" && !!access && access.canView && (!["success_analysis", "daily_comparison", "channel_status"].includes(page) || access.mode !== "legacy") && (access.mode !== "assigned"
+  return !retiredPages.has(page) && !!access && access.canView && (!["success_analysis", "daily_comparison", "channel_status"].includes(page) || access.mode !== "legacy") && (access.mode !== "assigned"
     || access.permissions.includes(page + ".view") && access.permissions.includes(page + "." + action));
 }
 export async function readDashboardRoleAccess(session: DashboardSession, signal?: AbortSignal, observeSession?:(current:DashboardSession)=>void): Promise<DashboardRoleAccess> {

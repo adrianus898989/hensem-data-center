@@ -18,3 +18,17 @@ test('reconciliation platform directory has a narrow non-paginated India deposit
  for(const limit of [20,50,100])assert.equal(validate({...q,limit}).limit,limit);
  assert.throws(()=>validate({...q,limit:21}));
 });
+
+test('deposit ticket pages keep the source cursor intact and reject filters from other views',()=>{
+ const list={action:'workorderRecords',view:'depositTickets',operation:'list',country:'IN',filters:{from:'2026-11-03',to:'2026-11-09',workorderId:'A007',utr:'UTR009'}};
+ assert.equal(validate(list).limit,20);
+ const cursor={at:'2026-11-09T00:00:03.000013+05:30',p:'35bf6ddb-4c9f-428c-859b-633277217a00',t:null,k:'A007',h:'a'.repeat(32)};
+ const next=validate({...list,cursor,offset:20});
+ assert.equal(next.cursor.at,cursor.at);assert.equal(next.cursor.k,'A007');assert.equal(next.offset,20);
+ assert.throws(()=>validate({...list,cursor:{...cursor,h:'invalid'}}));
+ assert.throws(()=>validate({...list,cursor:{...cursor,k:'',other:true}}));
+ assert.throws(()=>validate({...list,view:'orders',cursor}));
+ assert.throws(()=>validate({...list,country:'BR'}));
+ assert.throws(()=>validate({...list,filters:{...list.filters,issueKind:'withdraw'}}));
+ assert.throws(()=>validate({...list,filters:{...list.filters,from:'2026-02-30'}}));
+});
