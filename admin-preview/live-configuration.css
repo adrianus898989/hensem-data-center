@@ -441,7 +441,8 @@ body.live-admin .report-explanation-alert{font-size:10px;color:#a96523;margin:4p
 body.live-admin .wo-deposit-ticket-table {max-width:100%;overflow-x:auto}
 body.live-admin .wo-deposit-ticket-table table {width:100%;min-width:max-content}
 body.live-admin .wo-deposit-ticket-table th,body.live-admin .wo-deposit-ticket-table td {white-space:nowrap}
-body.live-admin .wo-deposit-ticket-table td:nth-child(2),body.live-admin .wo-deposit-ticket-table td:nth-child(3),body.live-admin .wo-deposit-ticket-table td:nth-child(4) {font-variant-numeric:tabular-nums}
+body.live-admin .wo-deposit-ticket-table td {font-variant-numeric:tabular-nums}
+body.live-admin .wo-deposit-ticket-table .wo-field-source {display:block;color:#526583;font-size:10px;line-height:1.3}
 body.live-admin .wo-ticket-section h3 {margin:14px 0 7px;font-size:13px}
 body.live-admin .wo-ticket-section dl {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(205px,100%),1fr));margin:0;border:1px solid #dce4ef;border-radius:6px;overflow:hidden}
 body.live-admin .wo-ticket-section dl>div {padding:8px 12px;border-bottom:1px solid #e7ecf3;min-width:0}

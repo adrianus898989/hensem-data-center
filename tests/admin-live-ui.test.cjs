@@ -1749,3 +1749,13 @@ test('all shared date shortcuts change creation dates only and never fill or cle
   h.c.liveReset();assert.equal(h.L.successFrom,'');assert.equal(h.L.successTo,'');
  }
 });
+
+test('the workorder export action builds source-labeled CSV from this ticket page and rejects stale filters',async()=>{
+ const h=await ready();h.c.hensemRoleAccess={mode:'owner',canView:true};h.c.hensemRoleAllowed=()=>true;h.c.hensemDataScope={mode:'all',identity:'workorder-export-test'};
+ h.setHandler(q=>q.action==='workorderRecords'?{view:'depositTickets',sourceStatus:'ready',canDetail:true,offset:q.offset,limit:q.limit,hasMore:false,
+  rows:[{platform:P.name,source:'AR',issueKind:'deposit',workorderId:'native-case',workorderNo:'ticket-100',ticketEvidence:'snapshot_only',rechargeOrder:{match:'matched',status:'已支付',provider:'=provider',amount:'125',currency:null}}]}:aggregate(P));
+ h.c.setPage('workorders');await settle();await h.c.liveExport();
+ assert.equal(h.blobs.length,1);const csv=await h.blobs[0].text();assert.match(csv,/"工单号","支付订单号"/);assert.doesNotMatch(csv,/工单 ID|native-case/);
+ assert.match(csv,/"三方","三方来源"/);assert.match(csv,/"'=provider","充值单"/);assert.match(csv,/"125\.00","—"/);assert.match(csv,/"仅状态快照","已匹配"/);
+ h.c.workorderOperationsSet('orderNo','new-payment',false);await h.c.liveExport();assert.equal(h.blobs.length,1);
+});

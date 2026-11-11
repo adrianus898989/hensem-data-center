@@ -10,6 +10,7 @@ const migrations = path.join(__dirname, '../supabase/migrations');
 const migrationsUnderTest = [
   '20261109093000_deposit_ticket_list.sql',
   '20261109100500_deposit_ticket_identifier_latency.sql',
+  '20261111121301_deposit_ticket_source_fields.sql',
 ];
 const actor = '00000000-0000-0000-0000-000000000011';
 const permissions = ['workorders.view','workorders.query','workorders.detail'];
@@ -63,7 +64,7 @@ async function rejected(callback,pattern) {
 
 before(async()=>{
   db=new PGlite();
-  for (const name of ['gateway.sql','native-sources.sql']) await db.exec(fs.readFileSync(path.join(fixtureDir,name),'utf8'));
+  for (const name of ['gateway.sql','native-sources.sql','charge-sources.sql']) await db.exec(fs.readFileSync(path.join(fixtureDir,name),'utf8'));
   await db.exec(`insert into public.ticket_test_catalog values
     ('00000000-0000-0000-0000-000000000001','AR ONE','M8','印度','IN','ar','Asia/Kolkata','INR','arOne'),
     ('00000000-0000-0000-0000-000000000002','NEW ONE','M8','印度','IN','newar','Asia/Kolkata','INR','newOne'),
@@ -184,4 +185,57 @@ test('an undated continuation stays in native submission-day scope and uses stab
   const first=await request();assert.equal(first.nextCursor.at,null);assert.equal(first.rows.length,20);
   const next=await request({}, {cursor:first.nextCursor,offset:20});
   assert.deepEqual(next.rows.map(r=>r.workorderId),['u20']);assert.equal(next.nextCursor,null);
+});
+
+test('source operation and display ticket number keep identity, processing time and scopes separate',async()=>{
+  await ar('legacy-id');
+  await ar('hidden-id',{work_order_no:'native-no'});
+  await newar('new-id',{raw:JSON.stringify({sourceOperatedAt:'2026-11-08T07:00:00Z',
+    sourceOperatedSourceField:'lastUpdateTime'})});
+  assert.equal((await request({workorderNo:'legacy-id'})).rows[0].workorderId,'legacy-id');
+  assert.equal((await request({workorderNo:'hidden-id'})).rows.length,0);
+  assert.equal((await request({workorderId:'hidden-id'})).rows[0].workorderNo,'native-no');
+  const nr=(await request({workorderNo:'new-id'})).rows[0];
+  assert.equal(nr.workorderId,'new-id');assert.equal(nr.operatedAt,null);
+  assert.equal(nr.sourceOperatedAt,'2026-11-08T07:00:00Z');assert.equal(nr.operationTimeSource,'lastUpdateTime');
+});
+
+test('only unique same-system/platform recharge records enrich permitted pages, preserving separate workorder fields',async()=>{
+  await configure('access',{canView:true,permissions:[...permissions,'orders.view','orders.query','orders.detail']});
+  await snapshot('just-status');
+  await ar('no-ref',{payment_order_no:null});
+  await ar('no-charge',{payment_order_no:'wrong-platform'});
+  await newar('new',{raw:JSON.stringify({depositOrderNo:'unique',rechargeState:'Wait'})});
+  await newar('ambiguous',{raw:JSON.stringify({depositOrderNo:'duplicate'})});
+  const payment={source_system:'AR',country_code:'IN',order_kind:'recharge',platform:'arOne',order_no:'shared-payment',
+    status:'已支付',amount:'91.75',raw_channel:'source-provider',channel_type:'QR',completed_at:'2026-11-08 03:00'};
+  await insert('public.ar_collected_orders',payment);
+  await insert('public.ar_collected_orders',{...payment,platform:'restricted',order_no:'wrong-platform'});
+  await insert('public.ar_collected_orders',{...payment,order_kind:'withdraw',order_no:'wrong-platform'});
+  const charge={id:randomUUID(),source_id:'charge-1',platform:'newOne',dataset:'charge',created_at:'2026-11-07T11:00Z',
+    order_number:'unique',status_code:'Payed',amount:'99',currency:'INR',provider:'original-provider',
+    raw:JSON.stringify({rechargeState:'Payed',sourcePaidAt:'2026-11-08T01:00:00Z',utr:'reference'})};
+  await insert('public.newar_detail_records',charge);
+  for(const id of ['second','third'])await insert('public.newar_detail_records',{...charge,id:randomUUID(),source_id:id,order_number:'duplicate'});
+  const rows=(await request()).rows;
+  const arRow=rows.find(r=>r.workorderId==='just-status'), n=rows.find(r=>r.workorderId==='new');
+  assert.equal(arRow.rechargeOrder.status,'已支付');assert.equal(Number(arRow.rechargeOrder.amount),91.75);
+  assert.equal(arRow.rechargeOrder.currency,null);assert.equal(arRow.rechargeOrder.provider,'source-provider');
+  assert.equal(arRow.ticketEvidence,'snapshot_only');assert.equal(n.ticketEvidence,'detail');
+  assert.equal(arRow.rechargeOrder.utr,null);assert.equal(arRow.amount,null);assert.equal(arRow.requestedAmount,null);
+  assert.equal(arRow.receiptStatus,null);assert.equal(arRow.operatedAt,null);
+  assert.equal(n.rechargeOrder.match,'matched');assert.equal(n.rechargeOrder.currency,null);
+  assert.equal(n.receiptStatus,'Wait');assert.equal(n.rechargeOrder.status,'Payed');assert.equal(n.rechargeOrder.utr,'reference');
+  assert.deepEqual(rows.find(r=>r.workorderId==='no-ref').rechargeOrder,{match:'no_reference'});
+  assert.deepEqual(rows.find(r=>r.workorderId==='no-charge').rechargeOrder,{match:'not_found'});
+  assert.deepEqual(rows.find(r=>r.workorderId==='ambiguous').rechargeOrder,{match:'ambiguous'});
+  await db.exec("update public.ar_collected_orders set amount_local=15,currency_local='INR',money_format_version=1 where order_no='shared-payment'");
+  const local=(await request({workorderId:'just-status'})).rows[0].rechargeOrder;
+  assert.equal(local.currency,'INR');assert.equal(Number(local.amount),15);
+  for(const keys of [permissions,['workorders.view','workorders.query','orders.view','orders.query','orders.detail']]){
+    await configure('access',{canView:true,permissions:keys});
+    assert.ok((await request()).rows.every(r=>!Object.hasOwn(r,'rechargeOrder')));
+  }
+  await db.exec('set local role authenticated');
+  await rejected(()=>db.query("select private.dashboard_ticket_recharge_order('ar','IN','arOne','Asia/Kolkata','shared-payment')"),/permission denied/);
 });
