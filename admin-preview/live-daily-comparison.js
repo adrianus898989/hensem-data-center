@@ -21,7 +21,7 @@
  const uniqPlatforms=list=>[...new Map((list||[]).filter(p=>typeof p?.id==='string'&&p.id).map(p=>[p.id,p])).values()];
  function create(c){
   const L=c.L;let serial=0,S=initial(),retained=null;
-  function initial(){return {version:2,status:'idle',scope:null,payments:{},comparePayments:{},workorders:{},workStatus:'idle',trendStatus:'idle',workTrendStatus:'idle',direction:'charge',dimension:'platform',sort:'all_count',compareDate:'',trendDays:7,expanded:null,trend:null,error:''};}
+  function initial(){return {version:2,status:'idle',scope:null,payments:{},comparePayments:{},cashflowDays:{},cashflowDay:'',cashflowStatus:'idle',workorders:{},workStatus:'idle',trendStatus:'idle',workTrendStatus:'idle',direction:'charge',dimension:'platform',sort:'all_count',compareDate:'',trendDays:7,expanded:null,trend:null,error:''};}
   const allowed=action=>!c.roleAllowed||c.roleAllowed(action);
   const active=()=>c.getPage()===PAGE&&allowed('view');
   const authority=()=>String(c.accessContext?.()??'local-document');
@@ -36,10 +36,10 @@
   function matches(){return !!S.scope&&!L.dirty&&S.scope.key===scopeKey(snapshots());}
   const current=()=>authorized()&&matches();
   const paint=()=>{if(active())c.render();};
-  function cancel(){serial++;if(active())c.cancelReads?.();for(const key of ['status','workStatus','trendStatus','workTrendStatus'])if(S[key]==='loading')S[key]='paused';}
+  function cancel(){serial++;if(active())c.cancelReads?.();for(const key of ['status','workStatus','trendStatus','workTrendStatus','cashflowStatus'])if(S[key]==='loading')S[key]='paused';}
   function clear(){cancel();S=initial();retained=null;}
   function capture(){return copy(S);}
-  function restore(value){cancel();retained=null;S=value?.version===2&&[7,15,30].includes(value.trendDays)&&['charge','withdraw','workorder'].includes(value.direction)&&value.scope?.access===authority()?copy(value):initial();for(const key of ['status','workStatus','trendStatus','workTrendStatus'])if(S[key]==='loading')S[key]='paused';}
+  function restore(value){cancel();retained=null;S=value?.version===2&&[7,15,30].includes(value.trendDays)&&['charge','withdraw','workorder'].includes(value.direction)&&value.scope?.access===authority()?copy(value):initial();for(const key of ['status','workStatus','trendStatus','workTrendStatus','cashflowStatus'])if(S[key]==='loading')S[key]='paused';}
   function dates(scope,trend=false){return trend?Array.from({length:S.trendDays+1},(_,i)=>shift(scope.date,-i)):[scope.date,S.scope?.compareDate||S.compareDate];}
   function period(day,p,scope){
    const delta=(Date.parse(day+'T00:00:00Z')-Date.parse(scope.date+'T00:00:00Z'))/86400000,window={successBasis:scope.successBasis};
@@ -48,7 +48,7 @@
    if(window.to.slice(0,10)>today||window.successTo&&window.successTo.slice(0,10)>today)throw Error('结束日期晚于平台当地今天');
    return {...root.HensemStatisticWindows.request(window,p,c.instant),local:window};
   }
-  function notOperating(day,p,work=false){try{const view=work?{from:day+'T00:00:00',to:day+'T23:59:59',successFrom:'',successTo:''}:period(day,p,S.scope).local,e=c.lifecycle?.(p,view);return e?.notOperating===true?e:null;}catch{return null;}}
+  function notOperating(day,p,work=false,scope=S.scope){try{const view=work?{from:day+'T00:00:00',to:day+'T23:59:59',successFrom:'',successTo:''}:period(day,p,scope).local,e=c.lifecycle?.(p,view);return e?.notOperating===true?e:null;}catch{return null;}}
   const inactiveFact=e=>({...unknown(e.note),notOperating:true,partial:false,finished:true});
   const published=p=>!!p&&p.calculationComplete===true&&Number.isFinite(Date.parse(p.expiresAt))&&(p.publicationVersion===2?['fresh','refresh_due'].includes(p.freshness)&&['idle','queued','running','failed'].includes(p.refreshState):Date.parse(p.expiresAt)>Date.now());
   const readable=entry=>entry?.status==='ready'&&published(entry.response?._preparedPublication);
@@ -70,14 +70,17 @@
   }
   async function runQueue(tasks,token,limit=6){let next=0;await Promise.all(Array.from({length:Math.min(limit,tasks.length)},async()=>{while(next<tasks.length&&token===serial&&current()){await tasks[next++]();}}));}
   function rejectAuthority(error){if(!['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))return false;clear();S.status='error';S.error='查询权限或登录状态已变化，请重新验证';paint();return true;}
-  function initializeDays(dayList,work=false){const target=work?S.workorders:S.payments,native=new Set(S.scope.native);for(const day of dayList){target[day]??={};for(const p of S.scope.platforms){const inactive=notOperating(day,p,work);if(inactive){target[day][p.id]={status:'not_operating',note:inactive.note};continue;}target[day][p.id]??={status:(work?['ar','newar'].includes(src(p.source)):native.has(p.id))?'pending':'unsupported',note:work?'该来源尚未接入工单':native.has(p.id)?'统计尚未读取':'仅目录，未接入订单'};}}}
-  async function readPaymentDays(dayList,token,querySerial,forceRefresh=false){
-   const scope=S.scope,native=new Set(scope.native);initializeDays(dayList);
+  function initializeDays(dayList,work=false,target=work?S.workorders:S.payments,scope=S.scope){const native=new Set(scope.native);for(const day of dayList){target[day]??={};for(const p of S.scope.platforms){const inactive=notOperating(day,p,work,scope);if(inactive){target[day][p.id]={status:'not_operating',note:inactive.note};continue;}target[day][p.id]??={status:(work?['ar','newar'].includes(src(p.source)):native.has(p.id))?'pending':'unsupported',note:work?'该来源尚未接入工单':native.has(p.id)?'统计尚未读取':'仅目录，未接入订单'};}}}
+  async function readPaymentDays(dayList,token,querySerial,forceRefresh=false,cashflowScope=null){
+   const scope=cashflowScope||S.scope,target=cashflowScope?S.cashflowDays:S.payments,native=new Set(scope.native);initializeDays(dayList,false,target,scope);
    await runQueue(dayList.flatMap(day=>scope.platforms.filter(p=>native.has(p.id)).map(p=>async()=>{
-    const entry=S.payments[day][p.id];if(day===scope.compareDate)S.comparePayments[p.id]=entry;if(entry.status==='not_operating'||fresh(entry))return;entry.status='loading';paint();
+    const entry=target[day][p.id];if(!cashflowScope&&day===scope.compareDate)S.comparePayments[p.id]=entry;if(entry.status==='not_operating'||fresh(entry))return;entry.status='loading';paint();
     try{const bounds=period(day,p,scope),q={action:'aggregate',view:'providers',platformId:p.id,startAt:bounds.startAt,endAt:bounds.endAt,successBasis:bounds.successBasis,...(bounds.successStartAt?{successStartAt:bounds.successStartAt,successEndAt:bounds.successEndAt}:{}),direction:'all',status:'all',currency:p.currency,offset:0,limit:20};if(scope.providers.length)q.providers=queryProviders(scope.providers,p.country||scope.country);
      const response=await c.readAggregate(q,querySerial,forceRefresh);if(token!==serial||!current())return;
-     Object.assign(entry,{status:'ready',response:platformResponse(response,p,q),note:'已读取后台统计',local:bounds.local});
+     const result=platformResponse(response,p,q);
+     // The standalone day cache only needs the certified platform summary.
+     if(cashflowScope)delete result.groups;
+     Object.assign(entry,{status:'ready',response:result,note:'已读取后台统计',local:bounds.local});
     }catch(error){if(token!==serial||!current())return;if(rejectAuthority(error))return;if(['stale','invalid'].includes(error?.status))retained=null;Object.assign(entry,{status:['missing','stale','building','unsupported'].includes(error?.status)?error.status:'error',note:error?.message||'读取失败'});}paint();
    })),token);
   }
@@ -89,12 +92,38 @@
     if(!date(S.compareDate))throw Error('对比开始日期无效。');
     const currencies=[...new Set(scope.platforms.map(p=>p.currency).filter(Boolean))];if(currencies.length!==1||currencies[0]!==scope.currency)throw Error('请选择同一原始币种的平台，金额不能跨币种相加。');
    }catch(error){S.error=error.message;S.status='error';paint();return;}
-   scope.key=scopeKey(scope);const resume=!force&&S.scope?.key===scope.key&&['paused','partial'].includes(S.direction==='workorder'?S.workStatus:S.status);scope.now=Date.now();scope.compareDate=S.compareDate;
-   const token=++serial,querySerial=++L.serial;S.scope=scope;S.status='loading';S.error='';if(!resume){S.payments={};S.comparePayments={};S.workorders={};S.workStatus='idle';S.trendStatus='idle';S.workTrendStatus='idle';S.expanded=null;S.trend=null;}L.pageQueried=true;L.dirty=false;L.loading=false;c.prepareFeeLookupQuery?.(force);
+   scope.key=scopeKey(scope);const sameScope=S.scope?.key===scope.key,resume=!force&&sameScope&&['paused','partial'].includes(S.direction==='workorder'?S.workStatus:S.status);scope.now=Date.now();scope.compareDate=S.compareDate;
+   const token=++serial,querySerial=++L.serial;S.scope=scope;S.status='loading';S.error='';if(!resume){S.payments={};S.comparePayments={};S.cashflowDays={};S.cashflowDay=sameScope&&S.cashflowDay?S.cashflowDay:scope.to.slice(0,10);S.cashflowStatus='idle';S.workorders={};S.workStatus='idle';S.trendStatus='idle';S.workTrendStatus='idle';S.expanded=null;S.trend=null;}L.pageQueried=true;L.dirty=false;L.loading=false;c.prepareFeeLookupQuery?.(force);
    if(S.direction==='workorder'){S.status='idle';await loadWorkorders(!resume);return;}
-   paint();Promise.resolve(c.ensureFeeLookup()).catch(()=>{});await readPaymentDays(dates(scope),token,querySerial,forceRefresh);
+   paint();Promise.resolve(c.ensureFeeLookup()).catch(()=>{});
+   if(!scope.successFrom&&scope.date!==scope.to.slice(0,10))await readCashflowDay(token,querySerial,forceRefresh);
+   if(token!==serial||!current())return;
+   await readPaymentDays(dates(scope),token,querySerial,forceRefresh);
    if(token!==serial||!current())return;S.status=paymentStatus(dates(scope));paint();
   }
+  function cashflowScope(day){
+   const scope=S.scope;
+   return {...scope,date:day,from:day===scope.date?scope.from:day+'T00:00:00',to:day===scope.to.slice(0,10)?scope.to:day+'T23:59:59'};
+  }
+  function cashflowEntries(day){
+   return S.scope.date===S.scope.to.slice(0,10)?S.payments[day]:S.cashflowDays?.[day];
+  }
+  async function readCashflowDay(token,querySerial,forceRefresh=false){
+   const day=S.cashflowDay||S.scope.to.slice(0,10);
+   S.cashflowDays??={};S.cashflowDay=day;S.cashflowStatus='loading';paint();
+   await readPaymentDays([day],token,querySerial,forceRefresh,cashflowScope(day));
+   if(token!==serial||!current())return;
+   S.cashflowStatus=Object.values(cashflowEntries(day)||{}).some(entry=>!readable(entry)&&!['not_operating','unsupported'].includes(entry.status))?'partial':'ready';paint();
+  }
+  root.liveDailyCashflowDate=async value=>{
+   if(!current()||S.direction==='workorder'||S.scope.successFrom||typeof value!=='string'||date(value)!==value||value<S.scope.date||value>S.scope.to.slice(0,10))return;
+   if(S.status==='loading'||S.trendStatus==='loading'||S.workStatus==='loading'||S.workTrendStatus==='loading')return;
+   if(S.scope.date===S.scope.to.slice(0,10))return;
+   if(value===S.cashflowDay&&S.cashflowStatus==='loading')return;
+   if(S.cashflowStatus==='loading')cancel();
+   S.cashflowDay=value;
+   await readCashflowDay(++serial,++L.serial);
+  };
   const workorderWindow=()=>S.scope&&S.scope.from===S.scope.date+'T00:00:00'&&S.scope.to===S.scope.date+'T23:59:59'&&(!S.scope.successFrom&&!S.scope.successTo||S.scope.successFrom===S.scope.from&&S.scope.successTo===S.scope.to)&&S.scope.successBasis==='success';
   async function loadWorkorders(force=false,trend=false){
    if(!current()||S.status==='loading'||S.workStatus==='loading'||S.workTrendStatus==='loading')return;
@@ -112,7 +141,7 @@
    if(token!==serial||!current())return;S[key]=dayList.some(day=>Object.values(S.workorders[day]).some(v=>v.status==='error'))?'partial':'ready';paint();
   }
   async function loadTrend(){
-   if(!current()||S.status==='loading'||S.trendStatus==='loading'||S.workStatus==='loading'||S.workTrendStatus==='loading')return;
+   if(!current()||S.status==='loading'||S.trendStatus==='loading'||S.workStatus==='loading'||S.workTrendStatus==='loading'||S.cashflowStatus==='loading')return;
    if(S.direction==='workorder')return loadWorkorders(false,true);
    if(!['ready','partial'].includes(S.status))return;const token=++serial,querySerial=++L.serial;S.trendStatus='loading';paint();const dayList=dates(S.scope,true);await readPaymentDays(dayList,token,querySerial);if(token!==serial||!current())return;S.trendStatus=paymentStatus(dayList);paint();
   }
@@ -246,6 +275,57 @@
    return '<section class="daily-panel"><div class="daily-panel-title"><h2>'+E(selected.name)+' · '+S.trendDays+(S.scope.from.slice(0,10)!==S.scope.to.slice(0,10)||S.scope.successFrom.slice(0,10)!==S.scope.successTo.slice(0,10)?' 天区间趋势':' 天趋势')+'</h2><span><i class="daily-legend-submit"></i>全部　<i class="daily-legend-success"></i>'+successful()+'</span></div><div class="daily-trend-buttons"><button class="'+(selected.key==='__all__'?'on':'')+'" onclick="liveDailyTrend(-1)">全部所选平台</button>'+m.rows.map((r,i)=>'<button type="button" class="'+(r.key===selected.key?'on':'')+'" onclick="liveDailyTrend('+i+')">'+E(r.name)+'</button>').join('')+'</div><div class="daily-charts">'+chart(values,'all_amount','金额')+chart(values,'all_count','笔数')+'</div>'+note+(status==='loading'?'<div class="daily-progress">正在读取已准备趋势；缺失点保留 —</div>':'')+detailTable(cols,rows.map(values=>'<tr>'+detailCells(values,cols)+'</tr>'),'<tr>'+detailCells(footer,cols)+'</tr>','daily-history')+'</section>';
   }
   function coverage(m){const inactive=m.now.parts.filter(p=>p.fact.notOperating).length;const data=m.now.parts.filter(p=>p.fact.ready&&(p.fact.all_count>0||p.fact.success_count>0)),empty=m.now.parts.filter(p=>p.fact.ready&&p.fact.all_count===0&&p.fact.success_count===0),status=p=>p.fact.notOperating?'未营业（用户已确认）':!p.fact.ready?p.fact.note:p.fact.all_count===0&&p.fact.success_count===0?'已读取无订单记录':p.fact.partial?'已返回，含待确认指标':'有数据';return '<details class="daily-coverage"><summary>有数据平台 <strong>'+data.length+' / '+(S.scope.platforms.length-inactive)+'</strong>'+ (inactive?'　未营业 '+inactive:'')+'　已读取 '+m.now.parts.filter(p=>p.fact.ready).length+'　无订单记录 '+empty.length+'　<span>展开平台</span></summary>'+table(['平台','系统','读取状态','全部笔数',successful()+'笔数'],m.now.parts.map(v=>{const p=S.scope.platforms.find(p=>p.id===v.id);return '<tr>'+cells([E(p.name),E(system(p.source)),E(status(v)),integer(v.fact.all_count),integer(v.fact.success_count)],['平台','系统','读取状态','全部笔数',successful()+'笔数'])+'</tr>';}),'','daily-coverage-table')+'</details>';}
+  const cashflowHeaders=['平台','充值笔数','充值金额','提现笔数','提现金额','充提差'];
+  function cashflowDirection(entry,direction,currency){
+   if(!readable(entry))return {};
+   const rows=entry.response.summary.filter(row=>row.direction===direction);
+   if(rows.length!==1||rows[0].currency!==currency)return {};
+   const row=rows[0];
+   if(count(row.all_count)===0&&entry.response._preparedPublication.sourceComplete!==true)return {};
+   const successCount=count(Object.hasOwn(row,'created_success_count')?row.created_success_count:row.success_count);
+   const successAmount=number(Object.hasOwn(row,'created_success_amount')?row.created_success_amount:row.success_amount);
+   const missing=Object.hasOwn(row,'created_success_missing_amount_count')&&count(row.created_success_missing_amount_count)!==0;
+   return {count:successCount,amount:missing?null:successAmount};
+  }
+  function cashflowRows(day){
+   const entries=cashflowEntries(day)||{};
+   return S.scope.platforms.map(platform=>{
+    const entry=entries[platform.id],charge=cashflowDirection(entry,'charge',platform.currency),withdraw=cashflowDirection(entry,'withdraw',platform.currency);
+    const net=charge.amount!=null&&withdraw.amount!=null?charge.amount-withdraw.amount:null;
+    const reviewed=entry?.response?.capabilities?.reviewedWithdrawalsOnly===true||platform.capabilities?.reviewedWithdrawalsOnly===true;
+    const label=platform.name+(entry?.status==='not_operating'?' · 未营业':'')+(reviewed?' · 提现仅已审核':'');
+    return {label,platform,entry,values:[integer(charge.count),money(charge.amount),integer(withdraw.count),money(withdraw.amount),money(net)]};
+   });
+  }
+  function cashflowNotes(day,rows){
+   const window=cashflowScope(day),notes=['平台当地创建日','已采集成功订单',S.scope.currency,'充提差＝充值金额－提现金额'];
+   if(window.from.slice(11)!=='00:00:00'||window.to.slice(11)!=='23:59:59')notes.push(window.from.slice(11)+'–'+window.to.slice(11));
+   if(rows.some(r=>c.localClock(S.scope.now,r.platform.timezone).slice(0,10)===day))notes.push('当日尚未结束');
+   const publications=rows.filter(r=>readable(r.entry)).map(r=>r.entry.response._preparedPublication);
+   if(publications.some(p=>p.sourceComplete!==true))notes.push('来源完整性待核验');
+   if(publications.some(p=>p.refreshState==='failed'))notes.push('更新未完成');
+   else if(publications.some(p=>p.freshness==='refresh_due'))notes.push('待更新');
+   return notes;
+  }
+  function cashflowPanel(){
+   if(!active()||!allowed('query')||S.direction==='workorder')return '';
+   const title='<h2>平台每日充提</h2>',wrap=(header,body)=>'<section class="daily-panel" data-platform-daily-cashflow><div class="daily-panel-title">'+title+header+'</div>'+body+'</section>';
+   if(!current())return wrap('','<div class="daily-cashflow-note">选择日期和平台后，点击查询查看充值、提现和充提差。</div>');
+   if(S.scope.successFrom)return wrap('','<div class="daily-cashflow-note">按平台当地创建日统计。清空独立成功时间并查询，即可查看每日充提。</div>');
+   if(S.status==='idle')return wrap('','<div class="daily-cashflow-note">点击查询读取已选平台的每日充提。</div>');
+   const first=S.scope.date,last=S.scope.to.slice(0,10),day=S.cashflowDay||last,rows=cashflowRows(day);
+   const dates=[];for(let d=last;d>=first;d=shift(d,-1))dates.push(d);
+   const busy=S.status==='loading'||S.trendStatus==='loading'||S.workStatus==='loading'||S.workTrendStatus==='loading';
+   const control=dates.length>1?'<label class="daily-date-extra">创建日期 <select aria-label="平台每日充提日期" onchange="liveDailyCashflowDate(this.value)" '+(busy?'disabled':'')+'>'+dates.map(d=>'<option value="'+E(d)+'" '+(d===day?'selected':'')+'>'+E(d)+'</option>').join('')+'</select></label>':'<span>创建日期 '+E(day)+'</span>';
+   const progress=dates.length>1?S.cashflowStatus:S.status,notes=cashflowNotes(day,rows);
+   if(progress==='loading')notes.push('正在读取');
+   const retry=dates.length>1&&['partial','paused'].includes(progress)?'<button type="button" data-day="'+E(day)+'" onclick="liveDailyCashflowDate(this.dataset.day)" '+(busy?'disabled':'')+'>重试当日</button>':'';
+   const body=rows.map(({label,entry,values})=>{
+    const platformCell='<span title="'+E(entry?.note||'尚未读取')+'">'+E(label)+'</span>';
+    return '<tr>'+cells([platformCell,...values],cashflowHeaders)+'</tr>';
+   });
+   return wrap(control,'<div class="daily-cashflow-note">'+E(notes.join(' · '))+retry+'</div>'+table(cashflowHeaders,body,'','daily-cashflow'));
+  }
   function draw(){
    const controls='<div class="daily-toolbar"><div>'+[['charge','代收'],['withdraw','代付'],['workorder','工单']].map(([k,label])=>'<button class="'+(S.direction===k?'on':'')+'" onclick="liveDailyDirection(\''+k+'\')">'+label+'</button>').join('')+'</div><div>'+[['platform','平台'],['provider','三方']].map(([k,label])=>'<button class="'+(S.dimension===k?'on':'')+'" onclick="liveDailyDimension(\''+k+'\')">'+label+'</button>').join('')+'<select aria-label="每日对比排序" onchange="liveDailySort(this.value)"><option value="all_count" '+(S.sort==='all_count'?'selected':'')+'>全部笔数 ↓</option><option value="all_amount" '+(S.sort==='all_amount'?'selected':'')+'>全部金额 ↓</option></select></div></div>';
    if(S.error)return '<div class="daily-comparison">'+controls+'<div class="live-status live-error">'+E(S.error)+'</div></div>';
@@ -271,10 +351,10 @@
   }
 
   function render(){
-   const html=draw(),catalog=c.authorizedPlatforms?.()||c.selected(),canRetain=retained&&active()&&allowed('query')&&retained.access===authority()&&retained.lifecycleRevision===lifecycleRevision()&&retained.direction===S.direction&&retained.platforms.every(p=>catalog.some(current=>nativeKey(current)===nativeKey(p)));
-   if(canRetain&&S.direction!=='workorder'&&['loading','partial','error'].includes(S.status))return '<div class="live-panel-note" role="status">'+(S.status==='loading'?'正在读取所选范围':'本次读取未完成')+'，以下保留上次查询结果。</div><section class="live-retained-result" inert aria-label="上次查询结果">'+retained.html+'</section>';
+   const cashflow=cashflowPanel(),html=draw(),catalog=c.authorizedPlatforms?.()||c.selected(),canRetain=retained&&active()&&allowed('query')&&retained.access===authority()&&retained.lifecycleRevision===lifecycleRevision()&&retained.direction===S.direction&&retained.platforms.every(p=>catalog.some(current=>nativeKey(current)===nativeKey(p)));
+   if(canRetain&&S.direction!=='workorder'&&['loading','partial','error'].includes(S.status))return cashflow+'<div class="live-panel-note" role="status">'+(S.status==='loading'?'正在读取所选范围':'本次读取未完成')+'，以下保留上次查询结果。</div><section class="live-retained-result" inert aria-label="上次查询结果">'+retained.html+'</section>';
    if(authorized()&&matches()&&S.direction!=='workorder'&&S.status==='ready'&&html.length<2000000)retained={access:authority(),lifecycleRevision:lifecycleRevision(),direction:S.direction,platforms:S.scope.platforms.map(p=>({...p})),html};
-   return html;
+   return cashflow+html;
   }
 
   const updatedBasisNote=()=>S.direction==='workorder'?'':[!S.scope?.successFrom?'按创建日期选单，成功金额与笔数按已入库订单的当前成功状态统计，不代表期间实际到账。':S.scope?.successBasis==='source_updated'?'成功按成功状态＋源订单更新时间统计；未提供该时钟的来源保留 —。':'成功按源成功时间统计；没有可核验成功时钟的来源保留 —。',S.scope?.successBasis==='success'&&S.scope.platforms.some(p=>src(p.source)==='kb'&&p.capabilities?.successTimeBasis==='source_completed_at')?'KB成功按成功状态＋源订单完成时间统计，不代表银行到账时间。':'',S.direction==='withdraw'&&S.scope?.platforms.some(p=>src(p.source)==='panda'||p.capabilities?.reviewedWithdrawalsOnly===true)?'熊猫提现仅已审核范围，创建指标也仅覆盖该范围。':''].filter(Boolean).join(' ');
@@ -283,7 +363,13 @@
    if(!canExport())return [];const m=model(),strip=x=>String(x).replace(/<[^>]*>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'"),plainCells=html=>[...html.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(x=>strip(x[1])),footer={kind:'—',now:m.now,prior:m.prior,comparison:m.comparison};
    const rows=[[S.scope.country,S.scope.currency,S.direction,S.scope.from,S.scope.to,S.scope.successFrom,S.scope.successTo,S.scope.successBasis,S.scope.compareDate,'两组窗口等距平移；按当前费率估算',...(updatedBasisNote()?[updatedBasisNote()]:[]),...Object.entries(S.payments[S.scope.date]||{}).filter(([,entry])=>readable(entry)).map(([id,entry])=>'平台 '+id+' · 汇总生成 '+entry.response._preparedPublication.computedAt+' · 截至 '+entry.response._preparedPublication.cutoff+' · '+(entry.response._preparedPublication.sourceComplete===true?'来源完整性已确认':'来源完整性尚未确认'))],detailColumns().map(col=>col.label)];
    for(const r of m.rows){rows.push(plainCells(entityCells(r,m.now,E(r.name))));if(S.expanded===r.key&&allowed('detail')){rows.push([r.name+' · 分项'],detailColumns(false,true).map(col=>col.label));for(const child of inlineRows(r))rows.push(plainCells(entityCells(child,r.now,'↳ '+E(child.name),true)));rows.push(detailColumns().map(col=>col.label));}}
-   rows.push(plainCells(entityCells(footer,m.now,'已读汇总')));const history=historyRows(m);
+   rows.push(plainCells(entityCells(footer,m.now,'已读汇总')));
+   const day=S.cashflowDay||S.scope.to.slice(0,10),dailyStatus=S.scope.date===S.scope.to.slice(0,10)?S.status:S.cashflowStatus;
+   if(S.direction!=='workorder'&&!S.scope.successFrom&&['ready','partial'].includes(dailyStatus)){
+    const daily=cashflowRows(day);
+    if(daily.some(row=>readable(row.entry)))rows.push([],['平台每日充提',day,...cashflowNotes(day,daily)],cashflowHeaders.slice(),...daily.map(row=>[row.label,...row.values]));
+   }
+   const history=historyRows(m);
    if(history){rows.push([],[history.selected.name,S.trendDays+'天趋势'],history.cols.map(col=>col.label));for(const values of [...history.rows,history.footer])rows.push(values.map(strip));}
 
    return rows;

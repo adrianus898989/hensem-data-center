@@ -29,8 +29,13 @@ test('v2 expired complete daily results remain comparable with original dates an
 });
 
 test('daily loading and transport errors retain the prior scope, while semantic drift never reuses it',async()=>{
- const h=harness({platforms:[P]});await h.module.load();const old=h.module.render(),pending=[];h.setHandler(q=>new Promise((resolve,reject)=>pending.push({resolve,reject,q})));h.L.from='2026-10-02T00:00:00';h.L.to='2026-10-02T23:59:59';h.L.successFrom=h.L.from;h.L.successTo=h.L.to;h.L.dirty=true;
- const run=h.module.load();await tick();assert.match(h.module.render(),/正在读取所选范围/);assert(h.module.render().includes(old));assert.equal(h.module.canExport(),false);pending.forEach(x=>x.reject(Error('temporary')));await run;assert.match(h.module.render(),/本次读取未完成/);assert(h.module.render().includes(old));
+ const h=harness({platforms:[P]});await h.module.load();const old=h.module.render().match(/<div class="daily-comparison">[\s\S]*$/)[0],pending=[];h.setHandler(q=>new Promise((resolve,reject)=>pending.push({resolve,reject,q})));h.L.from='2026-10-02T00:00:00';h.L.to='2026-10-02T23:59:59';h.L.successFrom=h.L.from;h.L.successTo=h.L.to;h.L.dirty=true;
+ function retainedComparison(status) {
+  const html=h.module.render();assert.match(html,status);
+  assert(html.includes('aria-label="上次查询结果">'+old+'</section>'),'the retained comparison must identify its applied scope');
+  assert.equal((html.match(/data-platform-daily-cashflow/g)||[]).length,1,'only the current cashflow panel is shown');
+ }
+ const run=h.module.load();await tick();retainedComparison(/正在读取所选范围/);assert.equal(h.module.canExport(),false);pending.forEach(x=>x.reject(Error('temporary')));await run;retainedComparison(/本次读取未完成/);
  h.setHandler(()=>{throw Object.assign(Error('dependency changed'),{status:'stale'});});await h.module.load();assert.doesNotMatch(h.module.render(),/live-retained-result/);assert.equal(h.module.model().now.all_count,null);
 });
 
