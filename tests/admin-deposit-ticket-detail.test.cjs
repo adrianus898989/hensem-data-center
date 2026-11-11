@@ -62,3 +62,65 @@ test('reset and reopen start a single fresh read even when the account scope is 
  h.root.workorderOperationsReset();await next();assert.equal(h.calls.length,2);
  h.api.clear('workorders');h.render();h.render();await next();assert.equal(h.calls.length,3);
 });
+
+function currentRows(h){
+ const [labels,...items]=h.api.exportDepositRows();
+ return items.map(values=>Object.fromEntries(labels.map((label,i)=>[label,values[i]])));
+}
+
+test('one clickable ticket number matches the displayed filter; the drawer alone distinguishes a different native ID',async()=>{
+ const tickets=[{...rows[0],workorderNo:'ticket-A',workorderId:'ticket-A'},
+  {...rows[0],workorderNo:'ticket-B',workorderId:'internal-B'},
+  {...rows[1],workorderId:'only-id'}];
+ const h=harness(async q=>result(q,{rows:tickets}));h.render();await next();
+ assert.doesNotMatch(h.html(),/工单 ID|internal-B/);
+ for(const [i,ticket] of tickets.entries()){
+  const shown=ticket.workorderNo||ticket.workorderId;
+  assert.ok(h.html().includes('onclick="workorderDepositDetail('+i+')">'+shown+'</button>'));
+  h.root.workorderDepositDetail(i);
+  assert.equal(h.drawer().includes('<dt>来源工单 ID</dt>'),i===1);
+  if(i===1)assert.match(h.drawer(),/<dd>internal-B<\/dd>/);
+ }
+ assert.deepEqual(Array.from(currentRows(h),r=>r['工单号']),['ticket-A','ticket-B','only-id']);
+ h.root.workorderOperationsSet('workorderNo','only-id',false);await h.api.load(true);
+ assert.equal(h.calls.at(-1).filters.workorderNo,'only-id');assert.equal(h.calls.at(-1).filters.workorderId,undefined);
+});
+
+test('ticket fields, matched recharge values, source currency and update-only times remain distinct in the list, drawer and CSV',async()=>{
+ const order={match:'matched',status:'已支付',amount:'9007199254740993.25',currency:null,provider:'RechargePay',utr:'source-utr',completedAt:'receipt-time'};
+ const tickets=[{...rows[0],receiptStatus:null,ticketEvidence:'snapshot_only',lastUpdatedBy:'source-updater',sourceOperatedAt:'update-only',sourceUpdatedAt:'update-only',operationTimeSource:'lastUpdateTime',rechargeOrder:order},
+  {...rows[1],operatedAt:'handled-time',provider:'TicketPay',rechargeOrder:{...order,status:'Cancel',provider:'DifferentPay'}}];
+ const h=harness(async q=>result(q,{rows:tickets}));h.render();await next();
+ const [a,b]=currentRows(h);
+ assert.equal(a['充值状态'],'已支付');assert.equal(a['充值状态来源'],'充值单');assert.equal(a['工单金额'],'—');
+ assert.equal(a['关联充值金额'],'9,007,199,254,740,993.25');assert.equal(a['关联充值币种'],'—');assert.equal(a['申请币种'],'INR');
+ assert.equal(a['UTR'],'source-utr');assert.equal(a['UTR来源'],'充值单');assert.equal(a['工单处理 / 更新'],'update-only');assert.equal(a['工单处理 / 更新来源'],'最后更新');
+ assert.equal(a['工单采集记录'],'仅状态快照');assert.equal(a['工单操作 / 更新人'],'source-updater');assert.equal(a['工单操作 / 更新人来源'],'最后更新人');
+ assert.equal(b['三方'],'TicketPay');assert.equal(b['三方来源'],'工单');assert.equal(b['充值状态'],'已支付（Payed）');assert.equal(b['充值状态来源'],'工单');assert.equal(b['工单处理 / 更新来源'],'处理时间');
+ assert.match(h.html(),/RechargePay <small[^>]*>充值单/);assert.match(h.html(),/update-only <small[^>]*>最后更新/);
+ h.root.workorderDepositDetail(0);assert.match(h.drawer(),/<dt>操作时间<\/dt><dd>—/);assert.match(h.drawer(),/来源最后更新时间<\/dt><dd>update-only/);
+ assert.match(h.drawer(),/关联充值单/);assert.match(h.drawer(),/充值完成时间<\/dt><dd>receipt-time/);
+ assert.match(h.drawer(),/来源支付时间<\/dt><dd>—/);assert.match(h.drawer(),/工单内充值状态<\/dt><dd>—/);
+ h.root.workorderDepositDetail(1);assert.match(h.drawer(),/TicketPay/);assert.match(h.drawer(),/DifferentPay/);assert.match(h.drawer(),/已取消（Cancel）/);
+ assert.equal(h.calls.length,1);
+});
+
+test('ambiguous and missing recharge matches cannot expose candidate fields or fill an unknown ticket value',async()=>{
+ const tickets=['ambiguous','not_found','no_reference'].map(match=>({...rows[0],receiptStatus:null,rechargeOrder:{match,provider:'candidate-only',amount:'88888'}}));
+ const h=harness(async q=>result(q,{rows:tickets}));h.render();await next();
+ assert.doesNotMatch(h.html(),/candidate-only|88,888/);
+ for(const [i,reason] of ['匹配到多张充值单','未找到相同支付订单号','工单缺支付订单号'].entries()){
+  h.root.workorderDepositDetail(i);assert.ok(h.drawer().includes(reason));assert.doesNotMatch(h.drawer(),/candidate-only|88,888/);
+ }
+ for(const row of currentRows(h)){assert.equal(row['关联充值金额'],'—');assert.equal(row['三方'],'—');assert.equal(row['三方来源'],'');}
+});
+
+test('revoked recharge access invalidates the released page and open drawer, while native ticket detail remains accessible',async()=>{
+ let permitted=true;const h=harness(async q=>result(q,{rows:[{...rows[0],rechargeOrder:{match:'matched',provider:'restricted-provider'}}]}));
+ h.root.hensemRoleAllowed=(page,action)=>!['orders','collection'].includes(page)||permitted||action!=='detail';
+ h.render();await next();h.root.workorderDepositDetail(0);assert.match(h.drawer(),/restricted-provider/);
+ permitted=false;h.render();assert.equal(h.drawer(),'');assert.equal(h.api.exportDepositRows().length,0);await next();
+ assert.doesNotMatch(h.html(),/restricted-provider|关联充值金额/);h.root.workorderDepositDetail(0);
+ assert.match(h.drawer(),/工单信息/);assert.doesNotMatch(h.drawer(),/restricted-provider|关联充值单|未找到相同支付订单号/);
+ assert.equal(currentRows(h)[0]['关联充值金额'],undefined);
+});
