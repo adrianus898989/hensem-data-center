@@ -30,3 +30,8 @@ body.live-admin .daily-comparison .daily-detail-table .daily-rank{min-width:17px
 body.live-admin .daily-comparison .daily-detail-table .daily-up{color:#0b967b}
 body.live-admin .daily-comparison .daily-detail-table :is(.daily-down,.daily-low){color:#e34459}
 body.live-admin .daily-comparison .daily-detail-table :is(.daily-unknown,.daily-flat){color:#7c8eaa}
+
+[data-platform-daily-cashflow]{font-variant-numeric:tabular-nums}
+.daily-cashflow-note{display:flex;align-items:center;gap:8px;padding:7px 12px;color:#617897;font-size:11px}
+.daily-cashflow th:nth-child(2),.daily-cashflow td:nth-child(2){text-align:right;color:inherit;font-size:inherit}
+.daily-cashflow td:last-child{font-weight:600}

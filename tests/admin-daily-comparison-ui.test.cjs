@@ -126,3 +126,158 @@ test('workorder daily details preserve handled metrics and exclude incomplete-da
 test('DUOLI updated-time success survives daily totals, weighted history and CSV without enabling payment latency',async()=>{
  const p={...P,source:'duoli',capabilities:{successTimeBasis:'order_updated_at',chargeSuccessTimeAvailable:true,withdrawSuccessTimeAvailable:true,paymentSuccessTimeAvailable:false,latencyAvailable:false}},h=harness({platforms:[p]});manual(h,'source_updated');await h.module.load();await h.module.loadTrend();for(const [direction,success]of [['charge',50],['withdraw',80]]){h.c.liveDailyDirection(direction);const m=h.module.model();assert.equal(m.now.success_count,success);assert.equal(m.now.success_amount,success*100);assert.match(h.module.render(),/成功按成功状态＋源订单更新时间统计/);assert(h.module.exportRows()[0].some(v=>v.includes?.('源订单更新时间统计')));}h.setHandler(()=>({platform:p,summary:[],groups:{provider:[]}}));await h.module.load();await h.module.loadTrend();for(const direction of ['charge','withdraw']){h.c.liveDailyDirection(direction);assert.equal(h.module.model().now.success_count,0);assert.equal(h.module.model().now.success_amount,0);}
 });
+
+function cashflowResponse(p, facts) {
+ const summary = Object.entries(facts).map(([direction, metrics]) => ({
+  direction, currency: p.currency, all_amount: '9000.00', all_count: 100, ...metrics,
+ }));
+ return {platform: p, summary, groups: {provider: summary.map(row => ({...row, provider: 'Pay'}))}};
+}
+
+function cashflowRows(html) {
+ const section = html.match(/<section\b[^>]*\bdata-platform-daily-cashflow\b[^>]*>([\s\S]*?)<\/section>/)?.[1];
+ assert(section, 'cashflow section is visible');
+ const date = section.match(/<option\b(?=[^>]*\bselected)[^>]*\bvalue="(\d{4}-\d{2}-\d{2})"/)?.[1]
+  || plain(section).match(/\d{4}-\d{2}-\d{2}/)?.[0];
+ const table = section.match(/<table\b[^>]*>([\s\S]*?)<\/table>/)?.[1];
+ assert(table, 'daily platform cashflow table is visible');
+ const labels = [...table.matchAll(/<th\b[^>]*>([\s\S]*?)<\/th>/g)].map(match => plain(match[1]).trim());
+ const body = table.match(/<tbody\b[^>]*>([\s\S]*?)<\/tbody>/)[1];
+ return [...body.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(row => {
+  const cells = [...row[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(cell => plain(cell[1]).trim());
+  const pick = label => cells[labels.findIndex(text => label.test(text))];
+  return {
+   platform: pick(/^平台/), date,
+   chargeCount: pick(/充值.*笔数/), chargeAmount: pick(/充值.*金额/),
+   withdrawCount: pick(/提现.*笔数/), withdrawAmount: pick(/提现.*金额/), difference: pick(/^充提差/),
+  };
+ });
+}
+
+test('daily platform cashflow reads success for both directions once and subtracts withdrawals in the selected currency', async () => {
+ const h = harness({handler: q => q.platformId === P.id ? cashflowResponse(P, {
+  withdraw: {success_count: 6, success_amount: '332.45'},
+  charge: {success_count: 4, success_amount: '305.30'},
+ }) : cashflowResponse(Q, {
+  charge: {success_count: 0, success_amount: '0'}, withdraw: {success_count: 0, success_amount: 0},
+ })});
+ await h.module.load();
+ const rows = cashflowRows(h.module.render());
+ assert.deepEqual(rows.find(row => row.platform === P.name), {
+  platform: P.name, date: '2026-10-03', chargeCount: '4', chargeAmount: '305.30',
+  withdrawCount: '6', withdrawAmount: '332.45', difference: '-27.15',
+ });
+ assert.deepEqual(rows.find(row => row.platform === Q.name), {
+  platform: Q.name, date: '2026-10-03', chargeCount: '0', chargeAmount: '0.00',
+  withdrawCount: '0', withdrawAmount: '0.00', difference: '0.00',
+ });
+ h.module.render();
+ assert.deepEqual(h.calls.filter(q => day(q) === '2026-10-03').map(q => q.platformId).sort(), [P.id, Q.id]);
+ assert(h.calls.every(q => q.direction === 'all' && q.currency === 'INR' && q.successBasis === 'created'));
+});
+
+test('cashflow keeps known counts when a successful amount is missing, and never invents an absent direction', async () => {
+ const h = harness({handler: q => q.platformId === P.id ? cashflowResponse(P, {
+  charge: {success_count: 3, success_amount: '200.00', created_success_missing_amount_count: 1},
+  withdraw: {success_count: 1, success_amount: '15.00'},
+ }) : cashflowResponse(Q, {charge: {success_count: 5, success_amount: '420.00'}})});
+ await h.module.load();
+ const rows = cashflowRows(h.module.render());
+ assert.deepEqual(rows.find(row => row.platform === P.name), {
+  platform: P.name, date: '2026-10-03', chargeCount: '3', chargeAmount: '—',
+  withdrawCount: '1', withdrawAmount: '15.00', difference: '—',
+ });
+ assert.deepEqual(rows.find(row => row.platform === Q.name), {
+  platform: Q.name, date: '2026-10-03', chargeCount: '5', chargeAmount: '420.00',
+  withdrawCount: '—', withdrawAmount: '—', difference: '—',
+ });
+});
+
+test('cashflow does not fill an INR amount from another currency or redisplay it after query access is revoked', async () => {
+ let authorized = true;
+ const h = harness({platforms: [P], permission: () => authorized, handler: () => cashflowResponse(P, {
+  charge: {success_count: 2, success_amount: '54.25'},
+  withdraw: {currency: 'IDR', success_count: 8, success_amount: '7000'},
+ })});
+ await h.module.load();
+ const row = cashflowRows(h.module.render())[0];
+ assert.equal(row.chargeAmount, '54.25');
+ assert.equal(row.withdrawAmount, '—');
+ assert.equal(row.difference, '—');
+ authorized = false;
+ assert.doesNotMatch(h.module.render(), /54\.25/);
+});
+
+test('cashflow follows explicit creation-cohort success fields and requires coverage for a wholly empty day', async () => {
+ const empty = {all_count: 0, all_amount: 0, success_count: 0, success_amount: 0};
+ const h = harness({handler: q => q.platformId === P.id ? cashflowResponse(P, {
+  charge: {success_count: 2, success_amount: '999', created_success_count: 3, created_success_amount: '19.50', created_success_missing_amount_count: 0},
+  withdraw: empty,
+ }) : {
+  ...cashflowResponse(Q, {charge: empty, withdraw: empty}),
+  _preparedPublication: {id:'complete-zero', calculationComplete:true, sourceComplete:true, expiresAt:'2026-10-04T04:40:00Z'},
+ }});
+ await h.module.load();
+ const rows = cashflowRows(h.module.render());
+ assert.deepEqual(rows.find(row => row.platform === P.name), {
+  platform: P.name, date: '2026-10-03', chargeCount: '3', chargeAmount: '19.50',
+  withdrawCount: '—', withdrawAmount: '—', difference: '—',
+ });
+ assert.deepEqual(rows.find(row => row.platform === Q.name), {
+  platform: Q.name, date: '2026-10-03', chargeCount: '0', chargeAmount: '0.00',
+  withdrawCount: '0', withdrawAmount: '0.00', difference: '0.00',
+ });
+});
+
+test('multi-day cashflow pages by the local calendar date and reuses completed day reads', async () => {
+ const h = harness({platforms: [P], handler: q => {
+  const hours = (Date.parse(q.endAt) - Date.parse(q.startAt)) / 3600000;
+  const charge = hours > 24 ? 8888 : day(q) === '2026-10-02' ? 30.5 : 80.75;
+  return cashflowResponse(P, {
+   charge: {success_count: 2, success_amount: charge}, withdraw: {success_count: 1, success_amount: 10},
+  });
+ }});
+ Object.assign(h.L, {from: '2026-10-01T00:00:00', to: '2026-10-03T23:59:59'});
+ await h.module.load();
+ const row = () => cashflowRows(h.module.render()).find(row => row.platform === P.name);
+ assert.equal(row().date, '2026-10-03');
+ assert.equal(row().difference, '70.75', 'selected calendar day excludes the other two days');
+ await h.c.liveDailyCashflowDate('2026-10-02');
+ assert.equal(row().date, '2026-10-02');
+ assert.equal(row().difference, '20.50');
+ const dailyReads = h.calls.filter(q => Date.parse(q.endAt) - Date.parse(q.startAt) === 86400000);
+ assert.deepEqual(dailyReads.map(q => [q.startAt, q.endAt, q.direction]).sort(), [
+  ['2026-10-01T18:30:00.000Z','2026-10-02T18:30:00.000Z','all'],
+  ['2026-10-02T18:30:00.000Z','2026-10-03T18:30:00.000Z','all'],
+ ]);
+ const reads = h.calls.length;
+ await h.c.liveDailyCashflowDate('2026-10-03');
+ await h.c.liveDailyCashflowDate('2026-09-30');
+ assert.equal(row().difference, '70.75');
+ assert.equal(row().date, '2026-10-03');
+ assert.equal(h.calls.length, reads, 'returning to the same day and an invalid date cause no extra read');
+});
+
+test('a late cashflow read for a previously selected day cannot replace the active day', async () => {
+ const h = harness({platforms: [P]});
+ Object.assign(h.L, {from: '2026-10-01T00:00:00', to: '2026-10-03T23:59:59'});
+ await h.module.load();
+ const pending = new Map();
+ h.setHandler(q => new Promise(resolve => pending.set(day(q), resolve)));
+ const earlier = h.c.liveDailyCashflowDate('2026-10-01');
+ await tick();
+ const duplicate = h.c.liveDailyCashflowDate('2026-10-01');
+ const latest = h.c.liveDailyCashflowDate('2026-10-02');
+ await tick();
+ assert.deepEqual([...pending.keys()], ['2026-10-01', '2026-10-02']);
+ assert.equal(h.calls.filter(q => q.startAt === '2026-09-30T18:30:00.000Z' && q.endAt === '2026-10-01T18:30:00.000Z').length, 1);
+ pending.get('2026-10-02')(cashflowResponse(P, {
+  charge: {success_count: 2, success_amount: '15.50'}, withdraw: {success_count: 1, success_amount: '25.25'},
+ }));
+ await latest;
+ pending.get('2026-10-01')(aggregate(P));
+ await Promise.all([earlier, duplicate]);
+ const row = cashflowRows(h.module.render())[0];
+ assert.equal(row.date, '2026-10-02');
+ assert.equal(row.difference, '-9.75');
+});

@@ -134,3 +134,35 @@ test('the shared period setter no longer retains the replaced daily single-day g
  const h=await setup();const reads=h.calls.length;h.c.livePeriod('week',false);
  assert.equal(h.L.from,'2026-09-17T00:00:00');assert.equal(h.L.to,'2026-09-23T23:59:59');assert.equal(h.L.successFrom,'');assert.equal(h.L.successTo,'');assert.equal(h.L.dirty,true);assert.equal(h.calls.length,reads);
 });
+
+test('cashflow keeps the selected prepared day visible when the period has no publication, and loses it on access change',async()=>{
+ const exactDay='2026-09-18T18:30:00.000Z'; // September 19, Asia/Kolkata
+ const h=realHarness(q=>nativeResponse(q));await settle();await h.c.liveQuery();await settle();
+ h.c.liveMetricTimeSet('from','2026-09-16T00:00:00');h.c.liveMetricTimeSet('to','2026-09-19T23:59:59');
+ h.setHandler(async envelope=>{
+  if(envelope.action!=='aggregatePrepared')return {rows:[],total:0};
+  const full=await prepared(envelope,q=>{
+   const r=nativeResponse(q,20);r.summary[0].success_amount='7654.32';r.summary[1].success_amount='10.00';
+   r.groups.provider=r.summary.map(row=>({...row,provider:'Synthetic provider'}));return r;
+  });
+  return {...full,items:full.items.map(item=>item.request.startAt===exactDay&&Date.parse(item.request.endAt)-Date.parse(item.request.startAt)===86400000?item:{request:item.request,status:'building',result:null})};
+ });
+ await h.c.liveQuery();await settle();
+ assert.match(h.html(),/7,644\.32/,'the new local day does not depend on the older comparison period');
+ assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);
+ h.L.catalog=[];h.c.render();
+ assert.doesNotMatch(h.html(),/7,644\.32/,'a previously displayed net cannot survive a narrower platform catalog');
+});
+
+test('exporting the selected platform day includes its net without a second payment read',async()=>{
+ const h=realHarness(q=>{
+  const r=nativeResponse(q,40);
+  for(const row of [r.summary[0],r.groups.provider[0]])row.success_amount='45.10';
+  for(const row of [r.summary[1],r.groups.provider[1]])row.success_amount='72.30';
+  return r;
+ });await settle();await h.c.liveQuery();await settle();
+ const reads=h.calls.length;h.c.liveExport();
+ assert.equal(h.blobs.length,1);
+ const csv=await h.blobs[0].text();assert.match(csv,/充提差/);
+ assert.match(csv,/-27\.20/);assert.equal(h.calls.length,reads);
+});
