@@ -11,6 +11,7 @@ const migrationsUnderTest = [
   '20261109093000_deposit_ticket_list.sql',
   '20261109100500_deposit_ticket_identifier_latency.sql',
   '20261111121301_deposit_ticket_source_fields.sql',
+  '20261111123316_deposit_ticket_native_platforms.sql',
 ];
 const actor = '00000000-0000-0000-0000-000000000011';
 const permissions = ['workorders.view','workorders.query','workorders.detail'];
@@ -64,7 +65,7 @@ async function rejected(callback,pattern) {
 
 before(async()=>{
   db=new PGlite();
-  for (const name of ['gateway.sql','native-sources.sql','charge-sources.sql']) await db.exec(fs.readFileSync(path.join(fixtureDir,name),'utf8'));
+  for (const name of ['gateway.sql','native-sources.sql','charge-sources.sql','native-platform-registry.sql']) await db.exec(fs.readFileSync(path.join(fixtureDir,name),'utf8'));
   await db.exec(`insert into public.ticket_test_catalog values
     ('00000000-0000-0000-0000-000000000001','AR ONE','M8','印度','IN','ar','Asia/Kolkata','INR','arOne'),
     ('00000000-0000-0000-0000-000000000002','NEW ONE','M8','印度','IN','newar','Asia/Kolkata','INR','newOne'),
@@ -238,4 +239,31 @@ test('only unique same-system/platform recharge records enrich permitted pages, 
   }
   await db.exec('set local role authenticated');
   await rejected(()=>db.query("select private.dashboard_ticket_recharge_order('ar','IN','arOne','Asia/Kolkata','shared-payment')"),/permission denied/);
+});
+
+test('AR form names require the same enabled platform registration, tenant and both scopes; the recharge keeps its own key',async()=>{
+  const id='00000000-0000-0000-0000-000000000090';
+  await db.query("insert into public.ticket_test_catalog values ($1,'OKWIN','M8','印度','IN','ar','Asia/Kolkata','INR','OKWIN')",[id]);
+  await db.query("insert into private.ar_middle_channel_platforms values ('IN',$1,'OKWIN','fixture-tenant',true)",[id]);
+  await configure('scope',{IN:['OKWIN','OK.WIN']});
+  await configure('access',{canView:true,permissions:[...permissions,'orders.view','orders.query','orders.detail']});
+  await ar('allowed-form',{tenant_id:'fixture-tenant',platform:'OK.WIN',work_order_no:'native-form'});
+  await ar('wrong-tenant',{tenant_id:'other-tenant',platform:'OK.WIN',work_order_no:'decoy'});
+  await insert('public.ar_collected_orders',{source_system:'AR',country_code:'IN',platform:'OKWIN',order_kind:'recharge',
+    order_no:'shared-payment',status:'已支付',amount:'10.00',raw_channel:'source-provider'});
+  await insert('public.ar_collected_orders',{source_system:'AR',country_code:'IN',platform:'OK.WIN',order_kind:'recharge',
+    order_no:'shared-payment',status:'待支付',amount:'20.00',raw_channel:'decoy-provider'});
+  for(const platform of ['OKWIN','OK.WIN']){
+    const page=await request({platform,workorderNo:'native-form'});
+    assert.equal(page.rows.length,1);assert.equal(page.sourceStatus,'ready');
+    assert.equal(page.rows[0].platform,'OKWIN');assert.equal(page.rows[0].sourcePlatform,'OK.WIN');
+    assert.equal(page.rows[0].rechargeOrder.status,'已支付');assert.equal(page.rows[0].rechargeOrder.provider,'source-provider');
+  }
+  assert.deepEqual((await request({platform:'OKWIN'})).rows.map(r=>r.workorderId),['allowed-form']);
+  assert.equal((await request({platform:'OKWIN',workorderNo:'decoy'})).rows.length,0);
+  await configure('scope',{IN:['OKWIN']});assert.equal((await request()).rows.length,0);
+  await configure('scope',{IN:['OK.WIN']});assert.equal((await request()).rows.length,0);
+  await configure('scope',{IN:['OKWIN','OK.WIN']});
+  await db.exec('update private.ar_middle_channel_platforms set enabled=false');assert.equal((await request()).rows.length,0);
+  await db.exec("update private.ar_middle_channel_platforms set enabled=true,country_code='PK'");assert.equal((await request()).rows.length,0);
 });
