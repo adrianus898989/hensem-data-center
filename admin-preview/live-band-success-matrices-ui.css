@@ -1,0 +1,43 @@
+.band-success-matrices {
+  min-width: 0;
+  margin-top: 12px;
+}
+.band-success-matrices .success-analysis-heading {
+  padding-bottom: 8px;
+}
+.band-success-scroll {
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+}
+.band-success-scroll th[scope="row"],
+.band-success-scroll .provider-business-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.band-success-scroll .band-success-slot {
+  white-space: normal;
+}
+.band-success-sort {
+  border: 0;
+  padding: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.band-success-sort:focus-visible,
+.band-success-scroll:focus-visible {
+  outline: 2px solid #5475df;
+  outline-offset: -2px;
+}
+.band-success-scroll .band-success-empty {
+  text-align: left;
+  padding-left: 12px;
+  color: #6d7f9e;
+}
+@media (max-width: 600px) {
+  .band-success-matrices .band-success-scroll .success-provider-type {
+    left: auto;
+  }
+}

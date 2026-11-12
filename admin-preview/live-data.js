@@ -165,7 +165,7 @@
  function normalizePageDirection(){if(state.page==='merchants'||isSuccessAnalysis()||isDailyComparison()){L.direction='all';L.multi.direction=[];if(isSuccessAnalysis()||isDailyComparison()){L.status='all';for(const key of ['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'])L[key]='';}return;}if(state.page!=='latency')return;L.direction=['charge','withdraw'].includes(L.direction)?L.direction:'charge';L.multi.direction=[L.direction];}
  const E=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const N=v=>v===null||v===undefined||!Number.isFinite(Number(v))?'—':Number(v).toLocaleString('en-US',{maximumFractionDigits:2,minimumFractionDigits:2});
- let matrixCustom=null;
+ let matrixCustom=null,hourlyRates=null;
  const C=v=>v===null?'—':Number(v||0).toLocaleString('en-US');
  const R=(n,d)=>n===null||d===null?'—':Number(d)>0?(Number(n)/Number(d)*100).toFixed(2)+'%':'—';
  const directionName=d=>d==='charge'?'代收':d==='withdraw'?'代付':'全部';
@@ -278,7 +278,7 @@
  const providerIntake=window.HensemProviderIntake?.create({request:querySupplementRequest,accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():''});
  let publishedController=null;
  let collectedPage=null;
- const cancelDataReads=()=>{collectedPage?.pauseCoverage?.();preemptSyncHealth();cancelPublishedRead();cancelFeeLookup();readPhase?.cancelSupplementary?.();readPhase=null;deferredMerchantTrend=false;cancelAggregateReads();workordersReadCache?.cancel();matrixCustom?.cancel();providerIntake?.cancel();memberCounts?.cancel();submissionAnalysis?.cancel();dailyComparison?.cancel();channelStatus?.cancel();pendingSnapshot?.cancel();pendingAnalysis?.cancel();pendingOrders?.cancel();reportData?.cancel();L.workordersSerial++;L.workordersLoading=false;if(L.overviewWorkordersStatus==='loading')L.overviewWorkordersStatus='idle';window.hensemLiveCancelRequests?.(['aggregate','details','analysisOrders','reportSummary','workorders','pendingSnapshot','pendingAnalysis','pendingOrders','memberDaily','submissionAnalysis','intakeCoverage','channelStatus','autoWithdraw','providerSnapshot']);};
+ const cancelDataReads=()=>{hourlyRates?.cancel();collectedPage?.pauseCoverage?.();preemptSyncHealth();cancelPublishedRead();cancelFeeLookup();readPhase?.cancelSupplementary?.();readPhase=null;deferredMerchantTrend=false;cancelAggregateReads();workordersReadCache?.cancel();matrixCustom?.cancel();providerIntake?.cancel();memberCounts?.cancel();submissionAnalysis?.cancel();dailyComparison?.cancel();channelStatus?.cancel();pendingSnapshot?.cancel();pendingAnalysis?.cancel();pendingOrders?.cancel();reportData?.cancel();L.workordersSerial++;L.workordersLoading=false;if(L.overviewWorkordersStatus==='loading')L.overviewWorkordersStatus='idle';window.hensemLiveCancelRequests?.(['aggregate','details','analysisOrders','reportSummary','workorders','pendingSnapshot','pendingAnalysis','pendingOrders','memberDaily','submissionAnalysis','intakeCoverage','channelStatus','autoWithdraw','providerSnapshot']);};
  window.liveMultiClear=function(key){if(!['team','platform','source','provider','direction'].includes(key)||key==='platform'&&state.page==='orders'||key==='direction'&&(fixedDirection(state.page)||state.page==='latency'))return;L.openMulti='';L.multiSearch[key]='';setMultiValues(key,[])};
  window.liveMultiAll=function(key,all){if(state.page==='orders'&&key==='platform'&&all)return;const root=document.querySelector('details[data-multi="'+key+'"]');if(!root)return;const values=all?[...new Set([...activeValues(key),...Array.from(root.querySelectorAll('.live-multi-option:not([hidden]) input')).map(e=>e.value)])]:[];setMultiValues(key,values)};
  document.addEventListener?.('click',e=>{if(e.target.closest?.('.live-multi'))return;L.openMulti='';document.querySelectorAll('details[data-multi]').forEach(el=>el.open=false)});
@@ -883,6 +883,19 @@
    await loadProviderOptions(true);if(type==='platform')await platformAssignmentsLoad();else if(state.page==='teams')await platformAssignmentsLoad();else await providerConfigLoad();
  }});
  const analysis=window.HensemAnalysisDrilldown?.create({L,E,N,C,R,query,formatTime,successTimeLabel,openDrawer:(title,html)=>openDrawer(title,html),customRows:segment=>matrixCustom?.detailRows(segment),customResults:segment=>matrixCustom?.customResults(segment),request:(q,options)=>foregroundRequest(q,options),accessContext:()=>JSON.stringify([aggregateAccessContext(),supplementaryNativeContext()]),render:()=>render()});
+ hourlyRates=window.HensemHourlyRateController?.create({L,E,page:()=>state.page,
+  allowed:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')&&L.queryScope===aggregateQueryScope(),
+  canDrill:()=>roleAllowed(state.page,'detail'),access:()=>JSON.stringify([aggregateAccessContext(),supplementaryNativeContext()]),
+  platforms:()=>L.queryPlatforms.filter(p=>!notOperating(p)),query:p=>query(p,'aggregate'),request:foregroundRequest,
+  denied:e=>['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(e?.code),onDenied:e=>stopInterruptedAggregate(L.serial,e),
+  successAvailable:(p,r,d)=>!sourceSuccessTimeUnavailable(p,r,d),
+  providerTypes:d=>{const names=window.HensemProviderNames,lookup=window.HensemProviderSummary?.providerType,byName=new Map();
+   if(lookup&&Array.isArray(L.feeLookupRows))for(const row of groupRows('provider')){
+    if(row.direction!==d||row.currency!==L.currency)continue;
+    const key=names?.canonical(row.provider,L.country)??row.provider;
+    if(!byName.has(key))byName.set(key,[]);byName.get(key).push(row);
+   }
+   return key=>byName.has(key)?lookup({provider:key,items:byName.get(key)},L.feeLookupRows,L.country):null;},render:()=>render()});
  matrixCustom=window.HensemMatrixCustomRange?.create({L,E,N,C,R,analysis,page:()=>state.page,allowed:()=>roleAllowed(state.page,'query'),selected,query,request:(q,serial)=>readAggregate(q,serial,false,true),successUnavailable:successTimeUnavailable,render:()=>render()});
  // A completed request is not proof of source collection coverage. This is
  // strictly the requested platform-read state for the visible overview.
@@ -896,7 +909,7 @@
    const t=L.merchantTrend,loading=t?.status==='loading',note=loading?'正在按需读取订单趋势 '+(t.done||0)+' / '+(t.total||0)+' 平台':t?.status==='error'?'趋势读取未完成：'+t.error:'订单趋势尚未读取';
    return totals()+'<div class="section-switcher"><div class="tabs">'+[['business','商户经营清单'],['trend','商户订单趋势'],['providers','该商户的三方经营表现']].map(([key,label])=>'<button class="'+(L.view===key?'on':'')+'" onclick="liveReferenceSet(\'view\',\''+key+'\')">'+label+'</button>').join('')+'</div></div><div class="live-status" role="status">'+E(note)+(loading?'':' <button class="link" onclick="liveMerchantTrend()">读取订单趋势</button>')+'</div>';
   }
-  return HensemLivePages.create({aggregateReadStatus,analysis,matrixCustom,pendingSnapshot,memberCounts,reportCatalogRows:reportData?.state.catalogError?[]:reportData?.state.catalogRows,successTimeSummary,successTimeUnavailable:(direction,rows)=>rows?successRowsTimeUnavailable(rows,direction):successTimeUnavailable(direction),analysisRow:pandaAnalysisRow,amountBandKeys,amountLabel,amountNote,L,E,N,C,R,plus,combine,groupRows,empty,table,box,pager,totals,comparisonRows,compareMetric,chart,matrixBody,latencyView,detailsView,providersView,platformsView,pagedTable,overviewChart,overviewAmounts,overviewAnalysisRender,businessHeaders,businessCells,feeForRow,ensureFeeLookup,providerCell,loadedFeeValue}).render(state.page)
+  return HensemLivePages.create({aggregateReadStatus,analysis,matrixCustom,hourlyRates,pendingSnapshot,memberCounts,reportCatalogRows:reportData?.state.catalogError?[]:reportData?.state.catalogRows,successTimeSummary,successTimeUnavailable:(direction,rows)=>rows?successRowsTimeUnavailable(rows,direction):successTimeUnavailable(direction),analysisRow:pandaAnalysisRow,amountBandKeys,amountLabel,amountNote,L,E,N,C,R,plus,combine,groupRows,empty,table,box,pager,totals,comparisonRows,compareMetric,chart,matrixBody,latencyView,detailsView,providersView,platformsView,pagedTable,overviewChart,overviewAmounts,overviewAnalysisRender,businessHeaders,businessCells,feeForRow,ensureFeeLookup,providerCell,loadedFeeValue}).render(state.page)
  }
   // Report pages already have Query in the filter bar. Only standalone views
   // without that bar (the legacy rates view) need an action in the empty state.
@@ -1266,7 +1279,7 @@
  }
  preparedAggregates=window.HensemPreparedAggregates?.create({request:(q,options)=>foregroundRequest(q,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?state.page+'|'+aggregateAccessContext():'',completedReuseContext:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?aggregateAccessContext():'',platform:preparedNativePlatform,publicationVersion:2,providerLeafAliases:true,maxConcurrent:2,maxBatchSize:3,completedCacheTtlMs:preparedCompletionTtl,completedCacheMaxBytes:96*1024*1024,derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40});
  const usesPreparedAggregate=request=>statisticWindowsEnabled()&&request.action==='aggregate'&&request.view!=='drilldown'&&!['orderNumber','thirdPartyOrderNumber','systemOrderId','memberId','utr'].some(key=>request[key]);
- window.addEventListener?.('pagehide',()=>{preemptSyncHealth();clearAggregateCache();providerIntake?.clearCache?.();clearFeeLookupCache();});
+ window.addEventListener?.('pagehide',()=>{hourlyRates?.cancel();preemptSyncHealth();clearAggregateCache();providerIntake?.clearCache?.();clearFeeLookupCache();});
  function stopInterruptedAggregate(serial,error){
   if(serial!==L.serial)return;
   const denied=['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code);

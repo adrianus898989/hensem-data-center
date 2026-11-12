@@ -24,6 +24,13 @@ export function validateCollectorControlRequest(p:Record<string,unknown>):Record
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
+  if(Object.hasOwn(p,"providerHourMatrix")){
+    const {providerHourMatrix,...base}=p;
+    const hours=p.hourRange as {minHour?:unknown;maxHour?:unknown}|null;
+    if(providerHourMatrix!==true||p.action!=="aggregate"||p.view!=="drilldown"||p.kind!=="custom"||hours?.minHour!==0||hours?.maxHour!==24)
+      throw Error("分时成功率需要完整的 24 小时分组");
+    return {...validateAdminLiveRequest(base),providerHourMatrix};
+  }
   if(p.successBasis!==undefined&&p.action!=="autoWithdraw"){
     if(p.successBasis!=="created"||!["details","memberDaily","analysisOrders"].includes(String(p.action))&&!(p.action==="aggregate"&&p.view==="drilldown")||Object.hasOwn(p,"successStartAt")||Object.hasOwn(p,"successEndAt"))throw Error("创建订单状态统计参数无效");
     const {successBasis,...base}=p;return {...validateAdminLiveRequest(base),successBasis};
@@ -45,6 +52,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     const requests=p.requests.map(value=>{
       if(!value||typeof value!=="object"||Array.isArray(value))throw Error("统计请求无效");
       const q=value as Record<string,unknown>,{successStartAt,successEndAt,successBasis,...base}=q;
+      if(Object.hasOwn(q,"providerHourMatrix"))throw Error("分时成功率需按区间明细读取");
       if(q.action!=="aggregate"||["orderNumber","thirdPartyOrderNumber","systemOrderId","memberId","utr"].some(key=>q[key]!==undefined))throw Error("已准备统计不读取订单身份明细");
       const checked=validateAdminLiveRequest(base),clocks=[successStartAt,successEndAt,successBasis];
       if(successBasis==="created"){if(successStartAt!==undefined||successEndAt!==undefined)throw Error("创建订单状态统计不接受独立成功时间");return {...checked,successBasis};}
@@ -462,7 +470,9 @@ async function adminLiveFetch(url:string,init:RequestInit):Promise<Response>{
 export async function adminLiveRequest(session:DashboardSession,input:unknown,signal?:AbortSignal,roleContext?:{assigned:boolean;page:string},observeSession?:(current:DashboardSession)=>void):Promise<unknown>{
  signal?.throwIfAborted();
  if(roleContext?.assigned&&(typeof roleContext.page!=="string"||!/^[a-z][a-z0-9_]{0,63}$/.test(roleContext.page)))throw Error("当前角色没有此页面或操作权限，请联系管理员");
- const request=validateAdminLiveRequest(input),current=await adminLiveSession(session);
+ const request=validateAdminLiveRequest(input);
+ if(request.providerHourMatrix===true&&!["time","amount"].includes(roleContext?.page||""))throw Error("分时成功率仅供时间段分析和金额段分析读取");
+ const current=await adminLiveSession(session);
  signal?.throwIfAborted();
  if(current.user.id!==session.user.id)throw new AdminLiveAccessError("当前登录账号已改变",'session');
  observeSession?.(current);
@@ -579,6 +589,11 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
      const required=["view","query",...(request.view==="details"?["detail"]:[]),...(request.export===true?["export"]:[])];
      if(item.page!=="deposit_statistics"||!access?.canView||!(access.mode==="owner"||access.mode==="assigned"&&required.every(key=>access.permissions.includes("deposit_statistics."+key))))throw Error("当前账号没有补单核对或导出权限");
     }
+    if((item.request as {providerHourMatrix?:unknown})?.providerHourMatrix===true){
+     const access=options.roleAccess?.();
+     if(!["time","amount"].includes(item.page)||!access?.canView||access.mode==="assigned"&&!["view","query","detail"].every(action=>access.permissions.includes(item.page+"."+action)))
+       throw permissionError("当前账号没有此页面的分时明细权限","role_denied");
+    }
     if((item.request as {action?:unknown})?.action==="aggregatePrepared"){
      const request=validateAdminLiveRequest(item.request),access=options.roleAccess?.();
      const detail=(request.requests as Record<string,unknown>[]).some(q=>q.view==="drilldown");
@@ -689,6 +704,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
    const operation=(request?.action==='depositStatistics'&&request.section==='recovery'||request?.action==='providerSnapshot')&&request.export===true?'export':request?.action==='collectorControl'?(request.operation==='overview'?'view':'edit'):request?.action==='withdrawNote'?'edit':request?.action==='configurationWrite'?(request.operation==='grant'?'grant':'edit'):['catalog','providerOptions','configurationAccess'].includes(request?.action)?'view':'query';
    if(request?.action==='providerSnapshot'&&page!=='providers'){reject(error('快照核验仅在代收汇总页面可用','ROLE_DENIED'));return;}
    if(request?.action==='collectorControl'&&page!=='collector_control'){reject(error('采集管理页面无效','ROLE_DENIED'));return;}
+   if(request?.providerHourMatrix===true&&!['time','amount'].includes(page)){reject(error('分时成功率仅供时间段分析和金额段分析读取','ROLE_DENIED'));return;}
    if(!window.hensemRoleAllowed(page,operation)){reject(error('当前角色没有此页面或操作权限','ROLE_DENIED'));return;}
    const detail=request?.action==='aggregatePrepared'&&request.requests?.some(q=>q.view==='drilldown')||['details','query','analysisOrders','pendingOrders'].includes(request?.action)||['submissionAnalysis','submissionStreak'].includes(request?.action)&&['members','memberOrders'].includes(request.operation)||request?.action==='aggregate'&&request.view==='drilldown'||request?.action==='workorderRecords'&&['detail','orderDetail'].includes(request.operation)||request?.action==='depositStatistics'&&(request.section==='details'||request.section==='kyc'&&request.dimension==='orders'||request.section==='recovery'&&request.view==='details')||request?.action==='depositIssues'&&page==='deposit_statistics';
    if(detail&&!window.hensemRoleAllowed(page,'detail')){reject(error('当前角色没有查看明细权限','ROLE_DENIED'));return;}

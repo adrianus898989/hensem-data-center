@@ -41,6 +41,7 @@ jobs:
       - run: pnpm test:collector-control
       - run: pnpm test:provider-summary-repair
       - run: pnpm test:admin-preview
+      - run: node --test tests/admin-hourly-rate-*.test.cjs tests/admin-band-success-matrices-ui.test.cjs tests/admin-provider-hour-drilldown.test.cjs
       - run: pnpm test:admin-pagination
       - run: node --test tests/admin-provider-current-channels.test.cjs
       - run: pnpm test:admin-cache
