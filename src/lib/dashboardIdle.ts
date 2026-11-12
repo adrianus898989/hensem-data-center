@@ -1,5 +1,5 @@
 // Only real input renews inactivity. Network traffic and token renewal never do.
-export const DASHBOARD_IDLE_MS = 60 * 60 * 1000;
+export const DASHBOARD_IDLE_MS = 24 * 60 * 60 * 1000;
 export const DASHBOARD_LAST_ACTIVITY_KEY = "hensem.dashboard.last_activity";
 const ACTIVITY_EVENT = "hensem:dashboard:user-activity";
 const IDLE_LOGOUT_KEY = "hensem.dashboard.idle_logout_at";
