@@ -15,6 +15,62 @@ test('exact capacity refusal falls back once to the original 3 by 2 compact queu
  const flights=[];let active=0,peak=0;const h=setup(p=>{if(p.readMode)throw Object.assign(Error('capacity'),{code:'PREPARED_READY_RESPONSE_CAPACITY'});active++;peak=Math.max(peak,active);const d=deferred();flights.push({p,d});return d.promise.finally(()=>active--);});
  const all=Promise.all(Array.from({length:19},(_,i)=>h.api.read(full(i),main)));await tick();assert.equal(flights.length,2);let done=0;while(done<flights.length){const f=flights[done++];assert.equal(f.p.responseProfile,'time-v1');assert(f.p.requests.length<=3);f.d.resolve(response(f.p));await tick();}assert.equal((await all).length,19);assert.equal(done,7);assert.equal(peak,2);assert.equal(h.calls.filter(c=>c.p.readMode).length,1);
 });
+test('a shared SQL timeout isolates platforms on the same read-only RPC and keeps healthy results',async()=>{
+ const flights=[];
+ const timedOut=()=>Object.assign(Error('statement cancelled'),{code:'57014'});
+ const h=setup(async p=>{
+  if(p.requests.length>1)throw timedOut();
+  const d=deferred();
+  flights.push({p,d});
+  return d.promise;
+ });
+ const queries=Array.from({length:20},(_,i)=>full(i));
+ const all=Promise.allSettled(queries.map(q=>h.api.read(q,main)));
+ await tick();
+ assert.equal(h.calls[0].p.requests.length,20);
+ assert.equal(flights.length,2);
+ // Leave the first platform pending while every healthy platform completes.
+ for(let i=1;i<20;i++){
+  const flight=flights[i];
+  assert.equal(flights.length,i+1);
+  assert.equal(flight.p.readMode,'ready-only-v1');
+  assert.equal(flight.p.responseProfile,'time-v1');
+  assert.deepEqual(flight.p.requests,[queries[i]]);
+  flight.d.resolve(response(flight.p));
+  await tick();
+ }
+ flights[0].d.reject(timedOut());
+ const result=await all;
+ assert.equal(result[0].reason.code,'57014');
+ assert(result.slice(1).every(r=>r.status==='fulfilled'&&r.value._preparedPublication.sourceComplete===false));
+ assert.equal(h.calls.length,21);
+ assert(h.calls.every(c=>c.p.readMode==='ready-only-v1'&&!c.p.forceRefresh));
+ await h.api.read(queries[1],main);
+ assert.equal(h.calls.length,21);
+});
+test('an isolated read-only miss alone reaches the ordinary reader after a shared SQL timeout',async()=>{
+ const first=full(1),second=full(2);
+ const h=setup(p=>{
+  if(p.requests.length>1)throw Object.assign(Error('statement cancelled'),{code:'57014'});
+  if(p.readMode&&p.requests[0].providers[0]===first.providers[0])
+   return envelope(p,r=>({request:r,status:'miss',reason:'ready_head_missing',result:null,publication:null}));
+  return response(p);
+ });
+ const result=await Promise.all([first,second].map(q=>h.api.read(q,main)));
+ assert.equal(result.length,2);
+ assert.deepEqual(h.calls.filter(c=>!c.p.readMode).map(c=>c.p.requests),[[first]]);
+});
+test('a late shared SQL timeout after cancellation cannot retry the old scope',async()=>{
+ const late=deferred(),h=setup((p,_c,n)=>n===1?late.promise:response(p));
+ const old=Promise.allSettled([full(1),full(2)].map(q=>h.api.read(q,main)));
+ await tick();
+ h.setScope('account-b|role-v2|time');
+ await h.api.read(full(3),main);
+ late.reject(Object.assign(Error('statement cancelled'),{code:'57014'}));
+ assert((await old).every(r=>r.status==='rejected'));
+ await tick();
+ assert.deepEqual(h.calls.map(c=>c.p.requests.length),[2,1]);
+});
 for(const code of ['54000','22023','prepared_ready_response_capacity','PREPARED_AGGREGATE_INVALID','ADMIN_LIVE_PERMISSION_DENIED','ADMIN_LIVE_TIMEOUT'])test('unrecognized or access error '+code+' never downgrades to ordinary reads',async()=>{
  const h=setup(()=>{throw Object.assign(Error('denied'),{code});});await assert.rejects(h.api.read(full(1),main),e=>e.code===code);await tick();assert.equal(h.calls.length,1);
 });

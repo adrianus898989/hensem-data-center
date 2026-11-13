@@ -200,7 +200,7 @@
   function queueRefresh(job,owners,refreshClock){
    const key=encode([job.context,job.nativeKey,job.q,false,job.responseProfile??null]);
    if(!owners.length||job.completedInvalidated||job.generation!==generation||job.context!==context||jobs.has(key))return;
-   const refresh={...job,key,forceRefresh:false,waiters:new Set(),batch:null,phase:'queued',refreshOnly:true,refreshClock,refreshReleased:false,readyOnlyProbe:false,polling:false,pollTimer:null,deadlineTimer:null,deadlineAt:null,attempts:0};
+   const refresh={...job,key,forceRefresh:false,waiters:new Set(),batch:null,phase:'queued',refreshOnly:true,refreshClock,refreshReleased:false,readyOnlyProbe:false,retryProbeAlone:false,polling:false,pollTimer:null,deadlineTimer:null,deadlineAt:null,attempts:0};
    for(const owner of owners){
     const waiter={job:refresh,signal:owner.signal,isCurrent:owner.isCurrent,done:false,abort:null,onRefresh:owner.onRefresh,resolve(result){if(typeof owner.onRefresh==='function')try{owner.onRefresh(result);}catch{}},reject(error){
      if(!authorityDenied(error)&&error?.code!=='ADMIN_LIVE_CANCELLED'||owner.signal?.aborted||typeof owner.onRefreshError!=='function')return;
@@ -257,7 +257,7 @@
     for(const job of batch.jobs){if(!prune(job))continue;if(job.polling&&now()>=job.deadlineAt){endPoll(job);continue;}try{
      const item=matched.get(job.requestKey);
      if(batch.readyOnlyProbe){
-      if(item?.status==='miss'){if(!readyMiss(item))throw failure('invalid');job.readyOnlyProbe=false;job.attempts=0;job.batch=null;job.phase='queued';queue.push(job);continue;}
+      if(item?.status==='miss'){if(!readyMiss(item))throw failure('invalid');requeueProbe(job,false);continue;}
       if(item?.status!=='ready')throw failure('invalid');
      }
      if(!job.refreshOnly&&pollable(item,job)){waitForBase(job);continue;}
@@ -273,10 +273,11 @@
      if(deliver(job,null,result)){const clock=rememberCompleted(job,item);if(owners.length)queueRefresh(job,owners,clock);}
     }catch(error){deliver(job,error);}}
    }catch(error){
-    // Only the server's exact bounded ready-response capacity refusal may
-    // downgrade this one probe. Unknown, scope and permission errors stay errors.
-    if(batch.readyOnlyProbe&&error?.code==='PREPARED_READY_RESPONSE_CAPACITY'&&!batch.controller.signal.aborted){
-     for(const job of batch.jobs)if(prune(job)){job.readyOnlyProbe=false;job.attempts=0;job.batch=null;job.phase='queued';queue.push(job);}
+    // A database timeout on a shared read does not identify which platform
+    // failed. Read each surviving platform once, through the same read-only RPC.
+    const sharedTimeout=error?.code==='57014'&&batch.jobs.length>1;
+    if(batch.readyOnlyProbe&&!batch.controller.signal.aborted&&(sharedTimeout||error?.code==='PREPARED_READY_RESPONSE_CAPACITY')){
+     for(const job of batch.jobs)if(prune(job))requeueProbe(job,sharedTimeout);
      return;
     }
     // A retained frame's host may temporarily close its bridge during access
@@ -287,6 +288,14 @@
     if(authorityDenied(error)&&!batch.controller.signal.aborted&&batch.jobs.some(job=>prune(job))){clearCompleted();if(pollMaxMs>0){for(const job of [...jobs.values()])deliver(job,error);cancel();}}for(const job of batch.jobs)deliver(job,error);
    }
    finally{batches.delete(batch);for(const job of batch.jobs){if(job.phase==='waiting'||job.phase==='queued'&&jobs.get(job.key)===job)continue;if(job.waiters.size)deliver(job,failure('cancelled'));release(job);}schedule();}
+  }
+  function requeueProbe(job,retryAlone){
+   job.readyOnlyProbe=retryAlone;
+   job.retryProbeAlone=retryAlone;
+   job.attempts=0;
+   job.batch=null;
+   job.phase='queued';
+   queue.push(job);
   }
   // PostgreSQL measures the decoded JSONB text, which includes separator spaces.
   // Pretty JSON is a conservative bound for ordinary query numbers. Scientific
@@ -304,7 +313,8 @@
     while(queue.length){
      const index=queue.findIndex(job=>!job.refreshOnly||job.refreshReleased);if(index<0)break;
      const job=queue[index];if(job.refreshOnly&&[...batches].some(batch=>batch.jobs.some(item=>!item.refreshOnly)))break;if(jobs.get(job.key)!==job||!prune(job)){queue.splice(index,1);continue;}
-     let probe=!!job.readyOnlyProbe&&!probedPhases.has(job.readyOnlyProbePhase);
+     if(selected.length&&(job.retryProbeAlone||selected[0].retryProbeAlone))break;
+     let probe=job.retryProbeAlone||!!job.readyOnlyProbe&&!probedPhases.has(job.readyOnlyProbePhase);
      if(probe&&!readyRequestFits(selected,job)){if(selected.length)break;probe=false;}
      if(selected.length&&(selected.length>=(readyOnlyProbe?50:maxBatchSize)||probe!==readyOnlyProbe||probe&&job.readyOnlyProbePhase!==selected[0].readyOnlyProbePhase||!!job.refreshOnly!==!!selected[0].refreshOnly||(job.forceRefresh&&!job.polling)!==(selected[0].forceRefresh&&!selected[0].polling)||job.responseProfile!==selected[0].responseProfile||!readyOnlyProbe&&selected[0].responseProfile&&selected.length>=3))break;
      queue.splice(index,1);if(job.polling&&(now()>=job.deadlineAt||job.attempts>=pollMaxAttempts)){endPoll(job);continue;}if(!selected.length)readyOnlyProbe=probe;selected.push(job);
