@@ -21,12 +21,17 @@ const rows = [
 const matrix = {columns, rows, partial: true};
 const model = {direction: 'charge', provider: matrix, merchant: {...matrix, partial: false}};
 const rowOrder = html => Array.from(html.matchAll(/<th scope="row" title="([^"]+)"/g), m => m[1]);
-const section = (html, key) => html.split('data-band-matrix="' + key + '"')[1].split('</section>')[0];
+function matrixHtml(ui, model, page, kind) {
+  const html = ui.render(model, page, kind);
+  const rendered = Array.from(html.matchAll(/data-band-matrix="([^"]+)"/g), m => m[1]);
+  assert.deepEqual(rendered, [page + '/' + model.direction + '/' + kind]);
+  return html;
+}
 
 test('renders provider and merchant hourly rates, distinct missing and zero values, weighted totals and partial evidence', () => {
-  const html = renderer().render(model, 'time');
-  const provider = section(html, 'time/charge/provider');
-  const merchant = section(html, 'time/charge/merchant');
+  const ui = renderer();
+  const provider = matrixHtml(ui, model, 'time', 'provider');
+  const merchant = matrixHtml(ui, model, 'time', 'merchant');
   assert.deepEqual(rowOrder(provider), ['Mid', 'Equal', 'Weighted', 'None']);
   assert.match(provider, /scope="col" class="success-provider-type">类型/);
   assert.doesNotMatch(merchant, /class="success-provider-type"/);
@@ -53,11 +58,10 @@ test('clicking total changes only this table, keeps unknown rates last, and pres
   assert.deepEqual(order, [2, 1, 3, 0]);
   assert.equal(attrs['aria-sort'], 'ascending');
   assert.equal(arrow.textContent, '↑');
-  const html = ui.render(model, 'time');
-  assert.deepEqual(rowOrder(section(html, 'time/charge/provider')), ['Weighted', 'Mid', 'Equal', 'None']);
-  assert.deepEqual(rowOrder(section(html, 'time/charge/merchant')), ['Mid', 'Equal', 'Weighted', 'None']);
-  assert.match(section(ui.render(model, 'amount'), 'amount/charge/provider'), /aria-sort="descending"/);
-  assert.match(section(ui.render({...model, direction: 'withdraw'}, 'time'), 'time\/withdraw/provider'), /aria-sort="descending"/);
+  assert.deepEqual(rowOrder(matrixHtml(ui, model, 'time', 'provider')), ['Weighted', 'Mid', 'Equal', 'None']);
+  assert.deepEqual(rowOrder(matrixHtml(ui, model, 'time', 'merchant')), ['Mid', 'Equal', 'Weighted', 'None']);
+  assert.match(matrixHtml(ui, model, 'amount', 'provider'), /aria-sort="descending"/);
+  assert.match(matrixHtml(ui, {...model, direction: 'withdraw'}, 'time', 'provider'), /aria-sort="descending"/);
   ui.toggleSort(button);
   assert.equal(attrs['aria-sort'], 'descending');
   assert.deepEqual(order.slice(-4), [1, 3, 2, 0]);
@@ -65,19 +69,20 @@ test('clicking total changes only this table, keeps unknown rates last, and pres
 
 test('uses text for source labels and preserves a missing source as incomplete', () => {
   const record = {name: '<img>', type: '<type>', cells: {}, total: null};
-  const html = renderer().render({...model, provider: {...matrix, rows: [record]}, merchant: {...matrix, rows: []}}, 'amount');
+  const ui = renderer(), data = {...model, provider: {...matrix, rows: [record]}, merchant: {...matrix, rows: []}};
+  const html = matrixHtml(ui, data, 'amount', 'provider');
   assert.match(html, /&lt;img&gt;/);
   assert.match(html, /&lt;type&gt;/);
   assert.doesNotMatch(html, /<img>|<type>/);
-  assert.match(html, /暂无可核验的分时数据/);
+  assert.match(matrixHtml(ui, data, 'amount', 'merchant'), /暂无可核验的分时数据/);
 });
 
 test('provider scope disclosure identifies extra merchant groups and safely displays their names', () => {
   const ui = renderer();
-  const html = ui.render({...model,provider:{...matrix,excluded:{manual:['人工充值'],unidentified:['<未知>']}}},'time');
-  const provider = section(html,'time/charge/provider');
+  const data = {...model,provider:{...matrix,excluded:{manual:['人工充值'],unidentified:['<未知>']}}};
+  const provider = matrixHtml(ui, data, 'time', 'provider');
   assert.match(provider,/商户汇总另含 2 个分组/);
   assert.match(provider,/非三方业务（1）：人工充值/);
   assert.match(provider,/三方归属待确认（1）：&lt;未知&gt;/);
-  assert.doesNotMatch(section(html,'time/charge/merchant'),/商户汇总另含/);
+  assert.doesNotMatch(matrixHtml(ui, data, 'time', 'merchant'),/商户汇总另含/);
 });

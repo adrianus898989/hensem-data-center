@@ -15,9 +15,9 @@
  const equal=(a,b)=>a&&b&&a.successCount===b.successCount&&a.totalCount===b.totalCount;
  const validHour=value=>integer(value)&&Number(value)<24;
  const rowModel=(key,name)=>({key,name,cells:Object.create(null),total:null,partial:false});
- function subtotal(row){
+ function subtotal(row,verified=true){
   const facts=Object.values(row.cells).filter(Boolean);
-  row.partial=facts.length!==24||facts.some(value=>value.partial);
+  row.partial=!verified||facts.length!==24||facts.some(value=>value.partial);
   const total=facts.length?sum(facts):null;
   row.total=total&&row.partial?{...total,partial:true}:total;
   return row;
@@ -33,13 +33,13 @@
  const samePlatform=(p,r)=>r&&['source','country','currency','timezone'].every(key=>!p[key]||!r.platform[key]||p[key]===r.platform[key]);
  const parts=result=>Array.isArray(result?._parts)?result._parts:result?[result]:[];
  function merchantHours(result,direction,currency){
-  const buckets=new Map();
-  for(const part of parts(result)){
-   if(part.complete===false||part.pandaCoverage?.reason==='verified_created_prefix_only'||!Array.isArray(part.groups?.hourly))return new Map();
+  const buckets=new Map(),segments=parts(result);let verified=segments.length>0;
+  for(const part of segments){
+   if(part.complete===false||part.pandaCoverage?.reason==='verified_created_prefix_only'||!Array.isArray(part.groups?.hourly))return {buckets:new Map(),verified:false};
    const scoped=rows=>rows.filter(row=>row.direction===direction&&row.currency===currency);
    const read=new Map();
    for(const row of scoped(part.groups.hourly)){
-    if(!validHour(row.hour))return new Map();
+    if(!validHour(row.hour))return {buckets:new Map(),verified:false};
     const hour=Number(row.hour);
     read.set(hour,read.has(hour)?add(read.get(hour),metric(row)):metric(row));
    }
@@ -49,14 +49,15 @@
    const control=summaries?.length?sum(summaries.map(metric)):
     summaries&&part.complete===true&&(!part.summary.length?integer(part.total)&&Number(part.total)===0:true)?zero():null;
    const knownSum=sum([...read.values()]);
-   if(control&&knownSum&&!equal(knownSum,control))return new Map();
+   if(control&&knownSum&&!equal(knownSum,control))return {buckets:new Map(),verified:false};
    const reconciled=equal(knownSum,control);
+   if(!reconciled)verified=false;
    for(const hour of hours){
     const value=read.has(hour)?read.get(hour):reconciled?zero():null;
     buckets.set(hour,buckets.has(hour)?add(buckets.get(hour),value):value);
    }
   }
-  return buckets;
+  return {buckets,verified};
  }
  function providerGroups(entry,direction,currency,canonical){
   if(!Array.isArray(entry?.rows))return null;
@@ -76,15 +77,16 @@
  }
  function build({direction,currency,platforms=[],results=[],providerHours=new Map(),providerType,successAvailable}){
   const source=resultIndex(results),merchants=[],providerCells=new Map(),expected=new Map(platforms.filter(p=>p?.id).map(p=>[p.id,p]));
-  const covered=Array(24).fill(0);
+  const covered=Array(24).fill(0),ready=new Set();
   for(const platform of expected.values()){
    const result=source.get(platform.id);
    const merchant=rowModel(platform.id,platform.name||platform.id);
    merchants.push(merchant);
    if(!samePlatform(platform,result)||parts(result).some(part=>part.pandaCoverage?.reason==='verified_created_prefix_only')||successAvailable?.(platform,result,direction)===false){subtotal(merchant);continue;}
-   const hourly=merchantHours(result,direction,currency);
+   const {buckets:hourly,verified}=merchantHours(result,direction,currency);
+   if(verified)ready.add(platform.id);
    for(const hour of hours)merchant.cells[hour]=hourly.get(hour)||null;
-   subtotal(merchant);
+   subtotal(merchant,verified);
    const canonical=value=>String(root.HensemProviderNames?.canonical(value,platform.country)??value??'').trim()||'（三方未提供）';
    const providers=providerGroups(providerHours.get(platform.id),direction,currency,canonical);
    if(!providers)continue;
@@ -119,7 +121,7 @@
   }
   const ordered=rows=>rows.sort((a,b)=>(b.total?.totalCount||0)-(a.total?.totalCount||0)||a.name.localeCompare(b.name)||String(a.key).localeCompare(String(b.key)));
   return {dimension:'time',direction,
-   merchant:{columns,rows:ordered(merchants),partial:merchants.some(row=>row.partial)},
+   merchant:{columns,ready,rows:ordered(merchants),partial:merchants.some(row=>row.partial)},
    provider:{columns,rows:ordered(providers),excluded,partial:covered.some(n=>n<expected.size)||providers.some(row=>row.partial)}};
  }
  root.HensemHourlyRateData={build};

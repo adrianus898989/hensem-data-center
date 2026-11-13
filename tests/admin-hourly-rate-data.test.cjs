@@ -88,3 +88,15 @@ test('a missing segment in a split request, a mismatched native source or a read
   const model=build({platforms:[a],results:[good],successAvailable:()=>false});
   assert.equal(byId(model.merchant,a.id).total,null);
 });
+
+test('only reconciled hourly records satisfy the merchant tab, including complete empty days',()=>{
+  const allHours=Array.from({length:24},(_,hour)=>row(hour,1,2));
+  const missingControl=result(a,allHours);
+  const emptyDay={...result(b,[],[]),total:0};
+  const {merchant}=build({platforms:[a,b],results:[missingControl,emptyDay]});
+  assert.deepEqual([...merchant.ready],[b.id]);
+  assert.equal(merchant.partial,true);
+  assert.equal(byId(merchant,a.id).partial,true);
+  assert.deepEqual(byId(merchant,a.id).total,{...counts(24,48),partial:true});
+  assert.deepEqual(byId(merchant,b.id).total,counts(0,0));
+});
