@@ -94,10 +94,13 @@ for(const view of ['auto_withdraw','withdraw_operators'])for(const status of ['m
  f.pending.shift().resolve(data(9));await new Promise(resolve=>setImmediate(resolve));
  assert.equal(f.page.state.loading,false);assert.equal(f.page.state.prepared,null);assert.equal(f.page.state.data.totals.total,9);assert.equal(clock.timers.size,0);
 });
-test('manual retry clears the preparation message and starts one normal read',async()=>{
+test('repeated same-country submissions during preparation share the original poll and deadline',async()=>{
  const f=fixture(),clock=budgetClock(f),first=f.page.load();f.pending.shift().resolve({prepared:{status:'building'}});await first;
- const retry=f.page.load();assert.equal(f.calls.length,2);assert.equal(f.page.state.prepared,null);assert.match(f.page.render(),/正在读取/);assert.doesNotMatch(f.page.render(),/后台正在准备/);
- f.pending.shift().resolve(data(5));await retry;assert.equal(f.page.state.data.totals.total,5);assert.equal(clock.timers.size,0);
+ const timerIds=[...clock.timers.keys()];assert.match(f.page.render(),/disabled aria-disabled="true" onclick="withdrawQueryForm\(this.form\)">准备中/);
+ await f.page.load();await f.context.withdrawQueryForm();
+ assert.equal(f.calls.length,1);assert.deepEqual([...clock.timers.keys()],timerIds);
+ clock.set(3000);clock.fire();assert.equal(f.calls.length,2);
+ f.pending.shift().resolve(data(5));await new Promise(resolve=>setImmediate(resolve));assert.equal(f.page.state.data.totals.total,5);assert.equal(clock.timers.size,0);
 });
 test('a background poll failure replaces preparation with the real error while retaining applied results',async()=>{
  const f=fixture(),clock=budgetClock(f);let run=f.page.load();f.pending.shift().resolve(data(4));await run;const previous=f.page.state.data;
