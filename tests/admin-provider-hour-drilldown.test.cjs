@@ -180,3 +180,25 @@ test('created hourly matrices preserve every AR/NEW_AR output, including optiona
   assert.equal(await scalar('select md5(prosrc) from pg_proc where oid='+liveOid),hash);
   assert.deepEqual(await fixture.acl(),originalAcl);
 });
+
+test('91CLUB keeps the raw matrix when its readiness proof is missing', {skip:!process.env.PROVIDER_HOUR_BASELINE},async()=>{
+  const countPath='supabase/migrations/20261113065354_provider_hour_created_counts.sql';
+  const mixedPath='supabase/migrations/20261113070929_provider_hour_91club_verified_charge.sql';
+  const undoPath='supabase/maintenance/provider-hour-91club-verified-charge.rollback.sql';
+  await db.exec(read(path.join(root,countPath)));
+  await db.exec("update ar_config_targets set platform='91CLUB' where platform='AR-BANDS';update ar_collected_orders set platform='91CLUB' where platform='AR-BANDS'");
+  const id=await scalar("select id from private.dashboard_admin_live_platforms() where name='91CLUB'");
+  const base=fixture.request('ar',{...fullHour,...marker,platformId:id,direction:'all',successBasis:'created'});
+  const variants=[{},{direction:'charge'},{direction:'withdraw'},{successBasis:undefined},{providers:['SelectedPay']},
+    {amountMin:55},{channelTypes:['BANK']},{providerHourMatrix:undefined}];
+  const previous=[];
+  for(const changes of variants)previous.push(stable(await fixture.drill({...base,...changes})));
+  const old=await scalar('select md5(prosrc) from pg_proc where oid='+liveOid);
+  await db.exec(read(path.join(root,mixedPath)));await db.exec(read(path.join(root,mixedPath)));
+  for(const [i,changes] of variants.entries())assert.deepEqual(stable(await fixture.drill({...base,...changes})),previous[i]);
+  await fixture.as('');try{await assert.rejects(fixture.drill(base),/login_required/);}
+  finally{await fixture.as('10000000-0000-0000-0000-000000000001');}
+  await db.exec(read(path.join(root,undoPath)));await db.exec(read(path.join(root,undoPath)));
+  assert.equal(await scalar('select md5(prosrc) from pg_proc where oid='+liveOid),old);
+  assert.deepEqual(await fixture.acl(),originalAcl);
+});
