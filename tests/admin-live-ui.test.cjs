@@ -498,6 +498,14 @@ test('matrix 24-hour totals preserve direction, currency, missing fields and dai
  h.L.direction='withdraw';r.withdrawSuccessTimeAvailable=false;h.c.render();assert.equal(totals()['成功笔数'],'— 笔');assert.equal(totals()['成功金额'],'—');
 });
 
+test('time and amount tables describe the returned success clock, even after a filter edit',async()=>{
+ const h=await ready({adaptive:true,statisticWindows:true}),r=completeAggregate();h.L.results=[r];h.L.view='business';h.L.loadedView='full';
+ for(const page of ['time','amount']){h.c.state.page=page;for(const [basis,note] of [['created','按创建日期选取已入库订单'],['success','成功按独立成功时间区间统计'],[undefined,'按已返回的统计口径展示']]){
+  r.successBasis=basis;h.L.successFrom='2026-09-18T00:00:00';h.L.successTo='2026-09-19T00:00:00';h.c.render();
+  assert(h.html().includes(note),page+': '+String(basis));assert(!h.html().includes('成功按成功时间；展开查看各平台占比'));
+ }}
+});
+
 test('standard matrix totals show the known partial subset ratio without changing facts, requests or completeness',async()=>{
  const peer={...P,id:'matrix-unreturned-peer',name:'Unreturned synthetic platform'},h=await ready({adaptive:true,statisticWindows:true,platforms:[P,peer]}),r=completeAggregate(P,95249,51519);
  r.complete=true;r._preparedPublication={computedAt:'2026-09-23T11:00:00Z',sourceComplete:false};r.groups.matrix_range=[{...r.summary[0],bucket:'band:0',hour:12}];h.L.results=[r];h.L.queryPlatforms=[P,peer];h.L.direction='charge';h.L.matrixMode='range';h.L.amountBandProfiles={charge:{edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]}};h.L.loadedView='full';
