@@ -60,3 +60,51 @@ test('native identity, window, split hourly/provider checks and main controls mu
     [main,creation,{...success,complete:false}]
   ]) assert.throws(()=>combine(query,m,a,b),/未对齐/);
 });
+const {closedIndiaDay,combineCreatedDay}=globalThis.HensemHourlyRateWindows;
+const localPlatform={id:'a',timezone:'Asia/Kolkata'};
+const closedQuery={platformId:'a',currency:'INR',direction:'all',status:'all',successBasis:'created',
+  startAt:date('08'),endAt:date('09'),providers:['Pay'],amountMin:100};
+const created=(all,success,hour,provider,direction='charge')=>({...row(all,success,hour,provider),
+  direction,created_success_count:success});
+const parent={platform:localPlatform,_preparedPublication:{status:'ready'},successBasis:'created',
+  startAt:closedQuery.startAt,endAt:closedQuery.endAt,summary:[created(3,2),created(5,2,undefined,undefined,'withdraw')],
+  groups:{hourly:[created(1,1,0),created(2,1,6),created(5,2,23,undefined,'withdraw')]}};
+function slices(){
+ return closedIndiaDay(closedQuery,parent,localPlatform).map((q,i)=>{
+  const hour=[0,6,12,23][i],all=[1,2,0,5][i],success=[1,1,0,2][i],direction=i===3?'withdraw':'charge';
+  return {platform:localPlatform,successBasis:'created',providerHourMatrix:true,complete:true,hasMore:false,
+   startAt:q.startAt,endAt:q.endAt,summary:all?[created(all,success,undefined,undefined,direction)]:[],
+   groups:{hourly:all?[created(all,success,hour,undefined,direction)]:[],
+    provider_hour:all?[created(all,success,hour,'Pay',direction)]:[]}};
+ });
+}
+test('exactly one closed India creation day, preserving native filters across four half-open six-hour windows',()=>{
+ const s=closedIndiaDay(closedQuery,parent,localPlatform);
+ assert.equal(s.length,4);assert.equal(Date.parse(s[0].startAt),Date.parse(closedQuery.startAt));
+ assert.equal(Date.parse(s[3].endAt),Date.parse(closedQuery.endAt));
+ for(let i=0;i<4;i++){
+  assert.deepEqual(s[i].providers,['Pay']);assert.equal(s[i].amountMin,100);assert.equal(s[i].successBasis,'created');
+  if(i)assert.equal(s[i-1].endAt,s[i].startAt);
+ }
+ for(const bad of [{currency:'USD'},{direction:'all',successStartAt:date('08')},{successBasis:'success'},
+   {status:'success'},{endAt:date('10')},{startAt:'2026-11-08T18:30:00.001Z'}])
+  assert.equal(closedIndiaDay({...closedQuery,...bad},parent,localPlatform),null);
+ assert.equal(closedIndiaDay(closedQuery,parent,localPlatform,Date.parse(closedQuery.endAt)-1),null);
+ assert.equal(closedIndiaDay(closedQuery,parent,{...localPlatform,timezone:'UTC'}),null);
+ assert.equal(closedIndiaDay(closedQuery,{...parent,_preparedPublication:undefined},localPlatform),null);
+ assert.equal(closedIndiaDay(closedQuery,{...parent,complete:false},localPlatform),null);
+});
+test('reconcile all three metrics per direction, currency and local hour before publishing; reject spillover or source drift',()=>{
+ const got=combineCreatedDay(closedQuery,parent,slices());
+ assert.deepEqual(got.summary,parent.summary);assert.equal(got.total,8);assert.equal(got.groups.provider_hour.length,3);
+ assert.deepEqual(got.groups.hourly,parent.groups.hourly);
+ for(const bad of [p=>p.pop(),p=>{p[2]=p[1]},p=>{p[0].groups.provider_hour.push(p[0].groups.provider_hour[0])},
+   p=>{p[0].groups.hourly[0].hour=7;p[0].groups.provider_hour[0].hour=7},p=>{p[1].summary[0].created_success_count=null},
+   p=>{p[2].complete=false},p=>{p[3].groups.provider_hour[0].currency='USD'},p=>{p[1].summary[0].success_count=0}]){
+  const parts=slices();bad(parts);assert.throws(()=>combineCreatedDay(closedQuery,parent,parts),/未对齐/);
+ }
+ const next=structuredClone(parent);next.summary[0]=created(3,3);
+ assert.throws(()=>combineCreatedDay(closedQuery,next,slices()),/未对齐/);
+ const changedHour=structuredClone(parent);changedHour.groups.hourly[0].hour=1;
+ assert.throws(()=>combineCreatedDay(closedQuery,changedHour,slices()),/未对齐/);
+});

@@ -46,20 +46,29 @@
   const targets=()=>c.platforms().filter(p=>(L.results||[]).some(r=>r.platform?.id===p.id&&r.pandaCoverage?.reason!=='verified_created_prefix_only'));
   async function load(retry=false){
    const s=state();if(!s||s.denied||!c.canDrill()||s.running||s.started&&!retry||L.loading||L.queryRetrying)return;
-   s.started=true;s.running=true;stopWatching();const list=targets().filter(p=>!s.values.has(p.id)),controller=new AbortController();s.controller=controller;
+   s.started=true;s.running=true;stopWatching();const list=targets().filter(p=>!s.values.has(p.id)).map(platform=>({platform})),controller=new AbortController();s.controller=controller;
    let idx=0;const work=async()=>{while(idx<list.length&&active(s)&&!controller.signal.aborted){
-    const platform=list[idx++];let result;
+    const {platform,slices}=list[idx++],windows=root.HensemHourlyRateWindows;
+    const main=(L.results||[]).find(r=>r.platform?.id===platform.id);
+    let result,base,requests;
     try{
-     const base=c.query(platform),windows=root.HensemHourlyRateWindows,requests=windows?windows.plan(base,matrixRequest):[matrixRequest(base)],parts=[];
+     base=c.query(platform);requests=slices||(windows?windows.plan(base,matrixRequest):[matrixRequest(base)]);
+     const parts=[];
      for(const q of requests){
       if(!active(s)||controller.signal.aborted)return;
       parts.push(verified(await c.request(q,{signal:controller.signal}),q));
      }
-     result=parts.length===1?parts[0]:windows.combine(base,(L.results||[]).find(r=>r.platform?.id===platform.id),parts[0],parts[1]);
+     result=slices?windows.combineCreatedDay(base,main,parts):parts.length===1?parts[0]:windows.combine(base,main,parts[0],parts[1]);
      if(active(s)&&!controller.signal.aborted){s.values.set(platform.id,{...result,platform:{...platform,...result.platform}});s.failures.delete(platform.id);}
     }catch(err){
      if(!active(s)||controller.signal.aborted)return;
      if(c.denied?.(err)){s.values.clear();s.denied=true;s.failures.clear();controller.abort();c.onDenied?.(err);break;}
+     // Do not hold up the other platforms. Only one server-confirmed whole-day
+     // timeout may append a recovery pass; its four calls share this worker slot.
+     if(!slices&&requests?.length===1&&err?.code==='57014'){
+      const recovery=windows?.closedIndiaDay(requests[0],main,platform);
+      if(recovery){list.push({platform,slices:recovery});continue;}
+     }
      s.failures.set(platform.id,{name:platform.name||platform.id,message:err?.message||'读取未完成'});
     }
     repaint(s);
