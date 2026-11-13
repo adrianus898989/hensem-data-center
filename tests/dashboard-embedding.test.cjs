@@ -6,13 +6,13 @@ vm.runInNewContext(compile('src/lib/dashboardEmbedding.ts'),{module:lib,exports:
 const {dashboardIsTopLevel}=lib.exports;
 const ownWindow=()=>{const w={};w.self=w;w.top=w;return w;};
 function fixture(win){
-  let value='checking';const effects=[],opened=[];
-  if(win){win.location={href:'https://dashboard.example.invalid/#admin/access'};win.open=(...args)=>opened.push(args);}
+  let value='checking';const effects=[],opened=[],events=[];
+  if(win){win.location={href:'https://dashboard.example.invalid/#admin/access'};win.open=(...args)=>opened.push(args);win.dispatchEvent=event=>{events.push(event.type);return true;};}
   const jsx=(type,props)=>({type,props}),react={useState:()=>[value,next=>{value=next;}],useEffect:effect=>effects.push(effect)};
   const module={exports:{}};
   const imports={'react':react,'react/jsx-runtime':{jsx,jsxs:jsx,Fragment:'fragment'},'@/lib/dashboardEmbedding':lib.exports};
-  vm.runInNewContext(compile('src/components/DashboardEmbeddingGuard.tsx'),{module,exports:module.exports,window:win,require:name=>{assert(name in imports,name);return imports[name];}});
-  return {render:child=>module.exports.default({children:child}),flush:()=>effects.splice(0).forEach(fn=>fn()),opened};
+  vm.runInNewContext(compile('src/components/DashboardEmbeddingGuard.tsx'),{module,exports:module.exports,window:win,Event,require:name=>{assert(name in imports,name);return imports[name];}});
+  return {render:child=>module.exports.default({children:child}),flush:()=>effects.splice(0).forEach(fn=>fn()),opened,events};
 }
 function nodes(node){return node&&typeof node==='object'?[node,...Object.values(node.props||{}).flatMap(value=>Array.isArray(value)?value.flatMap(nodes):nodes(value))]:[];}
 
@@ -33,7 +33,7 @@ test('SSR and the first client render do not mount login, saved-session restorat
 });
 test('a top-level application becomes usable only after the embedding check',()=>{
   const f=fixture(ownWindow()),child={type:'protected-auth',props:{}};
-  f.render(child);f.flush();assert.equal(f.render(child).props.children,child);
+  f.render(child);f.flush();assert.deepEqual(f.events,['hensem:entry-ready']);assert.equal(f.render(child).props.children,child);
 });
 test('same-origin and cross-origin parent frames never receive the authenticated UI',()=>{
   const top=ownWindow(),same=ownWindow();same.top=top;
@@ -69,5 +69,5 @@ test('old public Pages links redirect to the gated Worker before auth is mounted
  assert.equal(redirect('https://adrianus898989.github.io/hensem-data-center/?token=private#admin/access'),'https://data-center.workdesk-hub.workers.dev/hensem-data-center/#admin/access');
  for(const href of ['https://data-center.workdesk-hub.workers.dev/hensem-data-center/','https://evil.invalid/hensem-data-center/','https://adrianus898989.github.io/other/','https://adrianus898989.github.io/hensem-data-center-evil/','not a url'])assert.equal(redirect(href),null);
  const w=ownWindow(),f=fixture(w),child={type:'protected-auth',props:{}};let next='';w.location={href:'https://adrianus898989.github.io/hensem-data-center/#admin/ip',replace:url=>{next=url;}};
- f.render(child);f.flush();assert.equal(next,'https://data-center.workdesk-hub.workers.dev/hensem-data-center/#admin/ip');assert.equal(nodes(f.render(child)).some(n=>n===child),false);
+ f.render(child);f.flush();assert.deepEqual(f.events,['hensem:entry-ready']);assert.equal(next,'https://data-center.workdesk-hub.workers.dev/hensem-data-center/#admin/ip');assert.equal(nodes(f.render(child)).some(n=>n===child),false);
 });
