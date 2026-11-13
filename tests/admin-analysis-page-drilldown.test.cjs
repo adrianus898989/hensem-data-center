@@ -49,5 +49,5 @@ test('hourly keeps its checks and trend without requesting drilldown or extra da
 });
 
 test('compact wrapper is restricted to time and amount pages; absent shared module retains data table',()=>{
- const f=fixture({shared:false,groups:{hourly:[row({hour:9})]}}),html=f.render('time');assert.match(html,/240/);assert.match(html,/时段金额与状态/);assert.equal(f.calls.length,0);assert.equal(f.pagers.length,1);const orders=f.render('orders');assert.match(orders,/order details/);assert.doesNotMatch(orders,/analysis-compact/);assert.equal(f.render('unrelated-page'),null);
+ const f=fixture({shared:false,groups:{hourly:[row({hour:9})]}}),html=f.render('time');assert.match(html,/240/);assert.match(html,/时段金额与状态/);assert.match(html,/按已返回的统计口径展示成功金额和笔数/);assert.doesNotMatch(html,/成功按成功时间|含跨日成功/);assert.equal(f.calls.length,0);assert.equal(f.pagers.length,1);const orders=f.render('orders');assert.match(orders,/order details/);assert.doesNotMatch(orders,/analysis-compact/);assert.equal(f.render('unrelated-page'),null);
 });
