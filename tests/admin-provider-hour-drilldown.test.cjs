@@ -138,6 +138,26 @@ test('created hourly matrices preserve every AR/NEW_AR output, including optiona
   const undo=adapt(read(path.join(root,'supabase/maintenance/provider-hour-created-counts.rollback.sql')));
   await db.exec(change);await db.exec(change);
   for(const {query,baseline} of samples)assert.deepEqual(stable(await fixture.drill(query)),baseline);
+  // Exercise the actual authorized SQL, including orders exactly at each
+  // half-open boundary, before comparing the browser's recovered full day.
+  require('../admin-preview/live-hourly-rate-windows.js');
+  const {closedIndiaDay,combineCreatedDay}=globalThis.HensemHourlyRateWindows;
+  await db.exec('begin');
+  try{
+    for(const source of ['newar','ar']){
+      for(const stamp of ['00:00','05:59:59','06:00','12:00','18:00','23:59:59'])
+        await fixture.add(source,'charge','slice-'+stamp,8,{created:'2026-09-19 '+stamp,provider:'BoundaryPay'});
+      await fixture.add(source,'withdraw','next-midnight',8,{created:'2026-09-20 00:00',provider:'NextDayPay'});
+      const q=fixture.request(source,all),main=await fixture.drill(q),parts=[];
+      for(const window of closedIndiaDay(q,main,main.platform))parts.push(await fixture.drill(window));
+      const merged=combineCreatedDay(q,main,parts);
+      const ordered=rows=>[...rows].sort((a,b)=>JSON.stringify([a.direction,a.hour,a.provider])
+        .localeCompare(JSON.stringify([b.direction,b.hour,b.provider])));
+      for(const key of ['hourly','provider_hour'])assert.deepEqual(ordered(merged.groups[key]),ordered(main.groups[key]));
+      assert.equal(merged.groups.provider_hour.filter(r=>r.provider==='BoundaryPay').reduce((s,r)=>s+r.all_count,0),6);
+      assert.ok(!merged.groups.provider_hour.some(r=>r.provider==='NextDayPay'));
+    }
+  }finally{await db.exec('rollback');}
   await db.exec('begin');
   try{
     const definition=await scalar('select pg_get_functiondef('+liveOid+')');
