@@ -184,7 +184,7 @@
    if(!entry||![...entry.results.values()].every(providerReady))return {before:progress+failures+'<p class="analysis-status">'+(!entry?'点击三方展开读取此区间。':'三方区间汇总尚未完整返回，不能用主表三方数据推算。')+'</p>',headers:[],rows:[]};
    const grouped=new Map();for(const result of entry.results.values())for(const row of result.groups.provider){if(!dirs(s.segment).includes(row.direction)||row.currency&&row.currency!==L.currency)continue;const key=JSON.stringify([row.provider,row.direction,row.currency]);if(!grouped.has(key))grouped.set(key,{provider:row.provider,direction:row.direction,currency:row.currency,parts:[]});grouped.get(key).parts.push(row)}
    const rows=[...grouped.values()].map(row=>({...row,...totals(row.parts),_ready:complete})).sort((a,b)=>Number(b.success_amount||0)-Number(a.success_amount||0)||String(a.provider).localeCompare(String(b.provider)));
-   const grid=compactBusinessGrid(s,rows,'provider','business-provider');return {...grid,before:progress+failures+(!complete?'<p class="analysis-status">区间来源未收齐；占比暂不计算。</p>':''),after:'<p class="analysis-note">仅统计当前区间、方向、币种及授权平台。'+E(root.HensemLiveLayout.successBasisDescription(L).note)+'占比在来源完整后计算。</p>'};
+   const grid=compactBusinessGrid(s,rows,'provider','business-provider');return {...grid,before:progress+failures+(!complete?'<p class="analysis-status">区间来源未收齐；占比暂不计算。</p>':''),after:'<p class="analysis-note">仅统计当前区间、方向、币种及授权平台。'+E(root.HensemLiveLayout?.successBasisDescription?.(L)?.note??'按已返回的统计口径展示成功金额和笔数。')+'占比在来源完整后计算。</p>'};
   }
   function providerBody(s){const grid=providerGrid(s);return grid.before+(grid.headers.length?smallTable(grid.headers,grid.rows):'')+(grid.after||'')}
   function platformGrid(s,aligned=false){

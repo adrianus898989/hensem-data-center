@@ -6,7 +6,9 @@
  const {L,E,N,C,R,plus,combine,groupRows,empty,table,box,pager,totals,comparisonRows,compareMetric,chart,matrixBody,latencyView,detailsView,providersView,platformsView,pagedTable,feeForRow,ensureFeeLookup,providerCell}=c;
  if(window.hensemCurrentAdminPage?.()!=='merchants'||L.view!=='business')merchantProviderExpansions.delete(L);
  const dirs=()=>L.direction==='all'?['charge','withdraw']:[L.direction];
- const successBasisDescription=()=>window.HensemLiveLayout.successBasisDescription(L);
+ const successBasisDescription=()=>window.HensemLiveLayout?.successBasisDescription?.(L)??{
+  metricLabel:'已返回的成功统计口径',title:'当前已读范围的成功笔数 ÷ 全部笔数',suffix:'',note:'按已返回的统计口径展示成功金额和笔数。'
+ };
  const successBasisLabel=()=>successBasisDescription().metricLabel;
  const name=d=>d==='charge'?'代收':'代付';
  const feeMode=()=>L.feeEstimateMode==='historical'?'historical':'current';
