@@ -114,3 +114,49 @@ test('one platform matrix reads the native table once and a rollback restores th
   assert.deepEqual(await fixture.acl(),originalAcl);
   await db.exec(installed);
 });
+
+test('created hourly matrices preserve every AR/NEW_AR output, including optional filters, with a single native grouping',async()=>{
+  await db.exec(`alter table ar_collected_orders add column money_format_version smallint, add column amount_local numeric,
+    add column currency_local text, add column money_issue_code text;
+    create function private.dashboard_admin_ar_local_amount(text,text,text,smallint,numeric,text,text,numeric)
+      returns numeric language sql immutable as $$ select coalesce($5,$8) $$`);
+  const all = {...fullHour, ...marker,direction:'all',currency:'INR',successBasis:'created'};
+  const samples=[];
+  for(const source of ['ar','newar']){
+    for(const criteria of [{}, {direction:'withdraw'}, {providers:['Other']}, {providers:['unobserved']},
+        {amountMin:10,amountMax:20,amountMaxExclusive:true}, {amountMax:20},
+        {channelTypes:['BANK']}, {orderNumber:'first'}, {providerHourMatrix:undefined},
+        {successBasis:undefined}]){
+      const query=fixture.request(source,{...all,...criteria});
+      samples.push({query,baseline:stable(await fixture.drill(query))});
+    }
+  }
+  const hash=await scalar('select md5(prosrc) from pg_proc where oid='+liveOid);
+  const future='eccdf823c61341254a60396ab87735b3';
+  const adapt=sql=>hash===repositoryCandidate ? sql.replace(productionCandidate,repositoryCandidate).replace(future,'9682dfc5844a625fb45bd70625889538') : sql;
+  const change=adapt(read(path.join(root,'supabase/migrations/20261113065354_provider_hour_created_counts.sql')));
+  const undo=adapt(read(path.join(root,'supabase/maintenance/provider-hour-created-counts.rollback.sql')));
+  await db.exec(change);await db.exec(change);
+  for(const {query,baseline} of samples)assert.deepEqual(stable(await fixture.drill(query)),baseline);
+  await db.exec('begin');
+  try{
+    const definition=await scalar('select pg_get_functiondef('+liveOid+')');
+    await db.exec(definition.replace('STABLE SECURITY DEFINER','VOLATILE SECURITY DEFINER')
+      .replace('execute v_sql into v_result using',"execute 'explain (analyze,verbose,format json) '||v_sql into v_result using")
+      .replace("if p_request->>'successBasis'='created'then v_result:=", "return v_result; if p_request->>'successBasis'='created'then v_result:="));
+    for(const source of ['ar','newar']){
+      const explain=await fixture.drill(fixture.request(source,all));
+      const flatten=node=>[node,...(node.Plans||[]).flatMap(flatten)];
+      const plan=flatten(explain[0].Plan);
+      const native=plan.filter(p=>p['Relation Name']===(source==='ar'?'ar_collected_orders':'newar_detail_records'));
+      // Older AR fixtures contain a second, noncontributing success-window scan.
+      const scans=hash===repositoryCandidate&&source==='ar'?2:1;
+      assert.equal(native.reduce((n,scan)=>n+scan['Actual Loops'],0),scans);
+      assert.equal(plan.some(p=>p['CTE Name']==='orders'),false);
+      assert.doesNotMatch(JSON.stringify(plan),/dashboard_admin_ar_local_amount/);
+    }
+  }finally{await db.exec('rollback');}
+  await db.exec(undo);await db.exec(undo);
+  assert.equal(await scalar('select md5(prosrc) from pg_proc where oid='+liveOid),hash);
+  assert.deepEqual(await fixture.acl(),originalAcl);
+});
