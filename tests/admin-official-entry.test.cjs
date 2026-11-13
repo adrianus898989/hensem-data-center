@@ -49,7 +49,10 @@ test('only the formal component is exported; legacy sidebar and reader hooks are
  assert.match(dashboard,/export \{ default \} from "\.\/OfficialDashboard"/);
  assert(!/export default function Dashboard/.test(dashboard));
  assert(!fs.readFileSync(path.join(repo,'src/components/OfficialDashboard.tsx'),'utf8').includes('LegacyDashboard'));
- const entry=fs.readFileSync(path.join(repo,'src/app/page.tsx'),'utf8');assert.match(entry,/import OfficialDashboard from "@\/components\/OfficialDashboard"/);assert.doesNotMatch(entry,/components\/Dashboard"/);
+ const entry=fs.readFileSync(path.join(repo,'src/app/page.tsx'),'utf8');assert.match(entry,/<DashboardAuthGate><DeferredOfficialDashboard \/><\/DashboardAuthGate>/);
+ const deferred=fs.readFileSync(path.join(repo,'src/components/DeferredOfficialDashboard.tsx'),'utf8');
+ assert.match(deferred,/import\("\.\/OfficialDashboard"\)/);
+ assert.doesNotMatch(entry,/from "@\/components\/(?:Dashboard|OfficialDashboard)"/);
  const h=harness({role:'owner'});assert(h.frame());assert.equal(h.location.hash,'#admin/overview');assert.equal(h.requests.length,0);assert.equal(h.frame().props.canView,true);h.dispose();
 });
 test('an active viewer delegates one initial authorization chain to the preview and retains its bookmarked page',()=>{
@@ -145,4 +148,40 @@ test('body deadline diagnoses its phase and cancellation ignores late private HT
 test('changing accounts while protected HTML is pending never mounts the old document',async()=>{
  const old=deferred();const h=previewHarness({preview:async s=>({text:()=>s.user.id==='account-a'?old.promise:Promise.resolve('<html>account-b</html>')})});
  try{await flush();const oldSignal=h.calls.at(-1).signal;h.setProps({session:{user:{id:'account-b'},access_token:'new'},profile:{active:true,role:'viewer',auth_user_id:'account-b'}});await flush();assert(oldSignal.aborted);assert.equal(h.frame().props.srcDoc,'<html>account-b</html>');old.resolve('<html>old-account</html>');await flush();assert.equal(h.frame().props.srcDoc,'<html>account-b</html>');assert.equal(h.warnings.length,0);}finally{h.dispose()}
+});
+
+test('post-login report module loads once per mount, renders late success, and offers a full reload on failure',async()=>{
+ const deferredSource=compile('src/components/DeferredOfficialDashboard.tsx');
+ for(const outcome of ['success','failure','unmount']){
+  const load=deferred(),slots=[],effects=[],timers=new Map();let cursor=0,reads=0,reloads=0;
+  const react={
+   useState(initial){const i=cursor++;if(!(i in slots))slots[i]=initial;
+    return [slots[i],next=>{slots[i]=typeof next==='function'?next(slots[i]):next}];},
+   useEffect(fn){const i=cursor++;if(!(i in slots)){slots[i]=true;effects.push(fn);}},
+  };
+  const win={setTimeout(fn,ms){timers.set(1,{fn,ms});return 1},clearTimeout(id){timers.delete(id)},
+   location:{reload(){reloads++;}}};
+  const lib={exports:{}},jsx=(type,props)=>({type,props});
+  vm.runInNewContext(deferredSource,{module:lib,exports:lib.exports,window:win,require:name=>{
+   if(name==='react')return react;
+   if(name==='react/jsx-runtime')return {jsx,jsxs:jsx};
+   assert.equal(name,'./OfficialDashboard');reads++;return load.promise;
+  }});
+  const render=()=>{cursor=0;return lib.exports.default();};
+  const button=tree=>tree?.props?.children?.props?.children?.find(n=>n?.type==='button');
+  assert.equal(button(render()),undefined);assert.equal(reads,0);
+  const cleanup=effects.shift()();await flush();assert.equal(reads,1);
+  const Report=()=>null;
+  if(outcome==='unmount'){
+   cleanup();assert.equal(timers.size,0);
+   load.resolve({default:Report});await flush();assert.notEqual(render().type,Report);
+  }else if(outcome==='success'){
+   const timeout=timers.get(1);assert.ok(timeout.ms>0);timeout.fn();assert.ok(button(render()));
+   load.resolve({default:Report});await flush();assert.equal(render().type,Report);
+  }else{
+   load.reject(Error('chunk unavailable'));await flush();const retry=button(render());assert.ok(retry);
+   retry.props.onClick();assert.equal(reloads,1);
+  }
+  assert.equal(timers.size,0);assert.equal(reads,1);
+ }
 });
