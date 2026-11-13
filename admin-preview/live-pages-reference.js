@@ -206,7 +206,7 @@
     L.tablePages=L.tablePages||{};L.tableSizes=L.tableSizes||{};const size=L.tableSizes[id]||20,page=Math.min(L.tablePages[id]||1,Math.max(1,Math.ceil(rows.length/size)));L.tablePages[id]=page;
     bodyTable=c.analysis.table({id,headers,aligned:false,rows:sorted.rows.slice((page-1)*size,page*size),cells,segment:r=>({kind:groupKind,direction:r.direction,...(time?{hour:Number(r.hour)}:{bucket:String(r.bucket)})}),label})+pager(rows.length,page,size,'ref-'+id);
    }else bodyTable=pageTable(id,headers,sorted.rows.map(cells));
-   body=box(items[0][1],bodyTable,(time?'每小时 · 各平台当地时间':'金额 '+E(L.currency)+(L.matrixMode==='range'?' · 10档；下限含、上限不含，最后一档含上限':' · 精确金额'))+'；全部按创建时间，成功按成功时间；展开查看各平台占比'+(String(L.from||'').slice(0,10)!==String(L.to||'').slice(0,10)?'与每日对比':''),tools);
+   body=box(items[0][1],bodyTable,(time?'每小时 · 各平台当地时间':'金额 '+E(L.currency)+(L.matrixMode==='range'?' · 10档；下限含、上限不含，最后一档含上限':' · 精确金额'))+'；'+E(successBasisDescription().note)+'展开查看各平台占比'+(String(L.from||'').slice(0,10)!==String(L.to||'').slice(0,10)?'与每日对比':''),tools);
    body+=c.hourlyRates?.html()||'';
   }
   if(L.view!=='business')c.hourlyRates?.cancel();
