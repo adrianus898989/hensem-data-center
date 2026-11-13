@@ -40,7 +40,7 @@ test('amount tables use the selected group with raw labels for drilldown and esc
 });
 
 test('amount restores its retired checks and trend views to the original distribution',()=>{
- for(const view of ['business','checks','trend']){
+ for(const view of ['business','checks','trend','hourly-provider','hourly-merchant']){
   const f=fixture({view,groups:{amount:[row({bucket:'<img src=x>'})]}}),html=f.render('amount');
   assert.equal(f.L.view,'business');assert.equal(f.calls.length,1);assert.match(html,/金额分布与订单状态/);assert.match(html,/&lt;img src=x&gt;/);assert.doesNotMatch(html,/金额档位费用与核对|全部订单金额结构|掉单金额|live-reference-bar|<img src=x>/);assert.deepEqual(f.groupCalls,['amount']);
  }
@@ -54,11 +54,12 @@ test('compact wrapper is restricted to time and amount pages; absent shared modu
  const f=fixture({shared:false,groups:{hourly:[row({hour:9})]}}),html=f.render('time');assert.match(html,/240/);assert.match(html,/时段金额与状态/);assert.match(html,/按已返回的统计口径展示成功金额和笔数/);assert.doesNotMatch(html,/成功按成功时间|含跨日成功/);assert.equal(f.calls.length,0);assert.equal(f.pagers.length,1);const orders=f.render('orders');assert.match(orders,/order details/);assert.doesNotMatch(orders,/analysis-compact/);assert.equal(f.render('unrelated-page'),null);
 });
 
-test('time and amount place both hourly views in the KPI tab bar and build only the selected content',()=>{
+test('time and amount place their own two matrix views in the KPI tab bar and build only the selected content',()=>{
  for(const page of ['time','amount']){
   const f=fixture(),business=f.render(page);
   const views=page==='time'?['business','checks','trend']:['business'];
-  const allViews=[...views,'hourly-provider','hourly-merchant'];
+  const matrices=page==='time'?['hourly-provider','hourly-merchant']:['amount-provider','amount-merchant'];
+  const allViews=[...views,...matrices];
   for(const view of allViews){
    f.L.view=view;const before=f.groupCalls.length,html=f.render(page);
    const nav=html.match(/<aside>totals<\/aside><div class="section-switcher"><div class="tabs">(.*?)<\/div><\/div>/)?.[1];
@@ -66,7 +67,7 @@ test('time and amount place both hourly views in the KPI tab bar and build only 
    const buttons=Array.from(nav.matchAll(/<button class="(on|)" onclick="liveReferenceSet\('view','([^']+)'\)">/g));
    assert.deepEqual(buttons.map(match=>match[2]),allViews);
    assert.deepEqual(buttons.filter(match=>match[1]==='on').map(match=>match[2]),[view]);
-   if(view.startsWith('hourly-')){
+   if(matrices.includes(view)){
     assert.deepEqual(Array.from(html.matchAll(/data-fixture-matrix="([^"]+)"/g),match=>match[1]),[view]);
     assert.equal(f.groupCalls.length,before);
     assert.doesNotMatch(html,/<table|<figure|data-custom-page/);

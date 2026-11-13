@@ -19,7 +19,7 @@ const rows = [
   {name: 'Equal', cells: {'00': pair(1, 2)}, total: pair(1, 2)}
 ];
 const matrix = {columns, rows, partial: true};
-const model = {direction: 'charge', provider: matrix, merchant: {...matrix, partial: false}};
+const model = {dimension: 'time', direction: 'charge', provider: matrix, merchant: {...matrix, partial: false}};
 const rowOrder = html => Array.from(html.matchAll(/<th scope="row" title="([^"]+)"/g), m => m[1]);
 function matrixHtml(ui, model, page, kind) {
   const html = ui.render(model, page, kind);
@@ -60,7 +60,7 @@ test('clicking total changes only this table, keeps unknown rates last, and pres
   assert.equal(arrow.textContent, '↑');
   assert.deepEqual(rowOrder(matrixHtml(ui, model, 'time', 'provider')), ['Weighted', 'Mid', 'Equal', 'None']);
   assert.deepEqual(rowOrder(matrixHtml(ui, model, 'time', 'merchant')), ['Mid', 'Equal', 'Weighted', 'None']);
-  assert.match(matrixHtml(ui, model, 'amount', 'provider'), /aria-sort="descending"/);
+  assert.match(matrixHtml(ui, {...model, dimension: 'amount'}, 'amount', 'provider'), /aria-sort="descending"/);
   assert.match(matrixHtml(ui, {...model, direction: 'withdraw'}, 'time', 'provider'), /aria-sort="descending"/);
   ui.toggleSort(button);
   assert.equal(attrs['aria-sort'], 'descending');
@@ -69,12 +69,15 @@ test('clicking total changes only this table, keeps unknown rates last, and pres
 
 test('uses text for source labels and preserves a missing source as incomplete', () => {
   const record = {name: '<img>', type: '<type>', cells: {}, total: null};
-  const ui = renderer(), data = {...model, provider: {...matrix, rows: [record]}, merchant: {...matrix, rows: []}};
+  const ui = renderer(), data = {...model, dimension: 'amount', provider: {...matrix, rows: [record]}, merchant: {...matrix, rows: []}};
   const html = matrixHtml(ui, data, 'amount', 'provider');
   assert.match(html, /&lt;img&gt;/);
   assert.match(html, /&lt;type&gt;/);
   assert.doesNotMatch(html, /<img>|<type>/);
-  assert.match(matrixHtml(ui, data, 'amount', 'merchant'), /暂无可核验的分时数据/);
+  const empty = matrixHtml(ui, data, 'amount', 'merchant');
+  assert.match(empty, /商户分金额段成功率/);
+  assert.match(empty, /暂无可核验的分金额段数据/);
+  assert.doesNotMatch(empty, /分时/);
 });
 
 test('provider scope disclosure identifies extra merchant groups and safely displays their names', () => {

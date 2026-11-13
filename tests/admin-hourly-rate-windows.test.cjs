@@ -108,3 +108,52 @@ test('reconcile all three metrics per direction, currency and local hour before 
  const changedHour=structuredClone(parent);changedHour.groups.hourly[0].hour=1;
  assert.throws(()=>combineCreatedDay(closedQuery,changedHour,slices()),/未对齐/);
 });
+
+const amountBands = {charge:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]};
+const band = (total, success, bucket, provider) => ({
+  ...row(total, success), ...(bucket===undefined?{}:{bucket}), ...(provider===undefined?{}:{provider})
+});
+const amountQuery = {...query, providerAmountMatrix:true, amountBands};
+function amountLeg(startAt,endAt,total,success,bucket,provider) {
+  return {platform:{id:'a'},startAt,endAt,complete:true,hasMore:false,providerAmountMatrix:true,amountBands,
+    summary:[band(total,success)],groups:{amount_range:[band(total,success,bucket)],
+      provider_amount_range:[band(total,success,bucket,provider)],provider:[band(total,success,undefined,provider)]}};
+}
+test('separate creation and success dates join by amount and provider including a success-only bucket',()=>{
+  const a=amountLeg(query.startAt,query.endAt,2,40,'band:0','Pay');
+  const b=amountLeg(query.successStartAt,query.successEndAt,900,5,'above','Pay');
+  const aggregate={...main,amountBands,groups:{amount_range:[band(2,0,'band:0'),band(0,5,'above')],provider:[band(2,5,undefined,'Pay')]}};
+  const merged=combine(amountQuery,aggregate,a,b);
+  assert.equal(merged.providerAmountMatrix,true);assert.equal(merged.providerHourMatrix,undefined);
+  assert.deepEqual(merged.groups.amount_range,aggregate.groups.amount_range);
+  assert.deepEqual(merged.groups.provider_amount_range,[band(2,0,'band:0','Pay'),band(0,5,'above','Pay')]);
+  const {verifyAmount}=globalThis.HensemHourlyRateWindows;
+  assert.doesNotThrow(()=>verifyAmount(amountQuery,aggregate,merged));
+  for(const broken of [
+    {...merged,groups:{...merged.groups,provider_amount_range:[band(2,0,'band:1','Pay'),band(0,5,'above','Pay')]}},
+    {...merged,groups:{...merged.groups,provider_amount_range:[band(2,0,'band:0','Unrelated'),band(0,5,'above','Unrelated')]}},
+    {...merged,amountBands:{charge:[100,250,...amountBands.charge.slice(2)]}}
+  ]) assert.throws(()=>verifyAmount(amountQuery,aggregate,broken));
+  assert.throws(()=>combine(amountQuery,aggregate,a,{...b,amountBands:{charge:[200,300,...amountBands.charge.slice(2)]}}));
+});
+
+test('recovery sums the same provider and bucket across four disjoint slices and checks both direction totals',()=>{
+  const q={...closedQuery,providerAmountMatrix:true,amountBands:{charge:amountBands.charge,withdraw:amountBands.charge}};
+  const main={...parent,amountBands:q.amountBands,summary:[created(4,2),created(2,2,undefined,undefined,'withdraw')],
+    groups:{amount_range:[{...created(4,2),bucket:'band:0'},{...created(2,2,undefined,undefined,'withdraw'),bucket:'above'}]}};
+  const parts=closedIndiaDay(q,main,localPlatform).map((slice,i)=>{
+    const direction=i===3?'withdraw':'charge',n=[1,2,1,2][i],s=[1,0,1,2][i],bucket=i===3?'above':'band:0';
+    const summary=created(n,s,undefined,undefined,direction);
+    return {platform:localPlatform,providerAmountMatrix:true,amountBands:q.amountBands,
+      startAt:slice.startAt,endAt:slice.endAt,successBasis:'created',complete:true,hasMore:false,
+      summary:[summary],groups:{amount_range:[{...summary,bucket}],provider_amount_range:[{...summary,bucket,provider:'Pay'}]}};
+  });
+  const merged=combineCreatedDay(q,main,parts);
+  assert.deepEqual(merged.groups.amount_range,main.groups.amount_range);
+  assert.deepEqual(merged.groups.provider_amount_range,main.groups.amount_range.map(r=>({...r,provider:'Pay'})));
+  for(const broken of [
+    {...parts[2],complete:false},
+    {...parts[2],amountBands:{...q.amountBands,charge:[100,250,...amountBands.charge.slice(2)]}},
+    {...parts[2],groups:{...parts[2].groups,provider_amount_range:[]}}
+  ]) assert.throws(()=>combineCreatedDay(q,main,[parts[0],parts[1],broken,parts[3]]));
+});
