@@ -24,7 +24,7 @@ function fixture({page, platforms}) {
     HENSEM_PRODUCTION: true, hensemRoleAllowed: () => true,
     hensemRoleAccess: {mode: 'owner', roleId: 'test-owner', version: 1, canView: true},
     hensemAdminInitialPage: page, hensemAdminPageUrl: key => 'https://fixture.test/#' + key,
-    fixtureCalls: []
+    fixtureCalls: [], holdMatrix: false, heldMatrices: []
   });
   const row = (direction, total, success) => ({
     currency: 'INR', direction, all_count: total, success_count: success, created_success_count: success,
@@ -51,7 +51,10 @@ function fixture({page, platforms}) {
     fixtureCalls.push(q);
     if (q.action === 'catalog') return {platforms};
     if (q.action === 'providerOptions') return {providers: ['示例三方 A', '示例三方 B']};
-    if (q.action === 'aggregate') return result(q);
+    if (q.action === 'aggregate') {
+      if (q.providerHourMatrix && window.holdMatrix) await new Promise(resolve => heldMatrices.push(resolve));
+      return result(q);
+    }
     if (q.action === 'aggregatePrepared') return {version: q.publicationVersion || 1, ...(q.readMode ? {readMode: q.readMode} : {}), items: q.requests.map(r => ({request: r, status: 'ready',
       publication: {id: 'fixture', generation: 1, computedAt: new Date().toISOString(), cutoff: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 540000).toISOString(), freshness: 'fresh', refreshState: 'idle', calculationComplete: true, sourceComplete: false}, result: result(r)}))};
@@ -92,41 +95,104 @@ async function inspect(browser, key, width) {
       }, day);
     };
     await queryDay('2026-11-09');
-    const region = page.locator('[data-hourly-rate-region]');
-    await region.waitFor({timeout: 5000});
-    await region.scrollIntoViewIfNeeded();
-    const provider = d => region.locator('[data-band-matrix="' + key + '/' + d + '/provider"]');
-    const merchant = d => region.locator('[data-band-matrix="' + key + '/' + d + '/merchant"]');
-    const main = page.locator('.analysis-compact > .panel').filter({has: page.locator('.live-pager')}).last();
-    const original = await main.locator('tbody').first().innerText();
-    await provider('charge').getByText('示例三方 B', {exact: true}).waitFor({timeout: 8000});
+    const compact = page.locator('.analysis-compact');
+    const nav = compact.locator(':scope > .section-switcher').first();
+    const tab = view => nav.locator('button').filter({hasText: {
+      business: key === 'time' ? '时段金额与状态' : '金额分布与订单状态',
+      'hourly-provider': '三方分时成功率', 'hourly-merchant': '商户分时成功率',
+      checks: '时段费用与核对', trend: '24 小时订单趋势'
+    }[view]});
+    const region = compact.locator('[data-hourly-rate-region]');
+    const matrix = (kind, direction) => region.locator('[data-band-matrix="' + key + '/' + direction + '/' + kind + '"]');
+    const provider = d => matrix('provider', d), merchant = d => matrix('merchant', d);
     const rows = el => el.locator('th[scope=row]').allTextContents();
+    const rpcCount = () => page.evaluate(() => fixtureCalls.filter(q => q.providerHourMatrix).length);
+    const main = compact.locator(':scope > .panel').filter({has: page.locator('.live-pager')}).last();
+    const expectedHours = Array.from({length: 24}, (_, hour) => {
+      const h = String(hour).padStart(2, '0');
+      return h + ':00–' + h + ':59';
+    });
+    async function select(view) {
+      await tab(view).click();
+      assert.equal(await nav.locator('button.on').textContent(), await tab(view).textContent());
+      assert.equal(await page.evaluate(() => adminLive.view), view);
+    }
+    async function inspectActive(kind, direction) {
+      assert.equal(await compact.locator('[data-band-matrix]').count(), 1);
+      assert.equal(await main.count(), 0);
+      const table = matrix(kind, direction);
+      assert.deepEqual(await table.locator('thead .band-success-slot').allTextContents(), expectedHours);
+      assert.equal(await table.locator('thead .success-provider-type').count(), kind === 'provider' ? 1 : 0);
+      assert.equal(await table.locator('tbody tr').first().locator('th,td').count(), expectedHours.length + (kind === 'provider' ? 3 : 2));
+      return table;
+    }
+    const navLabels = await nav.locator('button').allTextContents();
+    for (const view of key === 'time' ? ['business', 'checks', 'trend', 'hourly-provider', 'hourly-merchant'] :
+      ['business', 'hourly-provider', 'hourly-merchant']) assert.equal(await tab(view).count(), 1, navLabels.join(' / '));
+    assert.equal(navLabels.length, key === 'time' ? 5 : 3);
+    assert.equal(await nav.evaluate(el => el.previousElementSibling?.classList.contains('live-reference-totals')), true);
+    assert.equal(await region.count(), 0);
+    const mainRpcCount = () => page.evaluate(() => fixtureCalls.filter(q =>
+      (q.action === 'aggregate' && !q.providerHourMatrix) || q.action === 'aggregatePrepared').length);
+    const original = await main.locator('tbody').first().innerText();
+    const baseReads = await mainRpcCount();
+    assert.equal(await rpcCount(), 0);
+    await select('hourly-merchant');
+    await merchant('charge').getByText('示例商户 B', {exact: true}).waitFor();
+    await inspectActive('merchant', 'charge');
+    assert.deepEqual(await rows(merchant('charge')), ['示例商户 A', '示例商户 B']);
+    assert.deepEqual(await merchant('charge').locator('tbody td.success-total-rate').allTextContents(), ['46.67%', '26.67%']);
+    const merchantSort = merchant('charge').getByRole('button', {name: /总成功率/});
+    await merchantSort.click();
+    assert.deepEqual(await rows(merchant('charge')), ['示例商户 B', '示例商户 A']);
+    await merchantSort.click();
+    assert.deepEqual(await rows(merchant('charge')), ['示例商户 A', '示例商户 B']);
+    assert.equal(await rpcCount(), 0, 'The main query already returned complete merchant hours');
+
+    // Delay the two source reads across a provider → merchant → provider switch.
+    await page.evaluate(() => {window.holdMatrix = true;});
+    await select('hourly-provider');
+    await page.waitForFunction(() => heldMatrices.length === 2);
+    await select('hourly-merchant');
+    await inspectActive('merchant', 'charge');
+    await select('hourly-provider');
+    assert.equal(await rpcCount(), 2);
+    await page.evaluate(() => {window.holdMatrix = false; heldMatrices.splice(0).forEach(resolve => resolve());});
+    await provider('charge').getByText('示例三方 B', {exact: true}).waitFor({timeout: 8000});
+    await inspectActive('provider', 'charge');
     assert.deepEqual(await rows(provider('charge')), ['示例三方 A', '示例三方 B']);
     assert.deepEqual(await provider('charge').locator('tbody .success-provider-type').allTextContents(), ['跑分', '钱包']);
-    const beforeMerchant = await rows(merchant('charge'));
     const total = provider('charge').getByRole('button', {name: /总成功率/});
     await total.focus(); await page.keyboard.press('Enter');
     assert.deepEqual(await rows(provider('charge')), ['示例三方 B', '示例三方 A']);
-    assert.deepEqual(await rows(merchant('charge')), beforeMerchant);
-    assert.equal(await provider('charge').locator('.band-success-slot').count(), 24);
     assert.equal(await provider('charge').locator('tbody td.success-total-rate').first().innerText(), '15.00%');
-    const markupOrder = await page.locator('.analysis-compact').evaluate(el => {
-      const pager = el.querySelector('.live-pager'), groups = el.querySelectorAll('[data-band-matrix]');
-      return groups.length === 2 && !!(pager.compareDocumentPosition(groups[0]) & Node.DOCUMENT_POSITION_FOLLOWING) &&
-        !!(groups[0].compareDocumentPosition(groups[1]) & Node.DOCUMENT_POSITION_FOLLOWING);
-    });
-    assert.equal(markupOrder, true);
-    assert.equal(await main.locator('tbody').first().innerText(), original);
-    const rpcCount = () => page.evaluate(() => fixtureCalls.filter(q => q.providerHourMatrix).length);
-    assert.equal(await rpcCount(), 2);
+    await total.click();
+    assert.deepEqual(await rows(provider('charge')), ['示例三方 A', '示例三方 B']);
     await region.getByRole('button', {name: '代付', exact: true}).click();
     assert.deepEqual(await rows(provider('withdraw')), ['示例三方 B', '示例三方 A']);
+    await select('hourly-merchant');
+    assert.deepEqual(await rows(merchant('withdraw')), ['示例商户 A', '示例商户 B']);
+    await inspectActive('merchant', 'withdraw');
+    assert.equal(await rpcCount(), 2);
+    await select('business');
+    assert.equal(await region.count(), 0);
     assert.equal(await main.locator('tbody').first().innerText(), original);
-    // The real pager changes only the original table. Use a small size so both pages have a second page.
     await page.evaluate(() => {adminLive.tableSizes['analysis-state'] = 5; livePage(1, 'ref-analysis-state');});
     const shortFirst = await main.locator('tbody').first().innerText();
     await main.getByRole('button', {name: '下一页', exact: true}).click();
-    assert.notEqual(await main.locator('tbody').first().innerText(), shortFirst);
+    const second = await main.locator('tbody').first().innerText();
+    assert.notEqual(second, shortFirst);
+    if (key === 'time') {
+      for (const view of ['checks', 'trend']) {
+        await select(view);
+        assert.equal(await region.count(), 0);
+        if (view === 'checks') assert.ok(await compact.getByText('掉单金额', {exact: true}).count());
+        if (view === 'trend') assert.ok(await compact.getByRole('heading', {name: /24 小时订单趋势/}).count());
+      }
+    }
+    await select('hourly-provider');
+    const directionButton = region.getByRole('button', {name: '代付', exact: true});
+    await directionButton.click();
     assert.deepEqual(await rows(provider('withdraw')), ['示例三方 B', '示例三方 A']);
     assert.equal(await rpcCount(), 2);
     const display = await provider('withdraw').locator('[role=region]').evaluate(el => {
@@ -157,8 +223,13 @@ async function inspect(browser, key, width) {
       await region.scrollIntoViewIfNeeded();
       await region.screenshot({path: path.join(evidence, key + '-' + width + '.png')});
     }
+    await select('business');
+    assert.equal(await main.locator('tbody').first().innerText(), second);
+    assert.equal(await mainRpcCount(), baseReads, 'Tab switches, local pagination, direction and sorting did not rerun the primary query');
     await queryDay('2026-11-10');
-    await region.scrollIntoViewIfNeeded();
+    assert.equal(await region.count(), 0);
+    assert.equal(await rpcCount(), 2);
+    await select('hourly-provider');
     await provider('charge').getByText('示例三方 B', {exact: true}).waitFor({timeout: 8000});
     assert.equal(await rpcCount(), 4);
     assert.equal(await page.evaluate(() => new Set(fixtureCalls.filter(q => q.providerHourMatrix).map(q => q.startAt)).size), 2);

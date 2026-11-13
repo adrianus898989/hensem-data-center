@@ -1,4 +1,4 @@
-/* Render the two matrices from the counts already loaded for the current view. */
+/* Render the selected matrix from the counts already loaded for the current view. */
 (function () {
   'use strict';
 
@@ -89,10 +89,10 @@
       sortHeading(descending) + '</tr></thead><tbody>' + (body || empty) + '</tbody></table></div>' + excluded + '</section>';
   }
 
-  function render(model, page) {
-    if (!model || !Object.hasOwn(directions, model.direction) || (page !== 'time' && page !== 'amount')) return '';
+  function render(model, page, kind) {
+    if (!model || !Object.hasOwn(kinds, kind) || !Object.hasOwn(directions, model.direction) || (page !== 'time' && page !== 'amount')) return '';
     return '<div class="live-success-analysis band-success-matrices">' +
-      Object.keys(kinds).map(kind => renderMatrix(model[kind], kind, model.direction, page)).join('') + '</div>';
+      renderMatrix(model[kind], kind, model.direction, page) + '</div>';
   }
 
   function toggleSort(button) {

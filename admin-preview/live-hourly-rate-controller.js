@@ -25,13 +25,18 @@
   return r;
  }
  function create(c){
-  const {L,E}=c;let current=null,observer=null,watchToken=0,observed=null,paint=null;
-  const enabled=()=>['time','amount'].includes(c.page())&&L.view==='business'&&L.pageQueried&&!L.dirty&&!L.error&&c.allowed();
-  const scope=()=>JSON.stringify([c.page(),c.access(),c.canDrill(),L.serial,L.queryScope,L.queryNow,L.direction,L.status,L.currency,L.from,L.to,L.successFrom,L.successTo,L.successBasis,c.platforms().map(p=>[p.id,p.source,p.sourceName,p.currency,p.timezone]),(L.results||[]).map(r=>[r.platform?.id,r._preparedPublication?.id,r._preparedPublication?.generation,r._aggregateReadAt])]);
-  const stopWatching=()=>{watchToken++;observer?.disconnect();observer=null;observed=null;};
-  function cancel(){stopWatching();if(paint!==null){clearTimeout(paint);paint=null;}const old=current;current=null;old?.controller?.abort();}
+  const {L,E}=c;let current=null,paint=null;
+  const kind=()=>L.view==='hourly-provider'?'provider':L.view==='hourly-merchant'?'merchant':null;
+  const enabled=()=>['time','amount'].includes(c.page())&&kind()&&L.pageQueried&&!L.dirty&&!L.error&&c.allowed();
+  const scope=()=>JSON.stringify([c.page(),c.access(),c.canDrill(),L.serial,L.queryScope,L.queryNow,L.direction,L.status,L.currency,L.from,L.to,L.successFrom,L.successTo,L.successBasis,c.platforms().map(p=>[p.id,p.source,p.sourceName,p.country,p.currency,p.timezone]),(L.results||[]).map(r=>[r.platform?.id,r._preparedPublication?.id,r._preparedPublication?.generation,r._aggregateReadAt])]);
+  function pause(){
+   if(paint!==null){clearTimeout(paint);paint=null;}
+   if(!current)return;
+   current.queued=false;current.controller?.abort();current.controller=null;
+  }
+  function cancel(){pause();current=null;}
   function active(s){return !!s&&s===current&&enabled()&&scope()===s.key;}
-  function state(){if(!enabled()){cancel();return null;}const key=scope();if(!current||current.key!==key){cancel();current={key,values:new Map(),failures:new Map(),started:false,running:false,direction:L.direction==='withdraw'?'withdraw':'charge'};}return current;}
+  function state(){if(!enabled()){cancel();return null;}const key=scope();if(!current||current.key!==key){cancel();current={key,values:new Map(),failures:new Map(),direction:L.direction==='withdraw'?'withdraw':'charge'};}return current;}
   function updatePanel(s){
    if(!active(s))return;
    const node=root.document?.querySelector('[data-hourly-rate-region]');if(!node){c.render();return;}
@@ -43,10 +48,23 @@
    if(sortFocus>=0)next.querySelectorAll('.band-success-sort')[sortFocus]?.focus({preventScroll:true});
   }
   function repaint(s){if(paint===null)paint=setTimeout(()=>{paint=null;updatePanel(s);},100);}
-  const targets=()=>c.platforms().filter(p=>(L.results||[]).some(r=>r.platform?.id===p.id&&r.pandaCoverage?.reason!=='verified_created_prefix_only'));
+  function modelFor(s){
+   const platforms=c.platforms(),main=new Map((L.results||[]).map(r=>[r.platform?.id,r]));
+   const results=platforms.map(p=>s.values.get(p.id)||main.get(p.id)).filter(Boolean);
+   const providerHours=kind()==='provider'?new Map([...s.values].map(([id,r])=>[id,{complete:true,rows:r.groups.provider_hour}])):new Map();
+   return root.HensemHourlyRateData.build({platforms,results,providerHours,direction:s.direction,currency:L.currency,successAvailable:(platform,r,d)=>c.successAvailable?.(platform,r,d)!==false&&c.successAvailable?.(platform,main.get(platform.id),d)!==false,providerType:kind()==='provider'?c.providerTypes?.(s.direction):undefined});
+  }
+  function targets(s,model){
+   const main=new Map((L.results||[]).map(r=>[r.platform?.id,r]));
+   const merchantReady=kind()==='merchant'?model.merchant?.ready:null;
+   return c.platforms().filter(p=>main.has(p.id)&&main.get(p.id).pandaCoverage?.reason!=='verified_created_prefix_only'&&!s.values.has(p.id)&&!merchantReady?.has(p.id));
+  }
   async function load(retry=false){
-   const s=state();if(!s||s.denied||!c.canDrill()||s.running||s.started&&!retry||L.loading||L.queryRetrying)return;
-   s.started=true;s.running=true;stopWatching();const list=targets().filter(p=>!s.values.has(p.id)).map(platform=>({platform})),controller=new AbortController();s.controller=controller;
+   if(!kind())return;
+   const s=state();if(!s||s.denied||!c.canDrill()||s.controller||L.loading||L.queryRetrying||L.status!=='all')return;
+   const list=targets(s,kind()==='merchant'?modelFor(s):{}).filter(p=>retry||!s.failures.has(p.id)).map(platform=>({platform}));
+   if(!list.length)return;
+   const controller=new AbortController();s.controller=controller;
    let idx=0;const work=async()=>{while(idx<list.length&&active(s)&&!controller.signal.aborted){
     const {platform,slices}=list[idx++],windows=root.HensemHourlyRateWindows;
     const main=(L.results||[]).find(r=>r.platform?.id===platform.id);
@@ -73,32 +91,38 @@
     }
     repaint(s);
    }};
-   repaint(s);await Promise.all(Array.from({length:Math.min(2,list.length)},work));if(active(s)){s.running=false;repaint(s);}
+   repaint(s);await Promise.all(Array.from({length:Math.min(2,list.length)},work));
+   if(s.controller===controller){s.controller=null;if(active(s))repaint(s);}
   }
-  function watch(s){
-   if(!c.canDrill()||s.started||s.running||L.loading||L.queryRetrying||typeof root.IntersectionObserver!=='function')return;
-   const token=++watchToken;queueMicrotask(()=>{if(token!==watchToken||!active(s)||s.started)return;
-    const node=root.document?.querySelector('[data-hourly-rate-region]');if(!node||observed===node)return;
-    observer?.disconnect();observed=node;observer=new root.IntersectionObserver(entries=>{if(active(s)&&!s.started&&entries.some(e=>e.target===node&&e.isIntersecting))void load();},{rootMargin:'160px'});
-    observer.observe(node);
-   });
+  function schedule(s){
+   if(s.queued)return;
+   s.queued=true;queueMicrotask(()=>{if(!s.queued)return;s.queued=false;if(active(s))void load();});
   }
-  function direction(d){const s=state();if(!s||L.direction!=='all'||!['charge','withdraw'].includes(d))return;s.direction=d;updatePanel(s);}
+  function direction(d){if(!kind())return;const s=state();if(!s||L.direction!=='all'||!['charge','withdraw'].includes(d))return;s.direction=d;updatePanel(s);}
   function html(){
    const s=state();if(!s)return '';
    if(s.denied)return '<div data-hourly-rate-region class="live-status" role="status">当前会话未获分时统计读取权限，请重新查询。</div>';
-   const platforms=c.platforms(),action=()=>'<button class="link" type="button" onclick="HensemHourlyMatrixActions.load('+s.started+')">'+(s.started?'重试未完成商户':'读取分时成功率')+'</button>';
-   const results=platforms.map(p=>s.values.get(p.id)||(L.results||[]).find(r=>r.platform?.id===p.id)).filter(Boolean);
-   const providerHours=new Map([...s.values].map(([id,r])=>[id,{complete:true,rows:r.groups.provider_hour}]));
-   const model=root.HensemHourlyRateData.build({platforms,results,providerHours,direction:s.direction,currency:L.currency,successAvailable:(platform,r,d)=>c.successAvailable?.(platform,r,d)!==false&&c.successAvailable?.(platform,(L.results||[]).find(main=>main.platform?.id===platform.id),d)!==false,providerType:c.providerTypes?.(s.direction)});
+   if(L.status!=='all')return '<div data-hourly-rate-region class="live-status" role="status">分时成功率需要全部订单状态作为分母，请调整筛选后查询。</div>';
+   const model=modelFor(s),platforms=c.platforms(),remaining=targets(s,model);
+   const failed=remaining.map(p=>s.failures.get(p.id)).filter(Boolean);
+   const ready=kind()==='merchant'?model.merchant?.ready?.size||0:s.values.size;
    const header='<div class="section-switcher"><strong>按小时看成功率</strong> '+(L.direction==='all'?'<span class="tabs">'+['charge','withdraw'].map(d=>'<button type="button" class="'+(s.direction===d?'on':'')+'" aria-pressed="'+(s.direction===d)+'" onclick="HensemHourlyMatrixActions.direction(\''+d+'\')">'+(d==='charge'?'代收':'代付')+'</button>').join('')+'</span>':'')+'</div>';
-   const status=!c.canDrill()?'当前角色未获分时明细权限。':s.running?'正在读取分时统计 · '+s.values.size+' / '+platforms.length+' 个商户':s.failures.size?'部分商户未读取 · '+s.values.size+' / '+platforms.length+' '+action():!s.started?(L.loading||L.queryRetrying?'主表正在读取':action()):s.values.size<platforms.length?'分时来源未齐 · '+s.values.size+' / '+platforms.length+' 个商户':'';
-   const detail=s.failures.size?'<details><summary>查看未完成原因</summary>'+[...s.failures.values()].map(f=>'<div>'+E(f.name)+'：'+E(f.message)+'</div>').join('')+'</details>':'';
-   watch(s);
-   return '<div data-hourly-rate-region>'+header+'<p class="analysis-note">沿用页顶查询范围，按各商户当地时间分组；总成功率按总笔数加权。</p>'+(status?'<div class="analysis-status" role="status">'+status+detail+'</div>':'')+root.HensemBandSuccessMatricesUI.render(model,c.page())+'</div>';
+   const retry='<button class="link" type="button" onclick="HensemHourlyMatrixActions.load(true)">重试未完成商户</button>';
+   const progress=ready+' / '+platforms.length+' 个商户';
+   let status='';
+   if(ready<platforms.length){
+    if(!c.canDrill())status='当前角色未获分时明细权限。';
+    else if(L.loading||L.queryRetrying)status='主表正在读取 · '+progress;
+    else if(s.controller||remaining.some(p=>!s.failures.has(p.id)))status='正在读取分时统计 · '+progress;
+    else if(failed.length)status='部分商户未读取 · '+progress+' '+retry;
+    else status='分时来源未齐 · '+progress;
+   }
+   const detail=failed.length?'<details><summary>查看未完成原因</summary>'+failed.map(f=>'<div>'+E(f.name)+'：'+E(f.message)+'</div>').join('')+'</details>':'';
+   if(c.canDrill()&&!s.controller&&!L.loading&&!L.queryRetrying&&remaining.length>failed.length)schedule(s);
+   return '<div data-hourly-rate-region>'+header+'<p class="analysis-note">沿用页顶查询范围，按各商户当地时间分组；总成功率按总笔数加权。</p>'+(status?'<div class="analysis-status" role="status">'+status+detail+'</div>':'')+root.HensemBandSuccessMatricesUI.render(model,c.page(),kind())+'</div>';
   }
   root.HensemHourlyMatrixActions={load,direction};
-  return {html,cancel};
+  return {html,pause,cancel};
  }
  root.HensemHourlyRateController={create,matrixRequest,verified};
 })(typeof window==='undefined'?globalThis:window);

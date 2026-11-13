@@ -1,13 +1,17 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-hourly-rate-controller.js'),'utf8');
+const dataSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-hourly-rate-data.js'),'utf8');
 const windowsSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-hourly-rate-windows.js'),'utf8');
 const from='2026-11-10T18:30:00.000Z',to='2026-11-11T18:30:00.000Z',wait=()=>new Promise(r=>setImmediate(r));
 function fixture(){
  const platform=i=>({id:'p'+i,name:'P'+i,currency:'INR',timezone:'Asia/Kolkata'});
- const platforms=[1,2,3,4].map(platform),L={results:platforms.map(platform=>({platform,groups:{hourly:[]}})),serial:1,view:'business',pageQueried:true,queryScope:'base',queryNow:100,direction:'all',status:'all',currency:'INR',from,to};
+ const platforms=[1,2,3,4].map(platform),L={results:platforms.map(platform=>({platform,groups:{hourly:[]}})),serial:1,view:'hourly-provider',pageQueried:true,queryScope:'base',queryNow:100,direction:'all',status:'all',currency:'INR',from,to};
  const calls=[];let model,page='time',detail=true,context='user1:v1';
- const win={HensemHourlyRateData:{build:m=>(model=m,{})},HensemBandSuccessMatricesUI:{render:()=>''}};
+ const win={HensemBandSuccessMatricesUI:{render:()=>''}};
  const runtime={window:win,AbortController,setTimeout,clearTimeout,queueMicrotask};
+ vm.runInNewContext(dataSource,runtime);
+ const build=win.HensemHourlyRateData.build;
+ win.HensemHourlyRateData.build=m=>{model=m;return build(m);};
  vm.runInNewContext(windowsSource,runtime);vm.runInNewContext(source,runtime);
  const ctx={L,E:String,access:()=>context,page:()=>page,allowed:()=>true,canDrill:()=>detail,platforms:()=>platforms,query:p=>({platformId:p.id,status:'all',direction:L.direction,currency:L.currency,startAt:from,endAt:to,successBasis:'created',offset:50,limit:20}),request:(q,o)=>new Promise((resolve,reject)=>calls.push({q,o,resolve,reject})),render:()=>{},denied:e=>e.code==='42501'};
  const api=win.HensemHourlyRateController,app=api.create(ctx);
@@ -23,9 +27,9 @@ test('one full-day crossing per platform shared by both directions, two in fligh
  const retry=action.load(true);assert.equal(h.calls.length,5);assert.equal(h.calls[4].q.platformId,h.calls[1].q.platformId);h.calls[4].resolve(h.reply(h.calls[4]));await retry;h.app.html();assert.equal(h.model().providerHours.size,4);h.app.cancel();
 });
 test('query replacement, permission loss and denied reads never paint private responses from a previous scope',async()=>{
- const h=fixture(),action=h.win.HensemHourlyMatrixActions;const old=action.load();h.context('other');h.L.serial++;h.page('amount');h.app.html();assert(h.calls[0].o.signal.aborted);
+ const h=fixture(),action=h.win.HensemHourlyMatrixActions;const old=action.load();h.context('other');h.L.serial++;h.page('amount');h.L.loading=true;h.app.html();assert(h.calls[0].o.signal.aborted);
  h.calls.forEach(c=>c.resolve(h.reply(c)));await old;h.app.html();assert.equal(h.model().providerHours.size,0);
- h.detail(false);await action.load();assert.equal(h.calls.length,2);
+ h.L.loading=false;h.detail(false);await action.load();assert.equal(h.calls.length,2);
  h.detail(true);const latest=action.load();h.calls[2].reject(Object.assign(Error('hidden'),{code:'42501'}));h.calls[3].resolve(h.reply(h.calls[3]));await latest;assert.match(h.app.html(),/未获/);await action.load(true);assert.equal(h.calls.length,4);h.app.cancel();
 });
 test('reject mismatched clocks, wrong platform, old or incomplete groups; never convert an explicit time filter into an unfiltered read',()=>{
@@ -64,9 +68,65 @@ test('a permission revocation or replacement during a slice never issues or disp
   h.calls[0].reject(timeout());h.calls[1].resolve(h.reply(h.calls[1]));await wait();
   h.calls.slice(2).forEach(c=>c.resolve(h.reply(c)));await wait();
   if(revoked)h.calls[4].reject(Object.assign(Error('权限失效'),{code:'42501'}));
-  else {h.L.serial++;h.app.html();h.calls[4].resolve(h.reply(h.calls[4]));}
+  else {h.L.serial++;h.L.loading=true;h.app.html();h.calls[4].resolve(h.reply(h.calls[4]));}
   await run;assert.equal(h.calls.length,5);assert(h.calls[4].o.signal.aborted);
   if(revoked)assert.match(h.app.html(),/未获/);else{h.app.html();assert.equal(h.model().providerHours.size,0);}
   h.app.cancel();
  }
+});
+
+test('switching hourly views shares an in-flight read; leaving aborts pending platforms, and returning reuses verified platforms',async()=>{
+ const h=fixture(),action=h.win.HensemHourlyMatrixActions;
+ const old=action.load();
+ h.calls[0].resolve(h.reply(h.calls[0]));await wait();
+ assert.deepEqual(h.calls.map(c=>c.q.platformId),['p1','p2','p3']);
+ h.L.view='hourly-merchant';h.app.html();
+ h.L.view='hourly-provider';h.app.html();
+ await action.load();
+ assert.equal(h.calls.length,3);assert.ok(h.calls.every(c=>!c.o.signal.aborted));
+ h.L.view='business';h.app.pause();assert.ok(h.calls[1].o.signal.aborted);
+ h.calls.slice(1).forEach(c=>c.resolve(h.reply(c)));await old;
+ await action.load();assert.equal(h.calls.length,3);
+ h.L.view='hourly-provider';const resumed=action.load();
+ h.calls.slice(3).forEach(c=>c.resolve(h.reply(c)));await wait();
+ h.calls.slice(5).forEach(c=>c.resolve(h.reply(c)));await resumed;h.app.html();
+ assert.deepEqual(h.calls.slice(3).map(c=>c.q.platformId),['p2','p3','p4']);
+ assert.equal(h.model().providerHours.size,4);h.app.cancel();
+});
+
+for(const [name,replace] of [
+ ['account',h=>h.context('different-user:v1')],
+ ['permission version',h=>h.context('user1:v2')],
+ ['detail permission',h=>h.detail(false)],
+ ['page',h=>h.page('overview')],
+ ['date range',h=>{h.L.from='2026-11-09T18:30:00.000Z';}],
+ ['currency',h=>{h.L.currency='IDR';}],
+ ['query refresh',h=>h.L.serial++],
+ ['unapplied filters',h=>{h.L.dirty=true;}]
+]){
+ test(name+' replacement stops queued reads and never repaints a late response',async()=>{
+  const h=fixture(),pending=h.win.HensemHourlyMatrixActions.load();
+  replace(h);h.L.loading=true;h.app.html();
+  assert.ok(h.calls[0].o.signal.aborted);assert.ok(h.calls[1].o.signal.aborted);
+  for(const call of h.calls)call.resolve(h.reply(call));
+  await pending;h.app.html();
+  assert.equal(h.calls.length,2);
+  if(h.model())assert.equal(h.model().providerHours.size,0);
+  h.app.cancel();
+ });
+}
+
+test('merchant requests only the missing native hourly data; provider then reuses its verified response',async()=>{
+ const h=fixture(),action=h.win.HensemHourlyMatrixActions;
+ for(const result of h.L.results.slice(0,3))Object.assign(result,{complete:true,total:0,summary:[]});
+ h.L.view='hourly-merchant';h.app.html();await wait();
+ assert.deepEqual(h.calls.map(c=>c.q.platformId),['p4']);
+ h.calls[0].resolve({...h.reply(h.calls[0]),total:0});await wait();
+ h.L.view='hourly-provider';const run=action.load();
+ assert.deepEqual(h.calls.slice(1).map(c=>c.q.platformId),['p1','p2']);
+ h.calls.slice(1).forEach(c=>c.resolve({...h.reply(c),total:0}));await wait();
+ assert.deepEqual(h.calls.slice(3).map(c=>c.q.platformId),['p3']);
+ h.calls[3].resolve({...h.reply(h.calls[3]),total:0});await run;
+ h.L.view='hourly-merchant';h.app.html();await wait();
+ assert.equal(h.calls.length,4);h.app.cancel();
 });

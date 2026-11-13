@@ -14,6 +14,8 @@ function fixture({groups={},from='2026-09-24T00:00',to='2026-09-24T23:59',direct
  const table=(headers,rows)=>'<table><thead><tr>'+headers.map(value=>'<th>'+value+'</th>').join('')+'</tr></thead><tbody>'+rows.map(row=>'<tr>'+row.map(value=>'<td>'+value+'</td>').join('')+'</tr>').join('')+'</tbody></table>';
  const root={};vm.runInNewContext(source,{window:root});
  const ctx={L,E,N:String,C:String,R:(n,d)=>d?String(n/d):'—',plus,combine,empty,groupRows:kind=>{groupCalls.push(kind);return groups[kind]||[]},table,box:(title,body,subtitle='',tools='')=>'<section><h2>'+title+'</h2><small>'+subtitle+'</small>'+tools+body+'</section>',pager:(...args)=>{pagers.push(args);return '<nav>pager</nav>'},totals:()=>'<aside>totals</aside>',chart:rows=>'<figure>'+JSON.stringify(rows)+'</figure>',detailsView:()=>'<div>order details</div>',businessHeaders:['全部金额','全部笔数','成功金额','成功笔数','成功率'],businessCells:row=>{businessRows.push(row);return [String(row.all_amount),String(row.all_count),String(row.success_amount),String(row.success_count),row.created_success_count==null?'—':String(row.created_success_count/(row.all_count||1))]}};
+ ctx.hourlyRates={html:()=>'<section data-fixture-matrix="'+L.view+'"></section>',pause(){}};
+ ctx.matrixCustom={pageControls:page=>'<form data-custom-page="'+page+'"></form>'};
  if(shared)ctx.analysis={table:config=>{calls.push(config);return table([...config.headers,'展开'],config.rows.map(row=>[...config.cells(row),'展开']))}};
  const renderer=root.HensemLivePages.create(ctx);return {L,calls,pagers,groupCalls,businessRows,render:page=>renderer.render(page)};
 }
@@ -37,7 +39,7 @@ test('amount tables use the selected group with raw labels for drilldown and esc
  f.L.matrixMode='range';f.render('amount');const range=f.calls[1];assert.equal(range.rows.length,9);assert.deepEqual(JSON.parse(JSON.stringify(range.segment(range.rows[0]))),{kind:'amount_range',direction:'charge',bucket:'100–200'});assert.deepEqual(f.groupCalls,['amount','amount_range']);
 });
 
-test('amount keeps only distribution and restores retired saved views to business',()=>{
+test('amount restores its retired checks and trend views to the original distribution',()=>{
  for(const view of ['business','checks','trend']){
   const f=fixture({view,groups:{amount:[row({bucket:'<img src=x>'})]}}),html=f.render('amount');
   assert.equal(f.L.view,'business');assert.equal(f.calls.length,1);assert.match(html,/金额分布与订单状态/);assert.match(html,/&lt;img src=x&gt;/);assert.doesNotMatch(html,/金额档位费用与核对|全部订单金额结构|掉单金额|live-reference-bar|<img src=x>/);assert.deepEqual(f.groupCalls,['amount']);
@@ -50,4 +52,30 @@ test('hourly keeps its checks and trend without requesting drilldown or extra da
 
 test('compact wrapper is restricted to time and amount pages; absent shared module retains data table',()=>{
  const f=fixture({shared:false,groups:{hourly:[row({hour:9})]}}),html=f.render('time');assert.match(html,/240/);assert.match(html,/时段金额与状态/);assert.match(html,/按已返回的统计口径展示成功金额和笔数/);assert.doesNotMatch(html,/成功按成功时间|含跨日成功/);assert.equal(f.calls.length,0);assert.equal(f.pagers.length,1);const orders=f.render('orders');assert.match(orders,/order details/);assert.doesNotMatch(orders,/analysis-compact/);assert.equal(f.render('unrelated-page'),null);
+});
+
+test('time and amount place both hourly views in the KPI tab bar and build only the selected content',()=>{
+ for(const page of ['time','amount']){
+  const f=fixture(),business=f.render(page);
+  const views=page==='time'?['business','checks','trend']:['business'];
+  const allViews=[...views,'hourly-provider','hourly-merchant'];
+  for(const view of allViews){
+   f.L.view=view;const before=f.groupCalls.length,html=f.render(page);
+   const nav=html.match(/<aside>totals<\/aside><div class="section-switcher"><div class="tabs">(.*?)<\/div><\/div>/)?.[1];
+   assert.ok(nav);
+   const buttons=Array.from(nav.matchAll(/<button class="(on|)" onclick="liveReferenceSet\('view','([^']+)'\)">/g));
+   assert.deepEqual(buttons.map(match=>match[2]),allViews);
+   assert.deepEqual(buttons.filter(match=>match[1]==='on').map(match=>match[2]),[view]);
+   if(view.startsWith('hourly-')){
+    assert.deepEqual(Array.from(html.matchAll(/data-fixture-matrix="([^"]+)"/g),match=>match[1]),[view]);
+    assert.equal(f.groupCalls.length,before);
+    assert.doesNotMatch(html,/<table|<figure|data-custom-page/);
+   }else{
+    assert.doesNotMatch(html,/data-fixture-matrix/);
+    assert.match(html,new RegExp('data-custom-page="'+page+'"'));
+    assert.equal(f.groupCalls.length,before+1);
+   }
+  }
+  assert.match(business,/<table/);
+ }
 });
