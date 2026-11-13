@@ -63,7 +63,8 @@
     const withType = kind === 'provider';
     const sortKey = page + '/' + direction + '/' + kind;
     const descending = sortOrders.get(sortKey) !== 'ascending';
-    const title = directions[direction] + ' · ' + kinds[kind] + '分时成功率';
+    const dimension = page === 'amount' ? '分金额段' : '分时';
+    const title = directions[direction] + ' · ' + kinds[kind] + dimension + '成功率';
     const ranked = matrix.rows.map((row, index) => ({row, index, rate: rateOf(row.total)}));
     ranked.sort((a, b) => compareRank(a, b, descending));
     const body = ranked.map(({row, index, rate}) => {
@@ -74,7 +75,7 @@
     }).join('');
     const notice = matrix.note || (matrix.partial ? '部分来源尚未读齐，已读小计以 * 标示。' : '');
     const empty = '<tr><td class="band-success-empty" colspan="' + (columns.length + (withType ? 3 : 2)) + '">' +
-      (matrix.partial ? '暂无可核验的分时数据' : '所选范围没有' + kinds[kind] + '分时数据') + '</td></tr>';
+      (matrix.partial ? '暂无可核验的' + dimension + '数据' : '所选范围没有' + kinds[kind] + dimension + '数据') + '</td></tr>';
     const manual = matrix.excluded?.manual || [], unidentified = matrix.excluded?.unidentified || [];
     const excluded = kind === 'provider' && (manual.length || unidentified.length)
       ? '<details class="success-analysis-other"><summary>商户汇总另含 ' + (manual.length + unidentified.length) +

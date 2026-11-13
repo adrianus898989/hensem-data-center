@@ -200,9 +200,10 @@
  }
  function analytical(kind){
   const time=kind==='hourly',groupKind=time?'hourly':L.matrixMode==='range'?'amount_range':'amount',first=time?'时段':'金额档位 · '+E(L.currency),items=time?[['business','时段金额与状态'],['checks','时段费用与核对'],['trend','24 小时订单趋势']]:[['business','金额分布与订单状态']];
-  items.push(['hourly-provider','三方分时成功率'],['hourly-merchant','商户分时成功率']);
+  const rateTabs=time?[['hourly-provider','三方分时成功率'],['hourly-merchant','商户分时成功率']]:[['amount-provider','三方分金额段成功率'],['amount-merchant','商户分金额段成功率']];
+  items.push(...rateTabs);
   const nav=choose(items);
-  if(L.view==='hourly-provider'||L.view==='hourly-merchant')return '<div class="analysis-compact">'+totals()+nav+(c.hourlyRates?.html()||'')+'</div>';
+  if(rateTabs.some(([view])=>L.view===view))return '<div class="analysis-compact">'+totals()+nav+(c.hourlyRates?.html()||'')+'</div>';
   c.hourlyRates?.pause();
   const rows=groupedData(groupKind),label=r=>time?String(r.hour).padStart(2,'0')+':00–'+String(r.hour).padStart(2,'0')+':59:59':c.amountLabel?c.amountLabel(r.bucket,r.direction):r.bucket==='other'?'其他金额':r.bucket==='unknown'?'金额缺失':String(r.bucket);
   let body='';const tools=time?'':'<div class="tabs"><button class="'+(L.matrixMode!=='range'?'on':'')+'" onclick="liveMatrixMode(\'exact\')">精确金额</button><button class="'+(L.matrixMode==='range'?'on':'')+'" onclick="liveMatrixMode(\'range\')">金额区间</button></div>';

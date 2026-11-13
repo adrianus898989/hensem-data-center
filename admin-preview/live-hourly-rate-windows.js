@@ -1,5 +1,5 @@
 /* With explicit success dates, count creations in their selected window and
-   successes in theirs. Each source leg contains all 24 platform-local hours. */
+   successes in theirs. The two windows share the same matrix dimension. */
 (function(root){
   'use strict';
   const equalInstant = (a,b) => typeof a === 'string' && typeof b === 'string' &&
@@ -8,7 +8,7 @@
     Number.isFinite(Date.parse(from)) && Number.isFinite(Date.parse(to)) && Date.parse(from) < Date.parse(to);
 
   function plan(query, matrixRequest) {
-    if (query.successBasis === 'source_updated') throw Error('分时统计尚未提供源更新时间口径。');
+    if (query.successBasis === 'source_updated') throw Error('分组统计尚未提供源更新时间口径。');
     if (query.successBasis !== 'success') return [matrixRequest(query)];
     const {startAt,endAt,successStartAt,successEndAt} = query;
     if (!validWindow(startAt,endAt) || !validWindow(successStartAt,successEndAt))
@@ -18,20 +18,29 @@
     return [matrixRequest(filters),matrixRequest({...filters,startAt:successFrom,endAt:successTo})];
   }
 
-  function mismatch() { throw Error('分时统计与当前筛选的成功或创建笔数未对齐，请重新查询。'); }
+  function mismatch() { throw Error('分组统计与当前筛选的成功或创建笔数未对齐，请重新查询。'); }
   function count(value) {
     if ((typeof value !== 'number' && typeof value !== 'string') || String(value).trim() === '' ||
         !Number.isSafeInteger(Number(value)) || Number(value) < 0) mismatch();
     return Number(value);
   }
+  const hourly={marker:'providerHourMatrix',group:'hourly',cross:'provider_hour',field:'hour'};
+  const amount={marker:'providerAmountMatrix',group:'amount_range',cross:'provider_amount_range',field:'bucket'};
+  const shape=query=>query.providerAmountMatrix===true?amount:hourly;
+  const sameBands=(a,b)=>!!a&&!!b&&['charge','withdraw'].every(direction=>
+    JSON.stringify(a[direction])===JSON.stringify(b[direction]));
   function keyOf(row,dimension) {
     const key=[row.direction,row.currency];
-    if (dimension !== 'summary') {
+    if (dimension === 'hourly' || dimension === 'provider_hour') {
       const hour=count(row.hour);
       if (hour >= 24) mismatch();
       key.push(hour);
     }
-    if (dimension === 'provider_hour') {
+    if (dimension === 'amount_range' || dimension === 'provider_amount_range') {
+      if (typeof row.bucket!=='string' || !/^(band:[0-9]|below|above|unknown)$/.test(row.bucket)) mismatch();
+      key.push(row.bucket);
+    }
+    if (dimension === 'provider_hour' || dimension === 'provider_amount_range') {
       if (typeof row.provider !== 'string' && row.provider != null) mismatch();
       key.push(row.provider ?? null);
     }
@@ -73,22 +82,24 @@
     }
   }
   function leg(result,scope,startAt,endAt,created=false) {
-    if (!result || result.platform?.id!==scope.platformId || result.providerHourMatrix!==true ||
+    const dim=shape(scope);
+    if (!result || result.platform?.id!==scope.platformId || result[dim.marker]!==true ||
+        (dim===amount && !sameBands(result.amountBands,scope.amountBands)) ||
         result.complete!==true || result.hasMore!==false || (result.successBasis??null)!==(created?'created':null) ||
         !equalInstant(result.startAt,startAt) || !equalInstant(result.endAt,endAt)) mismatch();
     const fields=created?createdFields:rateFields;
     const summary=index(result.summary,'summary',scope,fields);
-    const hourly=index(result.groups?.hourly,'hourly',scope,fields);
-    const providers=index(result.groups?.provider_hour,'provider_hour',scope,fields);
-    verifyCounts(fold(providers,3,fields),hourly,fields);
-    verifyCounts(fold(hourly,2,fields),summary,fields);
-    return {summary,hourly,providers};
+    const buckets=index(result.groups?.[dim.group],dim.group,scope,fields);
+    const providers=index(result.groups?.[dim.cross],dim.cross,scope,fields);
+    verifyCounts(fold(providers,3,fields),buckets,fields);
+    verifyCounts(fold(buckets,2,fields),summary,fields);
+    return {summary,buckets,providers};
   }
-  function join(created,success,dimension) {
+  function join(created,success,dimension,dim) {
     return [...new Set([...created.keys(),...success.keys()])].map(key=>{
-      const [direction,currency,hour,provider]=JSON.parse(key);
-      return {direction,currency,...(dimension==='summary'?{}:{hour}),
-        ...(dimension==='provider_hour'?{provider}:{}),
+      const [direction,currency,slot,provider]=JSON.parse(key);
+      return {direction,currency,...(dimension==='summary'?{}:{[dim.field]:slot}),
+        ...(dimension===dim.cross?{provider}:{}),
         all_count:created.get(key)?.all_count??0,success_count:success.get(key)?.success_count??0};
     }).filter(row=>row.all_count>0 || row.success_count>0);
   }
@@ -98,6 +109,7 @@
         !equalInstant(main.startAt,query.startAt) || !equalInstant(main.endAt,query.endAt) ||
         !equalInstant(main.successStartAt,query.successStartAt) || !equalInstant(main.successEndAt,query.successEndAt) ||
         query.successBasis!=='success' || !['all','charge','withdraw'].includes(query.direction) || !query.currency) mismatch();
+    const dim=shape(query);
     const a=leg(createdResult,query,query.startAt,query.endAt);
     const b=leg(successResult,query,query.successStartAt,query.successEndAt);
     const mainSummary=index(main.summary,'summary',query);
@@ -105,9 +117,9 @@
     verifyCounts(b.summary,mainSummary,['success_count']);
     return {platform:main.platform,capabilities:main.capabilities,complete:true,hasMore:false,
       startAt:query.startAt,endAt:query.endAt,successStartAt:query.successStartAt,successEndAt:query.successEndAt,
-      successBasis:'success',providerHourMatrix:true,total:[...mainSummary.values()].reduce((n,r)=>count(n+r.all_count),0),
-      summary:join(a.summary,b.summary,'summary'),
-      groups:{hourly:join(a.hourly,b.hourly,'hourly'),provider_hour:join(a.providers,b.providers,'provider_hour')}};
+      successBasis:'success',[dim.marker]:true,...(dim===amount?{amountBands:query.amountBands}:{}),total:[...mainSummary.values()].reduce((n,r)=>count(n+r.all_count),0),
+      summary:join(a.summary,b.summary,'summary',dim),
+      groups:{[dim.group]:join(a.buckets,b.buckets,dim.group,dim),[dim.cross]:join(a.providers,b.providers,dim.cross,dim)}};
   }
   const hourMs=3600000;
   function closedIndiaDay(query, main, platform, now=Date.now()) {
@@ -129,27 +141,98 @@
   function combineCreatedDay(query,main,parts) {
     const windows=closedIndiaDay(query,main,main.platform);
     if (!windows || parts.length!==windows.length) mismatch();
-    const providers=[],hours=[];
+    const dim=shape(query),providers=new Map(),buckets=new Map();
+    function accumulate(target,values,i) {
+      for (const [key,metrics] of values) {
+        if (dim===hourly) {
+          // Native local hours cannot occur in more than one six-hour slice.
+          const hour=JSON.parse(key)[2];
+          if (hour<i*6 || hour>=(i+1)*6) mismatch();
+        }
+        const prior=target.get(key)||empty();
+        for (const field of createdFields) prior[field]=count(prior[field]+metrics[field]);
+        target.set(key,prior);
+      }
+    }
     for (const [i,part] of parts.entries()) {
       const w=windows[i],group=leg(part,query,w.startAt,w.endAt,true);
-      // These hours are the native local creation hours. Disjoint windows must
-      // never supply two contributions for the same provider and hour.
-      for (const key of [...group.hourly.keys(),...group.providers.keys()]) {
-        const hour=JSON.parse(key)[2];
-        if (hour<i*6 || hour>=(i+1)*6) mismatch();
-      }
-      providers.push(...part.groups.provider_hour);
-      hours.push(...part.groups.hourly);
+      accumulate(buckets,group.buckets,i);
+      accumulate(providers,group.providers,i);
     }
-    const hourly=index(hours,'hourly',query,createdFields);
     const published=index(main.summary,'summary',query,createdFields);
-    verifyCounts(fold(hourly,2,createdFields),published,createdFields);
-    if (Array.isArray(main.groups?.hourly))
-      verifyCounts(hourly,index(main.groups.hourly,'hourly',query,createdFields),createdFields);
+    verifyCounts(fold(buckets,2,createdFields),published,createdFields);
+    if (Array.isArray(main.groups?.[dim.group]))
+      verifyCounts(buckets,index(main.groups[dim.group],dim.group,query,createdFields),createdFields);
+    function rows(cells,withProvider) {
+      return [...cells].map(([key,metrics])=>{
+        const [direction,currency,slot,provider]=JSON.parse(key);
+        return {direction,currency,[dim.field]:slot,...(withProvider?{provider}:{}),...metrics};
+      });
+    }
     return {platform:main.platform,capabilities:main.capabilities,complete:true,hasMore:false,
-      providerHourMatrix:true,startAt:query.startAt,endAt:query.endAt,successBasis:'created',
+      [dim.marker]:true,...(dim===amount?{amountBands:query.amountBands}:{}),
+      startAt:query.startAt,endAt:query.endAt,successBasis:'created',
       total:[...published.values()].reduce((n,r)=>count(n+r.all_count),0),
-      summary:main.summary,groups:{hourly:hours,provider_hour:providers}};
+      summary:main.summary,groups:{[dim.group]:rows(buckets,false),[dim.cross]:rows(providers,true)}};
   }
-  root.HensemHourlyRateWindows={plan,combine,closedIndiaDay,combineCreatedDay};
+  function providerTotals(rows,country,scope) {
+    // Main-page results may contain multiple raw names for one displayed provider.
+    const totals=new Map();
+    for(const row of rows){
+      if(typeof row.provider!=='string'&&row.provider!=null) mismatch();
+      if(!['charge','withdraw'].includes(row.direction) || row.currency!==scope.currency ||
+         scope.direction!=='all'&&row.direction!==scope.direction) mismatch();
+      const name=String(root.HensemProviderNames?.canonical(row.provider,country)??row.provider??'').trim();
+      const key=JSON.stringify([row.direction,row.currency,name]),total=totals.get(key)||empty();
+      for(const field of rateFields)total[field]=count(total[field]+count(row[field]));
+      totals.set(key,total);
+    }
+    return totals;
+  }
+  function availableAmountDirections(query,main,parts,available){
+    const wanted=query.direction==='all'?['charge','withdraw']:[query.direction];
+    const directions=wanted.filter(d=>[main,...parts].every(r=>available(r,d)!==false));
+    if(!directions.length)throw Error('本范围未提供可核验的成功时间。');
+    if(directions.length===wanted.length)return {query,main,parts,directions};
+    // An event-clock source can support collections while masking payouts. Only
+    // its explicitly unavailable direction may be dropped from these controls.
+    const direction=directions[0],excluded=wanted.find(d=>d!==direction);
+    function project(r){
+      const rows=list=>Array.isArray(list)?list.filter(row=>row?.direction!==excluded):list;
+      const summary=rows(r.summary);
+      return {...r,summary,...(Array.isArray(summary)&&!summary.length&&r.summary.length?{total:0}:{}),
+        groups:Object.fromEntries(Object.entries(r.groups??{}).map(([key,list])=>[key,rows(list)]))};
+    }
+    return {query:{...query,direction},main:project(main),parts:parts.map(project),directions};
+  }
+  function verifyAmount(query,main,result) {
+    const created=query.successBasis==='created',fields=created?createdFields:rateFields;
+    // After independent legs have been joined the numerators and denominators
+    // belong to different cohorts. Counts in each bucket must match the main page.
+    const groups=result.groups;
+    const summary=index(result.summary,'summary',query,fields);
+    const buckets=index(groups?.amount_range,'amount_range',query,fields);
+    const providers=index(groups?.provider_amount_range,'provider_amount_range',query,fields);
+    verifyCounts(fold(providers,3,fields),buckets,fields);
+    verifyCounts(fold(buckets,2,fields),summary,fields);
+    if (!main || main.platform?.id!==query.platformId || main.complete===false || main.hasMore===true ||
+        main.partial || main.available===false || main.error || main.coverage?.calculationComplete===false ||
+        main.pandaCoverage?.reason==='verified_created_prefix_only' ||
+        !equalInstant(main.startAt,query.startAt) || !equalInstant(main.endAt,query.endAt) ||
+        (main.successBasis??null)!==(query.successBasis??null) ||
+        (query.successBasis==='success' && (!equalInstant(main.successStartAt,query.successStartAt) ||
+          !equalInstant(main.successEndAt,query.successEndAt))) ||
+        !sameBands(result.amountBands,query.amountBands)) mismatch();
+    verifyCounts(index(main.summary,'summary',query),summary);
+    if (Array.isArray(main.groups?.amount_range)) {
+      if (!sameBands(main.amountBands,query.amountBands)) mismatch();
+      verifyCounts(index(main.groups.amount_range,'amount_range',query),buckets);
+    }
+    if(Array.isArray(main.groups?.provider)){
+      const country=main.platform.country;
+      verifyCounts(providerTotals(main.groups.provider,country,query),providerTotals(groups.provider_amount_range,country,query));
+    }
+    return result;
+  }
+  root.HensemHourlyRateWindows={plan,combine,closedIndiaDay,combineCreatedDay,availableAmountDirections,verifyAmount,sameBands};
 })(typeof window==='undefined'?globalThis:window);

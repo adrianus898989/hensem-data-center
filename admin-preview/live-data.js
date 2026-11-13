@@ -928,8 +928,8 @@
   // Matrix progress and its verified rows belong to the active controller and query.
   // An inert HTML snapshot cannot resume its requests or represent a different tab.
   const analytical=['time','amount'].includes(state.page);
-  const hourlyTab=analytical&&(L.view==='hourly-provider'||L.view==='hourly-merchant');
-  const context=JSON.stringify([aggregateAccessContext(),visibleCatalog().map(p=>[p.id,p.source,p.sourceName,p.country,p.timezone,p.currency])]),retain=!hourlyTab&&statisticWindowsEnabled()&&roleAllowed(state.page,'query');
+  const rateTab=analytical&&hourlyRates?.kind();
+  const context=JSON.stringify([aggregateAccessContext(),visibleCatalog().map(p=>[p.id,p.source,p.sourceName,p.country,p.timezone,p.currency])]),retain=!rateTab&&statisticWindowsEnabled()&&roleAllowed(state.page,'query');
   // Current verified platform results take precedence over an older complete
   // screen. A slow peer must not hide data already returned for this query.
   const currentPrepared=retain&&!L.dirty&&!L.error&&L.queryScope===aggregateQueryScope()&&L.results.length>0&&L.results.every(r=>r._preparedPublication&&r._aggregateAccessContext===aggregateAccessContext()&&L.queryPlatforms.some(p=>p.id===r.platform?.id));

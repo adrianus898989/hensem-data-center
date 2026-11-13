@@ -6,38 +6,66 @@ const context={require:req,__dirname,console,process,URL,AbortController,structu
 vm.runInContext(fs.readFileSync(filename,'utf8').split('\ntest(')[0]+'\nglobalThis.fixture={load,query,session,bridge};',context,{filename});
 const {load,query,session,bridge}=context.fixture;
 const base={...query,action:'aggregate',view:'drilldown',direction:'charge',status:'all',kind:'custom'};
-test('hourly provider matrix keeps the existing RPC and page permissions, and forwards both hourly groups',async()=>{
- const request={...base,hourRange:{minHour:0,maxHour:24},providerHourMatrix:true,successBasis:'created'};
- const groups={hourly:[{hour:1,all_count:10,success_count:3}],provider_hour:[{hour:1,provider:'Pay',all_count:10,success_count:3}]};
- const h=load({fetch:async()=>({ok:true,json:async()=>({providerHourMatrix:true,groups})})});
- for(const [assigned,page] of [[false,'time'],[true,'amount']]){
-  const result=await h.api.adminLiveRequest(session,request,undefined,{assigned,page});
-  assert.deepEqual(result.groups,groups);
-  const call=h.calls.at(-1);
-  assert.equal(call.url,'https://offline.invalid/rest/v1/rpc/'+(assigned?'dashboard_admin_execute':'dashboard_admin_live_drilldown'));
-  assert.deepEqual(JSON.parse(call.init.body),assigned?{p_page:page,p_request:request}:{p_request:request});
- }
- const denied=load();
- for(const change of [{providerHourMatrix:false},{providerHourMatrix:'true'},{kind:'hourly'},{view:'full'},{action:'analysisOrders'},{hourRange:{minHour:0,maxHour:23}},{successStartAt:request.startAt,successEndAt:request.endAt},{successBasis:'source_updated'}]){
-  await assert.rejects(denied.api.adminLiveRequest(session,{...request,...change},undefined,{assigned:false,page:'time'}));
- }
- assert.throws(()=>denied.api.validateAdminLiveRequest({action:'aggregatePrepared',requests:[request]}));
- await assert.rejects(denied.api.adminLiveRequest(session,request,undefined,{assigned:true,page:'overview'}));
- assert.equal(denied.authCalls.length,0);assert.equal(denied.calls.length,0);
-});
-test('the host independently checks view, query and detail when the hourly matrix message runs',async()=>{
- const request={...base,hourRange:{minHour:0,maxHour:24},providerHourMatrix:true};
- for(const missing of ['view','query','detail',null]){
-  const permissions=['view','query','detail'].filter(action=>action!==missing).map(action=>'time.'+action);
-  const h=load(),b=bridge(h,{roleAccess:()=>({mode:'assigned',canView:true,permissions})});
-  const event=b.event('hours',request);event.data.page='time';h.send(event);
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(h.calls.length,missing?0:1,missing||'allowed');
-  assert.equal(b.replies.length,1);
-  if(missing)assert.match(b.replies[0].data.error,/权限/);
-  b.cleanup();
- }
-});
+const fullDay={minHour:0,maxHour:24};
+const edges=[100,200,300,400,500,1000,2000,5000,10000,20000,50000];
+const matrixFixtures=[
+ {page:'time', flag:'providerHourMatrix', groups:{hourly:[{hour:1,all_count:10,success_count:3}],provider_hour:[{hour:1,provider:'Pay',all_count:10,success_count:3}]}},
+ {page:'amount', flag:'providerAmountMatrix', groups:{amount_range:[{bucket:'band:0',all_count:10,success_count:3}],provider_amount_range:[{bucket:'band:0',provider:'Pay',all_count:10,success_count:3}]}}
+];
+for(const {page,flag,groups} of matrixFixtures){
+ const other=page==='time'?'amount':'time';
+ const request={...base,hourRange:fullDay,[flag]:true,successBasis:'created',...(page==='amount'?{amountBands:{charge:edges}}:{})};
+ test(page+' matrix uses the authorized page and source RPC for owner and assigned roles',async()=>{
+  const h=load({fetch:async()=>({ok:true,json:async()=>({[flag]:true,groups})})});
+  for(const assigned of [false,true]){
+   const result=await h.api.adminLiveRequest(session,request,undefined,{assigned,page});
+   assert.deepEqual(result.groups,groups);
+   const call=h.calls.at(-1);
+   assert.equal(call.url,'https://offline.invalid/rest/v1/rpc/'+(assigned?'dashboard_admin_execute':'dashboard_admin_live_drilldown'));
+   assert.deepEqual(JSON.parse(call.init.body),assigned?{p_page:page,p_request:request}:{p_request:request});
+  }
+  const denied=load();
+  for(const change of [{[flag]:false},{[flag]:'true'},{kind:'hourly'},{view:'full'},{action:'analysisOrders'},{hourRange:{minHour:0,maxHour:23}},{successStartAt:request.startAt,successEndAt:request.endAt},{successBasis:'source_updated'},
+   ...(page==='amount'?[{amountBands:undefined},{amountBands:{charge:[100,100,...edges.slice(2)]}},{providerHourMatrix:true}]:[])]){
+   await assert.rejects(denied.api.adminLiveRequest(session,{...request,...change},undefined,{assigned:false,page}));
+  }
+  assert.throws(()=>denied.api.validateAdminLiveRequest({action:'aggregatePrepared',requests:[request]}));
+  for(const wrongPage of ['overview',other])for(const assigned of [false,true])
+   await assert.rejects(denied.api.adminLiveRequest(session,request,undefined,{assigned,page:wrongPage}));
+  assert.equal(denied.authCalls.length,0);assert.equal(denied.calls.length,0);
+ });
+ test(page+' frame sends only its active authorized matrix and cancels its pending read on navigation',async()=>{
+  const h=load(),messages=[];
+  const html=h.api.makeAdminLiveDocument('<!doctype html><html></html>','matrix-channel');
+  const frame={parent:{postMessage:message=>messages.push(message)},setTimeout,clearTimeout,addEventListener(){}};
+  frame.window=frame;vm.runInNewContext(html.match(/<script[^>]*>([\s\S]*?)<\/script>/i)[1],frame);
+  let activePage=other;
+  frame.hensemCurrentAdminPage=()=>activePage;
+  frame.hensemRoleAccess={canView:true,mode:'assigned',permissions:['view','query','detail'].map(key=>page+'.'+key)};
+  await assert.rejects(frame.hensemLiveRequest(request),error=>error.code==='ROLE_DENIED');
+  activePage=page;
+  frame.hensemRoleAccess.permissions.pop();
+  await assert.rejects(frame.hensemLiveRequest(request),error=>error.code==='ROLE_DENIED');
+  assert.equal(messages.length,0);
+  frame.hensemRoleAccess.permissions.push(page+'.detail');
+  const pending=frame.hensemLiveRequest(request);
+  assert.equal(messages.length,1);assert.equal(messages[0].page,page);assert.deepEqual(messages[0].request,request);
+  const stopped=assert.rejects(pending,error=>error.code==='ADMIN_LIVE_CANCELLED');
+  activePage=other;frame.hensemLiveCancelRequests(['aggregate']);await stopped;
+  assert.equal(messages.length,2);assert.equal(messages[1].id,messages[0].id);
+ });
+ test(page+' matrix message checks the current page view, query and detail permissions before reading',async()=>{
+  for(const missing of ['view','query','detail',null]){
+   const permissions=['view','query','detail'].filter(action=>action!==missing).map(action=>page+'.'+action);
+   const h=load(),b=bridge(h,{roleAccess:()=>({mode:'assigned',canView:true,permissions})});
+   const event=b.event('matrix',request);event.data.page=page;h.send(event);
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(h.calls.length,missing?0:1,missing||'allowed');assert.equal(b.replies.length,1);
+   if(missing)assert.match(b.replies[0].data.error,/权限/);
+   b.cleanup();
+  }
+ });
+}
 test('custom hour and amount request forwards exact half-open bounds to the dedicated drilldown RPC',async()=>{
  const h=load(),q={...base,hourRange:{minHour:1,maxHour:3},amountMin:200,amountMax:250,amountMaxExclusive:true};
  const value=h.api.validateAdminLiveRequest(q);assert.equal(JSON.stringify(value),JSON.stringify(q));
