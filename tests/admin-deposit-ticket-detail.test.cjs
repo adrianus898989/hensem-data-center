@@ -29,6 +29,16 @@ test('default view reads a single bounded ticket list; two tickets for one payme
  assert.match(h.drawer(),/催单次数<\/dt><dd>0/);assert.match(h.drawer(),/UTR 匹配<\/dt><dd>否/);assert.match(h.drawer(),/&lt;example&gt;/);
  assert.match(h.html(),/存款未到账明细/);assert.equal(h.api.canExportDeposit(),true);
 });
+test('deposit date pair follows four selectors in its own wide grid track',()=>{
+ const h=harness(async q=>result(q));h.render();
+ const primary=h.html().split('class="wo-filter-grid wo-records-primary wo-deposit-primary">')[1].split('class="wo-filter-grid wo-more"')[0];
+ const [selectors,dates]=primary.split('<div class="wo-filter-dates">');
+ assert.equal((selectors.match(/<select /g)||[]).length,4);
+ assert.equal((dates.split('</div>')[0].match(/type="date"/g)||[]).length,2);
+ const css=fs.readFileSync(path.join(__dirname,'../admin-preview/live-configuration.css'),'utf8');
+ assert.match(css,/\.wo-deposit-primary\s*\{\s*--wo-select-count:\s*4\b/);
+ assert.match(css,/\.wo-records-primary\s*\{\s*grid-template-columns:repeat\(var\(--wo-select-count,5\)/);
+});
 test('filter edits abort old reads; next page uses the committed query and late rows never repaint under new scope',async()=>{
  let resolve,signal;const h=harness((q,o)=>{if(!q.filters.orderNo){signal=o.signal;return new Promise(r=>{resolve=r;});}return Promise.resolve(result(q,{hasMore:q.offset===0,nextCursor:q.offset===0?{at:'2026-11-08T17:05:00.123456Z',p:'native',t:'6006',k:'AR-1',h:'filter-key'}:null}));});
  h.render();await next();assert.equal(h.calls.length,1);h.root.workorderOperationsSet('orderNo','new filter',false);

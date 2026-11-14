@@ -75,6 +75,8 @@ before(async()=>{
     insert into public.newar_detail_platforms values ('newOne','IN','印度','Asia/Kolkata','INR',true,null),
       ('futureNew','IN','印度','Asia/Kolkata','INR',true,'2100-01-01')`);
   for(const file of migrationsUnderTest)await db.exec('begin;\n'+fs.readFileSync(path.join(migrations,file),'utf8')+'\ncommit;');
+  // Production builds this index concurrently, outside a migration transaction.
+  await db.exec(fs.readFileSync(path.join(__dirname,'../supabase/operations/deposit-ticket-submission-time-index.sql'),'utf8'));
 });
 after(async()=>{if(db)await db.close()});
 beforeEach(async()=>{
@@ -82,6 +84,48 @@ beforeEach(async()=>{
   await configure('access',{canView:true,permissions});
 });
 afterEach(async()=>await db.exec('rollback'));
+
+test('scoped AR snapshot hour uses the submission timestamp index and preserves dated and undated tickets',async()=>{
+  await db.exec(`
+    create index ar_workorder_latest_v1_submission_scope on private.ar_workorder_latest_v1
+      (country_code,platform,submitted_date,work_order_no);
+    insert into private.ar_workorder_latest_v1
+      (system_name,country_code,platform,tenant_id,source_record_id,work_order_no,issue_kind,submitted_date,submitted_at)
+    select 'AR','IN',case when n%2=0 then 'arOne' else 'arTwo' end,'10',n::text,'form-'||n,'deposit',
+           (submitted at time zone 'Asia/Kolkata')::date,submitted
+    from generate_series(1,8000) n
+    cross join lateral (select timestamptz '2026-11-01 00:00Z'+n*interval '2 minutes' as submitted) t`);
+  await snapshot('undated',{submitted_at:null});
+  await db.exec('analyze private.ar_workorder_latest_v1');
+
+  const hour=['2026-11-08T05:00:00Z','2026-11-08T06:00:00Z'];
+  const undated=[null,null];
+  const query=`
+    with targets as materialized (select * from (values ('arOne'),('arTwo')) p(platform))
+    select t.platform,a.work_order_id from targets t
+    cross join lateral private.dashboard_deposit_ticket_ar_slice(
+      'IN',t.platform,'2026-11-01','2026-11-14',$1::timestamptz,$2::timestamptz,'{}') a
+    order by t.platform,a.work_order_id`;
+  await db.exec('savepoint without_time_index');
+  await db.exec('drop index private.ar_workorder_latest_v1_submission_time_idx');
+  const beforeHour=(await db.query(query,hour)).rows;
+  const beforeUndated=(await db.query(query,undated)).rows;
+  await db.exec('rollback to savepoint without_time_index');
+  assert.equal(beforeHour.length,30);
+  assert.deepEqual(beforeUndated,[{platform:'arOne',work_order_id:'undated'}]);
+  assert.deepEqual((await db.query(query,hour)).rows,beforeHour);
+  assert.deepEqual((await db.query(query,undated)).rows,beforeUndated);
+
+  const plan=(await db.query('explain (format json) '+query,hour)).rows[0]['QUERY PLAN'][0].Plan;
+  function usesWindowIndex(node) {
+    if(node['Index Name']==='ar_workorder_latest_v1_submission_time_idx'){
+      const condition=node['Index Cond']||'';
+      return condition.includes('submitted_at >=')&&condition.includes('submitted_at <');
+    }
+    return (node.Plans||[]).some(usesWindowIndex);
+  }
+  assert.ok(usesWindowIndex(plan),'the per-platform snapshot read must use both timestamp bounds');
+});
 
 test('each native ticket survives a repeated payment number and current snapshots overlay the matching ticket only',async()=>{
   await ar('a');await ar('b');await snapshot('a');await snapshot('snapshot-only');await newar('a');
