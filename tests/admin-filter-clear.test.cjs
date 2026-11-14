@@ -20,7 +20,7 @@ function harness(options={}){
  const pages=keys.map(k=>[k,'',k,'',k]),groups=[['analysis','','数据分析',keys.filter(k=>!merchantKeys.includes(k))],['merchant','','商户中心',merchantKeys]];
  class FixedDate extends Date{constructor(...args){super(...(args.length?args:[clock]))}static now(){return clock}}
  class TestURL extends URL{static createObjectURL(blob){blobs.push(blob);return 'blob:synthetic'}static revokeObjectURL(){}}
- const context={console,Intl,Date:FixedDate,URL:TestURL,Blob,state:{page:options.page||'overview',navGroup:'analysis'},pages,navGroupsV3:groups,location:{hash:''},
+ const context={console,Intl,AbortController,Date:FixedDate,URL:TestURL,Blob,state:{page:options.page||'overview',navGroup:'analysis'},pages,navGroupsV3:groups,location:{hash:''},
   document:{title:'',body:{classList:{add(){},remove(){}},appendChild(n){nodes.set(n.id,n)}},getElementById:id=>nodes.get(id)||null,querySelector:selector=>nodes.get(selector)||null,createElement:tag=>node(tag)},
   render(){nodes.get('page').innerHTML='INDEPENDENT_SNAPSHOT'},syncFilters(){},groupForV3:key=>groups.find(g=>g[3].includes(key))||groups[0],toggleCenterV3(){},setPage(){},headerIconV3:()=>'<svg></svg>',openDrawer:(title,html)=>drawers.push({title,html}),toast(){},scrollTo(){},
   setInterval:(fn,ms)=>{intervals.push({fn,ms});return intervals.length},clearInterval(){},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
@@ -72,3 +72,45 @@ test('country, required order platform and pinned payout direction cannot be cle
 test('automatic-withdrawal platform clear shares the control and never starts a data read',async()=>{
  const h=await ready({page:'auto_withdraw'});h.c.withdrawSetMultiOption('withdrawPlatform',{checked:true,value:'ONE'});h.c.withdrawMultiOpen('withdrawPlatform',true);h.c.withdrawMultiSearch('withdrawPlatform','one');h.c.render();assert.match(h.html(),/class="live-multi-clear"/);assert.match(h.html(),/withdrawMultiClear/);const before=h.calls.length,e=event();h.c.HensemLiveFilters.clear(e,'withdrawPlatform',h.c.withdrawMultiClear);await settle();assert.equal(h.calls.length,before);assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/class="live-multi-clear"/);assert.doesNotMatch(h.html(),/data-multi="withdrawPlatform" open|value="one"/);
 });
+
+for(const page of ['time','amount']){
+ test(page+' combines both directions with one current aggregate, preserving adjacent page filters',async()=>{
+  const h=await ready({page:'matrix'});
+  h.L.multi.platform=[P.id];
+  h.L.platform=P.id;
+  h.c.liveSet('direction','withdraw');
+  await settle();
+  assert.match(h.nodes.get('liveFilters').innerHTML,/data-multi="direction"/);
+  const from=h.L.from,to=h.L.to;
+  h.c.setPage(page);
+  assert.equal(h.L.direction,'all');
+  assert.deepEqual(Array.from(h.L.multi.direction),[]);
+  assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/业务方向|data-multi="direction"/);
+  h.c.liveSet('direction','charge');
+  h.c.liveSetMultiOption('direction',{checked:true,value:'withdraw'});
+  assert.equal(h.L.direction,'all');
+  const start=h.calls.length;
+  await h.c.liveQuery();
+  await settle();
+  const reads=h.calls.slice(start).filter(q=>q.action==='aggregate');
+  assert(reads.length>0);
+  assert(reads.every(q=>q.direction==='all'&&q.platformId===P.id));
+  assert.equal(reads.filter(q=>q.startAt==='2026-09-21T18:30:00.000Z').length,1);
+  h.c.setPage('matrix');
+  assert.equal(h.L.direction,'withdraw');
+  assert.deepEqual(Array.from(h.L.multi.direction),['withdraw']);
+  h.c.setPage(page);
+  assert.equal(h.L.direction,'all');
+  assert.equal(h.L.pageQueried,true);
+  // Simulate an open, single-direction tab saved by the previous adapter.
+  h.L.direction='charge';h.L.multi.direction=['charge'];
+  h.c.setPage('matrix');
+  h.c.setPage(page);
+  assert.equal(h.L.direction,'all');
+  assert.equal(h.L.pageQueried,false);
+  assert.equal(h.L.results.length,0);
+  assert.equal(h.L.from,from);
+  assert.equal(h.L.to,to);
+  assert.equal(h.L.platform,P.id);
+ });
+}

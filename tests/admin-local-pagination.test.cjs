@@ -6,7 +6,13 @@ const {ready,settle,deferred,aggregate,P}=new Function('require','__dirname',pre
 test('loaded report and analysis table pagination never reloads aggregate reports or directory data',async()=>{
  for(const page of ['overview','collection','payout','providers','provider_payout','merchants','teamops','teamcountries','teamplatforms','risk','time','amount','matrix','provider_daily','latency']){
   const h=await ready({page});if(page==='overview')await h.c.liveQuery();await settle();const rows=h.L.results,serial=h.L.serial,queryNow=h.L.queryNow,calls=h.calls.length;
-  h.c.livePageSize('50','local');h.c.livePage(2,'local');h.c.livePageSize('50','ref-analysis-state');h.c.livePage(2,'ref-analysis-state');await settle();
+  h.c.livePageSize('50','local');h.c.livePage(2,'local');if(page==='time'||page==='amount'){
+   const kind=page==='time'?'hourly':h.L.matrixMode==='range'?'amount_range':'amount';
+   for(const direction of ['charge','withdraw']){
+    const key='ref-analysis-'+kind+'-'+direction;h.c.livePageSize('50',key);h.c.livePage(2,key);
+   }
+  }
+  await settle();
   assert.equal(h.calls.length,calls,page+' pagination must be local');assert.equal(h.L.results,rows,page+' retains the loaded report');assert.equal(h.L.serial,serial);assert.equal(h.L.queryNow,queryNow);
  }
 });
@@ -63,6 +69,6 @@ test('real server pagination requests only the target details page and leaves ag
 
 test('local paging neither cancels an already-running query nor adds requests to its cohort',async()=>{
  const h=await ready({page:'time'}),wait=deferred();h.setHandler(q=>q.action==='aggregate'?wait.promise:{rows:[],total:0});const run=h.c.liveQuery(true);await settle();const serial=h.L.serial,calls=h.calls.length;assert.equal(h.L.loading,true);
- h.c.scrollX=12;h.c.scrollY=345;h.c.livePageSize('50','local');h.c.livePage(2,'ref-analysis-state');await settle();assert.equal(h.calls.length,calls);assert.equal(h.L.serial,serial);assert.equal(h.L.loading,true);assert.equal(h.c.scrollX,12);assert.equal(h.c.scrollY,345);
+ h.c.scrollX=12;h.c.scrollY=345;h.c.livePageSize('50','local');h.c.livePage(2,'ref-analysis-hourly-charge');h.c.livePage(2,'ref-analysis-hourly-withdraw');await settle();assert.equal(h.calls.length,calls);assert.equal(h.L.serial,serial);assert.equal(h.L.loading,true);assert.equal(h.c.scrollX,12);assert.equal(h.c.scrollY,345);
  wait.resolve(aggregate(P,77));await run;await settle();assert.equal(h.L.loading,false);assert.equal(h.L.results[0].total,77);assert.equal(h.L.queryFailures.length,0);
 });

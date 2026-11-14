@@ -12,8 +12,8 @@ function fixture(mode='time'){
  if(mode==='amount'){
   L.view='amount-provider';L.amountBandProfiles={charge:{edges:amountEdges},withdraw:{edges:amountEdges}};
  }
- const calls=[];let model,rendered,page=mode,detail=true,context='user1:v1';
- const win={HensemBandSuccessMatricesUI:{render:m=>{rendered=m;return '';}}};
+ const calls=[],models=new Map();let model,page=mode,detail=true,context='user1:v1';
+ const win={HensemBandSuccessMatricesUI:{render:(m,page,kind)=>{models.set(m.direction,m);return '<section data-band-matrix="'+page+'/'+m.direction+'/'+kind+'"></section>';}}};
  const runtime={window:win,AbortController,setTimeout,clearTimeout,queueMicrotask};
  vm.runInNewContext(dataSource,runtime);
  if(mode==='amount')for(const name of ['live-amount-bands','live-amount-rate-data'])vm.runInNewContext(readUi(name),runtime);
@@ -23,14 +23,14 @@ function fixture(mode='time'){
  const ctx={L,E:String,access:()=>context,page:()=>page,allowed:()=>true,canDrill:()=>detail,platforms:()=>platforms,query:p=>({platformId:p.id,status:'all',direction:L.direction,currency:L.currency,startAt:from,endAt:to,successBasis:'created',offset:50,limit:20,...(mode==='amount'?{amountBands:Object.fromEntries(Object.entries(L.amountBandProfiles).map(([d,profile])=>[d,profile.edges]))}:{})}),request:(q,o)=>new Promise((resolve,reject)=>calls.push({q,o,resolve,reject})),render:()=>{},denied:e=>e.code==='42501'};
  const api=win.HensemHourlyRateController,app=api.create(ctx);
  const reply=call=>({platform:{id:call.q.platformId},startAt:call.q.startAt,endAt:call.q.endAt,complete:true,hasMore:false,successBasis:'created',providerHourMatrix:true,segment:{kind:'custom',hourRange:{minHour:0,maxHour:24}},summary:[],groups:{provider_hour:[],hourly:[]}});
- return {win,api,app,calls,ctx,reply,L,model:()=>model,rendered:()=>rendered,detail:x=>detail=x,context:x=>context=x,page:x=>page=x};
+ return {win,api,app,calls,ctx,reply,L,model:()=>model,rendered:(direction='charge')=>models.get(direction),detail:x=>detail=x,context:x=>context=x,page:x=>page=x};
 }
 test('one full-day crossing per platform shared by both directions, two in flight, no repeat on sorting or rendering, retry only failed native',async()=>{
  const h=fixture(),action=h.win.HensemHourlyMatrixActions;h.app.html();assert.equal(h.calls.length,0);
  const run=action.load();assert.equal(h.calls.length,2);for(const c of h.calls){assert.equal(c.q.providerHourMatrix,true);assert.equal(c.q.direction,'all');assert.equal(c.q.offset,0)}
  await action.load();assert.equal(h.calls.length,2);h.calls[0].resolve(h.reply(h.calls[0]));h.calls[1].reject(Error('failed'));await wait();assert.equal(h.calls.length,4);
  h.calls.slice(2).forEach(c=>c.resolve(h.reply(c)));await run;assert.match(h.app.html(),/重试未完成商户/);assert.equal(h.model().providerHours.size,3);
- action.direction('withdraw');h.app.html();assert.equal(h.model().direction,'withdraw');assert.equal(h.calls.length,4);
+ assert.ok(h.rendered('charge'));assert.ok(h.rendered('withdraw'));assert.equal(h.calls.length,4);
  const retry=action.load(true);assert.equal(h.calls.length,5);assert.equal(h.calls[4].q.platformId,h.calls[1].q.platformId);h.calls[4].resolve(h.reply(h.calls[4]));await retry;h.app.html();assert.equal(h.model().providerHours.size,4);h.app.cancel();
 });
 test('query replacement, permission loss and denied reads never paint private responses from a previous scope',async()=>{
@@ -163,7 +163,7 @@ test('amount merchant supplements only one unavailable distribution, then reuses
  h.calls.slice(1).forEach(c=>c.resolve(h.reply(c)));await wait();
  assert.equal(h.calls[3].q.platformId,'p4');h.calls[3].resolve(h.reply(h.calls[3]));await run;
  h.app.html();assert.equal(h.rendered().provider.ready.size,4);
- action.direction('withdraw');h.app.html();assert.equal(h.rendered().provider.ready.size,4);
+ assert.equal(h.rendered('withdraw').provider.ready.size,4);
  assert.equal(h.calls.length,4);h.app.cancel();
 });
 test('amount reading invalidates an old band profile and discards a late response after account, permission or platform changes',async()=>{
@@ -195,7 +195,59 @@ test('a source with an unavailable payout clock retains its verified collection 
  c.resolve({...h.reply(c),successBasis:undefined,summary:main.summary,total:5,
   groups:{...main.groups,provider_amount_range:main.groups.amount_range.map(r=>({...r,provider:'Pay'}))}});
  await run;h.app.html();assert.equal(h.rendered().provider.ready.size,1);assert.equal(h.rendered().provider.rows[0].total.successCount,1);
- action.direction('withdraw');h.app.html();await wait();assert.equal(h.rendered().provider.ready.size,0);assert.equal(h.rendered().provider.rows.length,0);
- action.direction('charge');h.app.html();await wait();assert.equal(h.rendered().provider.ready.size,1);assert.equal(h.calls.length,1);
+ assert.equal(h.rendered('withdraw').provider.ready.size,0);assert.equal(h.rendered('withdraw').provider.rows.length,0);
+ await wait();assert.equal(h.calls.length,1);
+ h.app.cancel();
+});
+
+for(const page of ['time','amount'])test(page+' stacks each verified direction in one tab and rejects a stale one-direction scope',async()=>{
+ const h=page==='time'?fixture():setupAmount(), prefix=page==='time'?'hourly':'amount';
+ for(const kind of ['merchant','provider']){
+  h.L.view=prefix+'-'+kind;
+  const html=h.app.html();
+  const keys=Array.from(html.matchAll(/data-band-matrix="([^"]+)"/g),m=>m[1]);
+  assert.deepEqual(keys,[page+'/charge/'+kind,page+'/withdraw/'+kind]);
+  assert.doesNotMatch(html,/HensemHourlyMatrixActions.direction/);
+ }
+ const load=h.win.HensemHourlyMatrixActions.load();
+ assert.equal(h.calls.length,2);
+ h.L.direction='charge';const blocked=h.app.html();
+ assert.ok(h.calls.every(c=>c.o.signal.aborted));assert.doesNotMatch(blocked,/data-band-matrix/);
+ h.calls.forEach(c=>c.resolve(h.reply(c)));await load;await wait();
+ assert.equal(h.calls.length,2);
+ h.app.cancel();
+});
+
+for(const page of ['time','amount'])test(page+' renders different charge and payout counts from one native response on both tabs',async()=>{
+ const isAmount=page==='amount',h=isAmount?setupAmount():fixture(),main=h.L.results[0];
+ h.ctx.platforms=()=>[main.platform];
+ const totals=[
+  {direction:'charge',currency:'INR',success_count:3,created_success_count:3,all_count:4},
+  {direction:'withdraw',currency:'INR',success_count:2,created_success_count:2,all_count:10}
+ ];
+ const buckets=totals.map((row,i)=>({...row,...(isAmount?{bucket:'band:'+i}:{hour:i})}));
+ const nativeGroups={
+  [isAmount?'amount_range':'hourly']:buckets,
+  provider:totals.map(row=>({...row,provider:'Pay'}))
+ };
+ Object.assign(main,{startAt:from,endAt:to,successBasis:'created',complete:true,hasMore:false,total:14,summary:totals,groups:nativeGroups});
+ const run=h.win.HensemHourlyMatrixActions.load();
+ assert.equal(h.calls.length,1);
+ const q=h.calls[0];
+ q.resolve({...h.reply(q),summary:totals,total:14,groups:{
+  ...nativeGroups,[isAmount?'provider_amount_range':'provider_hour']:buckets.map(row=>({...row,provider:'Pay'}))
+ }});
+ await run;
+ for(const kind of ['provider','merchant']){
+  h.L.view=(isAmount?'amount':'hourly')+'-'+kind;const html=h.app.html();
+  assert.ok(html.indexOf(page+'/charge/'+kind)<html.indexOf(page+'/withdraw/'+kind));
+  for(const row of totals){
+   const matrix=h.rendered(row.direction)[kind];
+   assert.equal(matrix.ready.size,1);
+   assert.equal(matrix.rows[0].total.successCount,row.success_count);
+   assert.equal(matrix.rows[0].total.totalCount,row.all_count);
+  }
+  assert.equal(h.calls.length,1);
+ }
  h.app.cancel();
 });

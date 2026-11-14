@@ -2,6 +2,7 @@
 (function(root){
  'use strict';
  const range={minHour:0,maxHour:24};
+ const directions=['charge','withdraw'];
  const sameInstant=(a,b)=>typeof a==='string'&&typeof b==='string'&&Number.isFinite(Date.parse(a))&&Date.parse(a)===Date.parse(b);
  function matrixRequest(request){
   const q={...request,action:'aggregate',view:'drilldown',kind:'custom',hourRange:{...range},offset:0};
@@ -51,7 +52,7 @@
   }
   function cancel(){pause();current=null;}
   function active(s){return !!s&&s===current&&enabled()&&scope()===s.key;}
-  function state(){if(!enabled()){cancel();return null;}const key=scope();if(!current||current.key!==key){cancel();current={key,values:new Map(),failures:new Map(),direction:L.direction==='withdraw'?'withdraw':'charge'};}return current;}
+  function state(){if(!enabled()){cancel();return null;}const key=scope();if(!current||current.key!==key){cancel();current={key,values:new Map(),failures:new Map()};}return current;}
   function updatePanel(s){
    if(!active(s))return;
    const node=root.document?.querySelector('[data-hourly-rate-region]');if(!node){c.render();return;}
@@ -63,25 +64,31 @@
    if(sortFocus>=0)next.querySelectorAll('.band-success-sort')[sortFocus]?.focus({preventScroll:true});
   }
   function repaint(s){if(paint===null)paint=setTimeout(()=>{paint=null;updatePanel(s);},100);}
-  function modelFor(s){
+  function modelsFor(s){
    const platforms=c.platforms(),main=new Map((L.results||[]).map(r=>[r.platform?.id,r]));
-   const options={platforms,direction:s.direction,currency:L.currency,
-    successAvailable:(p,r,d)=>(!r?._matrixDirections||r._matrixDirections.includes(d))&&c.successAvailable?.(p,r,d)!==false&&c.successAvailable?.(p,main.get(p.id),d)!==false,
-    providerType:kind()==='provider'?c.providerTypes?.(s.direction):undefined};
-   if(isAmount())return root.HensemAmountRateData.build({...options,results:L.results,amountBands:bands(),providerAmounts:s.values});
-   const results=platforms.map(p=>s.values.get(p.id)||main.get(p.id)).filter(Boolean);
-   const providerHours=kind()==='provider'?new Map([...s.values].map(([id,r])=>[id,{complete:true,rows:r.groups.provider_hour}])):new Map();
-   return root.HensemHourlyRateData.build({...options,results,providerHours});
+   const options={platforms,currency:L.currency,
+    successAvailable:(p,r,d)=>(!r?._matrixDirections||r._matrixDirections.includes(d))&&c.successAvailable?.(p,r,d)!==false&&c.successAvailable?.(p,main.get(p.id),d)!==false};
+   const provider=kind()==='provider',amount=isAmount();
+   const data=amount?{results:L.results,amountBands:bands(),providerAmounts:s.values}:{
+    results:platforms.map(p=>s.values.get(p.id)||main.get(p.id)).filter(Boolean),
+    providerHours:provider?new Map([...s.values].map(([id,r])=>[id,{complete:true,rows:r.groups.provider_hour}])):new Map()
+   };
+   const builder=amount?root.HensemAmountRateData:root.HensemHourlyRateData;
+   return directions.map(direction=>builder.build({...options,...data,direction,providerType:provider?c.providerTypes?.(direction):undefined}));
   }
-  function targets(s,model){
-   const main=new Map((L.results||[]).map(r=>[r.platform?.id,r]));
-   const ready=kind()==='merchant'?model.merchant?.ready:model.provider?.ready;
-   return c.platforms().filter(p=>main.has(p.id)&&main.get(p.id).pandaCoverage?.reason!=='verified_created_prefix_only'&&(!isAmount()||c.successAvailable?.(p,main.get(p.id),s.direction)!==false)&&!s.values.has(p.id)&&!ready?.has(p.id));
+  function targets(s,models=[]){
+   const main=new Map((L.results||[]).map(r=>[r.platform?.id,r])),selected=kind();
+   const ready=new Map(models.map(model=>[model.direction,model[selected].ready]));
+   return c.platforms().filter(p=>{
+    const result=main.get(p.id);
+    return result&&result.pandaCoverage?.reason!=='verified_created_prefix_only'&&!s.values.has(p.id)&&
+     directions.some(d=>c.successAvailable?.(p,result,d)!==false&&!ready.get(d)?.has(p.id));
+   });
   }
   async function load(retry=false){
    if(!kind())return;
-   const s=state();if(!s||s.denied||!c.canDrill()||s.controller||L.loading||L.queryRetrying||L.status!=='all')return;
-   const list=targets(s,kind()==='merchant'||isAmount()?modelFor(s):{}).filter(p=>retry||!s.failures.has(p.id)).map(platform=>({platform}));
+   const s=state();if(!s||s.denied||!c.canDrill()||s.controller||L.loading||L.queryRetrying||L.status!=='all'||L.direction!=='all')return;
+   const list=targets(s,kind()==='merchant'?modelsFor(s):[]).filter(p=>retry||!s.failures.has(p.id)).map(platform=>({platform}));
    if(!list.length)return;
    const controller=new AbortController();s.controller=controller;
    let idx=0;const work=async()=>{while(idx<list.length&&active(s)&&!controller.signal.aborted){
@@ -90,6 +97,7 @@
     let result,base,requests;
     try{
      base=c.query(platform);
+     if(base.direction!=='all')throw Error('请重新查询代收和代付数据。');
      if(isAmount())base={...base,providerAmountMatrix:true};
      requests=slices||(windows?windows.plan(base,matrixRequest):[matrixRequest(base)]);
      const parts=[];
@@ -131,20 +139,18 @@
    if(s.queued)return;
    s.queued=true;queueMicrotask(()=>{if(!s.queued)return;s.queued=false;if(active(s))void load();});
   }
-  function direction(d){if(!kind())return;const s=state();if(!s||L.direction!=='all'||!['charge','withdraw'].includes(d))return;s.direction=d;updatePanel(s);}
   function html(){
    const s=state();if(!s)return '';
    const grouping=isAmount()?'金额分档':'分时';
    if(s.denied)return '<div data-hourly-rate-region class="live-status" role="status">当前会话未获'+grouping+'统计读取权限，请重新查询。</div>';
    if(L.status!=='all')return '<div data-hourly-rate-region class="live-status" role="status">'+grouping+'成功率需要全部订单状态作为分母，请调整筛选后查询。</div>';
-   const model=modelFor(s),platforms=c.platforms(),remaining=targets(s,model);
+   if(L.direction!=='all')return '<div data-hourly-rate-region class="live-status" role="status">请重新查询代收和代付数据。</div>';
+   const models=modelsFor(s),selected=kind(),platforms=c.platforms(),remaining=targets(s,models);
    const failed=remaining.map(p=>s.failures.get(p.id)).filter(Boolean);
-   const ready=model[kind()]?.ready?.size??s.values.size;
-   const header='<div class="section-switcher"><strong>按'+(isAmount()?'金额段':'小时')+'看成功率</strong> '+(L.direction==='all'?'<span class="tabs">'+['charge','withdraw'].map(d=>'<button type="button" class="'+(s.direction===d?'on':'')+'" aria-pressed="'+(s.direction===d)+'" onclick="HensemHourlyMatrixActions.direction(\''+d+'\')">'+(d==='charge'?'代收':'代付')+'</button>').join('')+'</span>':'')+'</div>';
+   const progress=models.map(model=>(model.direction==='charge'?'代收':'代付')+' '+model[selected].ready.size+' / '+platforms.length+' 个商户').join('，');
    const retry='<button class="link" type="button" onclick="HensemHourlyMatrixActions.load(true)">重试未完成商户</button>';
-   const progress=ready+' / '+platforms.length+' 个商户';
    let status='';
-   if(ready<platforms.length){
+   if(models.some(model=>model[selected].ready.size<platforms.length)){
     if(!c.canDrill())status='当前角色未获'+grouping+'明细权限。';
     else if(L.loading||L.queryRetrying)status='主表正在读取 · '+progress;
     else if(s.controller||remaining.some(p=>!s.failures.has(p.id)))status='正在读取'+grouping+'统计 · '+progress;
@@ -153,9 +159,10 @@
    }
    const detail=failed.length?'<details><summary>查看未完成原因</summary>'+failed.map(f=>'<div>'+E(f.name)+'：'+E(f.message)+'</div>').join('')+'</details>':'';
    if(c.canDrill()&&!s.controller&&!L.loading&&!L.queryRetrying&&remaining.length>failed.length)schedule(s);
-   return '<div data-hourly-rate-region>'+header+'<p class="analysis-note">沿用页顶查询范围，'+(isAmount()?'按'+E(L.currency)+'金额档分组':'按各商户当地时间分组')+'；总成功率按总笔数加权。</p>'+(status?'<div class="analysis-status" role="status">'+status+detail+'</div>':'')+root.HensemBandSuccessMatricesUI.render(model,c.page(),kind())+'</div>';
+   const tables=models.map(model=>root.HensemBandSuccessMatricesUI.render(model,c.page(),selected)).join('');
+   return '<div data-hourly-rate-region><p class="analysis-note">沿用页顶查询范围，'+(isAmount()?'按'+E(L.currency)+'金额档分组':'按各商户当地时间分组')+'；总成功率按总笔数加权。</p>'+(status?'<div class="analysis-status" role="status">'+status+detail+'</div>':'')+tables+'</div>';
   }
-  root.HensemHourlyMatrixActions={load,direction};
+  root.HensemHourlyMatrixActions={load};
   return {html,pause,cancel,kind};
  }
  root.HensemHourlyRateController={create,matrixRequest,verified};

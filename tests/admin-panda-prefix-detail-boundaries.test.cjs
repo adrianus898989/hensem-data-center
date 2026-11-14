@@ -1,7 +1,7 @@
 /* Shared production controllers, synthetic publications and no network. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const pre=fs.readFileSync(path.join(__dirname,'admin-panda-native-ui.test.cjs'),'utf8').split(/\ntest\(/)[0];
-const {harness,settle,PANDA,result}=new Function('require','__dirname',pre+';return {harness,settle,PANDA,result};')(require,__dirname);
+const {harness,settle,PANDA,result,showAllBandRows}=new Function('require','__dirname',pre+';return {harness,settle,PANDA,result,showAllBandRows};')(require,__dirname);
 const OTHER={...PANDA,id:'88888888-8888-4888-8888-888888888888',name:'Synthetic AR',source:'ar',sourceName:'SYNTHETIC_AR',capabilities:{}};
 const enc=value=>encodeURIComponent(JSON.stringify(value)),segment={kind:'hourly',direction:'charge',hour:23};
 async function setup({page='time',mixed=false,prefix=true,cutoff='2026-09-23T11:00:00Z',multiDay=false}={}){
@@ -13,7 +13,7 @@ async function setup({page='time',mixed=false,prefix=true,cutoff='2026-09-23T11:
   if(p===OTHER)r.groups.hourly.push({...r.groups.hourly[0],hour:23,all_count:2,all_amount:'200'});
   r.pandaCoverage=p===PANDA&&prefix?{timeBasis:'created_at',statisticBasis:'current_stored_status',complete:false,requestedComplete:false,effectiveComplete:true,sourceComplete:false,requestedStartAt:q.startAt,requestedEndAt:q.endAt,effectiveStartAt:q.startAt,effectiveEndAt:cutoff,dataCutoff:cutoff,reason:'verified_created_prefix_only',directions:['charge','withdraw'].map(direction=>({direction,startAt:q.startAt,endAt:cutoff,complete:true}))}:{complete:true,directions:['charge','withdraw'].map(direction=>({direction,startAt:q.startAt,endAt:q.endAt,complete:true}))};return r;}
  h.setHandler(q=>q.action==='aggregatePrepared'?{version:2,items:q.requests.map(request=>({request,status:'ready',publication:{id:'synthetic-detail-boundary',generation:1,computedAt:'2026-09-23T11:59:00Z',expiresAt:'2026-09-23T12:09:00Z',cutoff:'2026-09-23T11:59:00Z',calculationComplete:true,sourceComplete:false,freshness:'fresh',refreshState:'idle'},result:response(request)}))}:q.action==='aggregate'?{...response(q),complete:true,hasMore:false}:q.action==='providerOptions'?{providers:[]}:{rows:[],total:0});
- await h.c.liveQuery();await settle();h.L.tableSizes={'analysis-state':100};h.c.render();return h;
+ await h.c.liveQuery();await settle();showAllBandRows(h,page);return h;
 }
 const rawCalls=h=>h.calls.filter(q=>['aggregate','analysisOrders'].includes(q.action));
 function hours(h,min,max){h.c.liveAnalysisHourSet('hourMin',String(min));h.c.liveAnalysisHourSet('hourMax',String(max));h.c.liveAnalysisHourQuery();return {kind:'custom',direction:'charge',hourRange:{minHour:min,maxHour:max},placement:'analysis-custom-time'};}

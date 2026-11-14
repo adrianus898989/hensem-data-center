@@ -37,11 +37,11 @@ test('team and merchant tables share raw numeric ordering without changing their
 test('hour and amount sorting retain exact segments and inline expansion while sorting before the main-row pager',async()=>{
  for(const page of ['time','amount']){
   const h=await setup(page),kind=page==='time'?'hourly':'amount';h.L.results=h.L.results.slice(0,1);const base=h.L.results[0].summary[0];
-  h.L.results[0].groups[kind]=[{...base,hour:7,bucket:'200',success_amount:10000},{...base,hour:18,bucket:'1000',success_amount:20}];h.L.matrixMode='exact';h.L.tableSizes['analysis-state']=100;h.c.render();
-  const before=h.calls.length;sort(h,'analysis-state',4);const rendered=table(h.html().slice(h.html().indexOf('analysis-expand-table')));
-  assert.match(rows(rendered)[0][1],page==='time'?/07:00/:/200/);
+  h.L.results[0].groups[kind]=[{...base,hour:7,bucket:'200',success_amount:10000},{...base,hour:18,bucket:'1000',success_amount:20}];h.L.matrixMode='exact';const id='analysis-'+kind+'-charge';h.L.tableSizes[id]=100;h.c.render();
+  const before=h.calls.length;sort(h,id,3);const rendered=table(h.html().slice(h.html().indexOf('analysis-expand-table')));
+  assert.match(rows(rendered)[0][0],page==='time'?/07:00/:/200/);
   const segment={kind,direction:'charge',...(page==='time'?{hour:7}:{bucket:'200'})};h.c.liveAnalysisAction(encodeURIComponent(JSON.stringify(segment)),'toggle');
-  assert.match(h.html(),/analysis-detail-table/);sort(h,'analysis-state',1);assert.match(h.html(),/analysis-detail-table/);
+  assert.match(h.html(),/analysis-detail-table/);sort(h,id,0);assert.match(h.html(),/analysis-detail-table/);
   assert(h.html().indexOf('analysis-expanded-row')>h.html().indexOf(page==='time'?'07:00–07:59:59':'<td>200</td>'));assert.match(h.html(),/全部金额 \/ 笔数/);assert.match(h.html(),/成功金额 \/ 笔数/);assert.equal(h.calls.length,before);
  }
 });

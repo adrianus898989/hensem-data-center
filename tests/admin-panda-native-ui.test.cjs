@@ -8,6 +8,20 @@ function result(p=PANDA){const r=aggregate(p,10);r.capabilities=p.capabilities;r
 function show(h,r=result()){Object.assign(h.L,{results:[r],queryPlatforms:[PANDA],pageQueried:true,overviewQueried:true,dirty:false,loading:false,comparisonStatus:'idle',loadedView:'full',feeLookupRows:[],feeLookupLoading:false});h.c.render();}
 function detailRow(extra={}){return {id:'panda-safe-id',order_number:'safe-order',direction:'withdraw',provider:null,raw_provider:null,channel_id:null,channel_name:null,currency:'BRL',amount:123.45,actual_amount:null,withdraw_fee:null,status:'refuse',status_group:'unknown',created_at:'2026-09-22T04:00:00Z',source_updated_at:'2026-09-22T05:00:00Z',success_at:null,synced_at:'2026-09-22T06:00:00Z',...extra};}
 
+function showAllBandRows(h,page){
+ const kind=page==='time'?'hourly':h.L.matrixMode==='range'?'amount_range':'amount';
+ for(const direction of ['charge','withdraw'])h.L.tableSizes['analysis-'+kind+'-'+direction]=100;
+ h.c.render();
+}
+function bandRows(html,direction){
+ const panel=html.split('data-analysis-direction="'+direction+'">')[1]?.split('data-analysis-direction="')[0];
+ assert(panel,'missing '+direction+' analysis panel');
+ const body=panel.match(/class="table-wrap analysis-expand-table[^"]*"[^>]*><table>[\s\S]*?<tbody>([\s\S]*?)<\/tbody>/)?.[1];
+ assert(body,'missing '+direction+' analysis table');
+ return [...body.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(row=>
+  [...row[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(cell=>cell[1].replace(/<[^>]+>/g,'').trim()));
+}
+
 test('Panda native order request uses its UUID, Brazil midnight, server pagination and restricted identity searches',async()=>{
  const h=harness({platforms:[PANDA],page:'orders'});await settle();scope(h);h.L.memberId='old-member';h.c.render();let filters=h.nodes.get('liveFilters').innerHTML;assert.match(filters,/熊猫系统/);assert.match(filters,/id="live-memberId"[^>]*disabled/);assert.match(filters,/id="live-systemOrderId"[^>]*disabled/);assert.equal(h.L.memberId,'');await h.c.liveQuery();await settle();let q=h.calls.find(q=>q.action==='details');assert(q);assert.equal(q.platformId,PANDA.id);assert.equal(q.startAt,'2026-09-22T03:00:00.000Z');assert.equal(q.endAt,'2026-09-23T03:00:00.000Z');assert.equal(q.currency,'BRL');h.c.livePage(2,'server');await settle();q=h.calls.filter(q=>q.action==='details').at(-1);assert.equal(q.offset,20);assert.equal(q.limit,20);
 });
@@ -128,8 +142,17 @@ for(const page of ['time','amount','matrix','provider_daily'])test('Panda '+page
 });
 
 for(const page of ['time','amount'])test('Verified sparse Panda '+page+' keeps missing success and reviewed-pending cells unknown in the real table',async()=>{
- const h=harness({platforms:[PANDA],page});await settle();scope(h);h.setHandler(q=>q.action==='aggregate'?completeResponse(q):{rows:[],total:0});await h.c.liveQuery(true);await settle();h.L.tableSizes={'analysis-state':100};h.c.render();assert.doesNotMatch(h.html(),/data-panda-aggregate-blocked/);
- const text=value=>value.replace(/<[^>]+>/g,'').replace(/&[^;]+;/g,' ').trim();const rows=[...h.html().matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(x=>text(x[1]))).filter(c=>c.length>=11&&['代收','代付'].includes(c[0]));assert.equal(rows.length,page==='time'?48:18,'24 hours or 9 configured fallback ranges per direction');assert(rows.some(c=>c[0]==='代收')&&rows.some(c=>c[0]==='代付'));assert(rows.some(c=>c[3]==='0'),'confirmed empty creation buckets are present');for(const cells of rows){assert.equal(cells[4],'—');assert.equal(cells[5],'—');assert.equal(cells[10],'—');if(cells[0]==='代付'){assert.equal(cells[6],'—');assert.equal(cells[7],'—');}}
+ const h=harness({platforms:[PANDA],page});await settle();scope(h);h.setHandler(q=>q.action==='aggregate'?completeResponse(q):{rows:[],total:0});await h.c.liveQuery(true);await settle();showAllBandRows(h,page);
+ assert.doesNotMatch(h.html(),/data-panda-aggregate-blocked/);
+ for(const direction of ['charge','withdraw']){
+  const rows=bandRows(h.html(),direction);
+  assert.equal(rows.length,page==='time'?24:9,'all configured buckets for '+direction);
+  assert(rows.some(c=>c[2]==='0'),'confirmed empty creation buckets are present');
+  for(const cells of rows){
+   assert.equal(cells[3],'—');assert.equal(cells[4],'—');assert.equal(cells[9],'—');
+   if(direction==='withdraw'){assert.equal(cells[5],'—');assert.equal(cells[6],'—');}
+  }
+ }
 });
 
 test('Verified sparse Panda matrix never fabricates zero success rates for absent cells',async()=>{
