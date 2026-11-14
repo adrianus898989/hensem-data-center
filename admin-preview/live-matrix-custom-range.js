@@ -71,7 +71,7 @@
   root.liveAnalysisHourSet=function(key,value){if(c.page()!=='time'||!['hourMin','hourMax'].includes(key))return;sync();S[key]=String(value)};
   root.liveAnalysisHourQuery=function(){if(c.page()!=='time'||blocked()||c.allowed&&!c.allowed())return;sync();const min=Number(S.hourMin),max=Number(S.hourMax);if(!String(S.hourMin).trim()||!String(S.hourMax).trim()||!Number.isInteger(min)||!Number.isInteger(max)||min<0||max>24||min>=max){S.error='请选择有效时段：起始小时须小于结束小时（0–24）。';c.render();return}S.hourApplied={minHour:min,maxHour:max};S.error='';c.render()};
   root.liveAnalysisHourClear=function(){if(c.page()!=='time')return;sync();S.hourApplied=null;S.error='';c.render()};
-  function hourControls(){sync();const disabled=blocked()||c.allowed&&!c.allowed(),options=(key)=>Array.from({length:25},(_,hour)=>'<option value="'+hour+'" '+(Number(S[key])===hour?'selected':'')+'>'+String(hour).padStart(2,'0')+':00</option>').join('');return '<section class="analysis-custom-query"><div class="matrix-custom-controls"><strong>自定义时段</strong><label>起始小时（含）<select aria-label="自定义起始小时" onchange="liveAnalysisHourSet(\'hourMin\',this.value)">'+options('hourMin')+'</select></label><label>结束小时（不含）<select aria-label="自定义结束小时" onchange="liveAnalysisHourSet(\'hourMax\',this.value)">'+options('hourMax')+'</select></label><button type="button" class="btn small" onclick="liveAnalysisHourQuery()" '+(disabled?'disabled':'')+'>查询区间</button><button type="button" class="btn small" onclick="liveAnalysisHourClear()">清空区间</button><small>平台当地时间 · 下限含，上限不含 · 主统计不变</small></div>'+status()+summary('time')+'</section>';}
+  function hourControls(){sync();const disabled=blocked()||c.allowed&&!c.allowed(),options=(key)=>Array.from({length:25},(_,hour)=>'<option value="'+hour+'" '+(Number(S[key])===hour?'selected':'')+'>'+String(hour).padStart(2,'0')+':00</option>').join('');return '<section class="analysis-custom-query"><div class="matrix-custom-controls"><strong>自定义时段</strong><label>起始小时（含）<select aria-label="自定义起始小时" onchange="liveAnalysisHourSet(\'hourMin\',this.value)">'+options('hourMin')+'</select></label><label>结束小时（不含）<select aria-label="自定义结束小时" onchange="liveAnalysisHourSet(\'hourMax\',this.value)">'+options('hourMax')+'</select></label><button type="button" class="btn small" onclick="liveAnalysisHourQuery()" '+(disabled?'disabled':'')+'>查询区间</button><button type="button" class="btn small" onclick="liveAnalysisHourClear()">清空区间</button><small>平台当地时间 · 下限含，上限不含 · 主统计不变</small></div>'+status()+'</section>';}
   function segment(direction){return {kind:'custom',direction,...(c.page()==='time'?{hourRange:S.hourApplied}:S.applied),placement:'analysis-custom-'+c.page()};}
   function customResults(selectedSegment){
    sync();const time=!!selectedSegment.hourRange,range=time?S.hourApplied:S.applied;
@@ -88,12 +88,13 @@
    const value=R(success,total);
    return complete||value==='—'?value:'<span data-partial-rate="true" title="已读小计：按已返回平台的已知成功笔数与全部笔数计算，未完成平台不计入。">'+E(value)+'*</span>';
   }
-  function summary(page){
-   sync();if(!(page==='time'?S.hourApplied:S.applied))return '';const directions=L.direction==='all'?['charge','withdraw']:[L.direction],rows=directions.map(direction=>{const selectedSegment=segment(direction),parts=detailRows(selectedSegment),values=Object.fromEntries(detailFields.map(key=>[key,!parts.length||parts.some(row=>!finite(row[key]))?null:parts.reduce((n,row)=>n+Number(row[key]),0)]));return {...values,direction,segment:selectedSegment};}),heading=page==='time'?String(S.hourApplied.minHour).padStart(2,'0')+':00 ≤ 时段 < '+String(S.hourApplied.maxHour).padStart(2,'0')+':00':label(S.applied),headers=['方向','自定义区间','全部金额','全部笔数','成功金额','成功笔数','处理中金额','处理中笔数','失败金额','失败笔数','成功率'],cells=row=>[row.direction==='withdraw'?'代付':'代收',E(heading),N(row.all_amount),C(row.all_count),N(row.success_amount),C(row.success_count),N(row.pending_amount),C(row.pending_count),N(row.failed_amount),C(row.failed_count),observedRate(row.success_count,row.all_count,customResults(row.segment)?.complete)];
-   return c.analysis?.table?c.analysis.table({id:'custom-'+page,headers,rows,cells,segment:row=>row.segment,label:()=>heading}):'';
+  function summary(page,direction){
+   sync();if(!(page==='time'?S.hourApplied:S.applied))return '';const selectedSegment=segment(direction),parts=detailRows(selectedSegment),values=Object.fromEntries(detailFields.map(key=>[key,!parts.length||parts.some(row=>!finite(row[key]))?null:parts.reduce((n,row)=>n+Number(row[key]),0)]));
+   const row={...values,direction,segment:selectedSegment},heading=page==='time'?String(S.hourApplied.minHour).padStart(2,'0')+':00 ≤ 时段 < '+String(S.hourApplied.maxHour).padStart(2,'0')+':00':label(S.applied),headers=['自定义区间','全部金额','全部笔数','成功金额','成功笔数','处理中金额','处理中笔数','失败金额','失败笔数','成功率'],cells=row=>[E(heading),N(row.all_amount),C(row.all_count),N(row.success_amount),C(row.success_count),N(row.pending_amount),C(row.pending_count),N(row.failed_amount),C(row.failed_count),observedRate(row.success_count,row.all_count,customResults(row.segment)?.complete)];
+   return c.analysis?.table?c.analysis.table({id:'custom-'+page+'-'+direction,headers,rows:[row],cells,segment:row=>row.segment,label:()=>heading}):'';
   }
   function footerDetail(direction){sync();return S.applied?{segment:segment(direction),label:label(S.applied)+' · 24小时合计'}:null;}
-  function pageControls(page){return page==='time'?hourControls():'<section class="analysis-custom-query">'+controls()+summary('amount')+'</section>';}
+  function pageControls(page){return page==='time'?hourControls():'<section class="analysis-custom-query">'+controls()+'</section>';}
   function metric(direction,hour){
    const values=[...S.results.values()],ready=S.applied&&values.length>0,complete=ready&&!S.loading&&!S.error&&!S.failures.length&&values.length===S.targets.length;
    if(!ready)return {data:Object.fromEntries(fields.map(key=>[key,null])),complete:false};
@@ -110,7 +111,7 @@
    const cells=Array.from({length:24},(_,hour)=>{const {data:r,complete}=metric(direction,hour);return '<div class="matrix-cell"><b>'+C(r.all_count)+'笔</b><span>'+N(r.all_amount).replace(/\.00$/,'')+'</span><span>'+(observedRate(r.success_count,r.all_count,complete))+'</span></div>'});
    const {data:r,complete}=metric(direction);return [first,...cells,'<div class="matrix-row-total">'+[['全部笔数',C(r.all_count)+' 笔'],['全部金额',N(r.all_amount)],['成功笔数',C(r.success_count)+' 笔'],['成功金额',N(r.success_amount)],['成功率',observedRate(r.success_count,r.all_count,complete)]].map(([label,value])=>'<span><small>'+label+'</small><b>'+value+'</b></span>').join('')+'</div>'];
   }
-  return {controls,row,dialog,pageControls,footerDetail,customResults,detailRows,cancel,capture,restore};
+  return {controls,row,dialog,pageControls,summary,footerDetail,customResults,detailRows,cancel,capture,restore};
  }
  root.HensemMatrixCustomRange={create};
 })(typeof window==='object'?window:globalThis);

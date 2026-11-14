@@ -140,15 +140,17 @@ async function inspect(browser, key, width) {
     const tab = view => nav.locator('button').filter({hasText: {
       business: key === 'time' ? '时段金额与状态' : '金额分布与订单状态',
       [providerTab]: key === 'time' ? '三方分时成功率' : '三方分金额段成功率',
-      [merchantTab]: key === 'time' ? '商户分时成功率' : '商户分金额段成功率',
-      checks: '时段费用与核对', trend: '24 小时订单趋势'
+      [merchantTab]: key === 'time' ? '商户分时成功率' : '商户分金额段成功率'
     }[view]});
     const region = compact.locator('[data-hourly-rate-region]');
     const matrix = (kind, direction) => region.locator('[data-band-matrix="' + key + '/' + direction + '/' + kind + '"]');
     const provider = d => matrix('provider', d), merchant = d => matrix('merchant', d);
     const rows = el => el.locator('th[scope=row]').allTextContents();
     const rpcCount = () => page.evaluate(flag => fixtureCalls.filter(q => q[flag]).length, matrixFlag);
-    const main = compact.locator(':scope > .panel').filter({has: page.locator('.live-pager')}).last();
+    const businessPanels = compact.locator(':scope > .analysis-direction');
+    const business = direction => compact.locator(':scope > .analysis-direction[data-analysis-direction="'+direction+'"] > .panel');
+    const main = business('charge'), payout = business('withdraw');
+    const body = panel => panel.locator('tbody').first().innerText();
     const expectedHours = Array.from({length: 24}, (_, hour) => {
       const h = String(hour).padStart(2, '0');
       return h + ':00–' + h + ':59';
@@ -171,7 +173,8 @@ async function inspect(browser, key, width) {
       assert.equal(await page.evaluate(() => adminLive.view), view);
     }
     async function inspectActive(kind, direction) {
-      assert.equal(await compact.locator('[data-band-matrix]').count(), 1);
+      assert.deepEqual(await region.locator('[data-band-matrix]').evaluateAll(els=>els.map(el=>el.dataset.bandMatrix)),['charge','withdraw'].map(d=>key+'/'+d+'/'+kind));
+      assert.equal(await region.getByRole('button',{name:/^(代收|代付)$/}).count(),0);
       assert.equal(await main.count(), 0);
       const table = matrix(kind, direction);
       assert.deepEqual(await table.locator('thead .band-success-slot').allTextContents(), expectedColumns);
@@ -180,9 +183,9 @@ async function inspect(browser, key, width) {
       return table;
     }
     const navLabels = await nav.locator('button').allTextContents();
-    for (const view of key === 'time' ? ['business', 'checks', 'trend', providerTab, merchantTab] :
-      ['business', providerTab, merchantTab]) assert.equal(await tab(view).count(), 1, navLabels.join(' / '));
-    assert.equal(navLabels.length, key === 'time' ? 5 : 3);
+    for (const view of ['business', providerTab, merchantTab]) assert.equal(await tab(view).count(), 1, navLabels.join(' / '));
+    assert.equal(navLabels.length, 3);
+    assert.deepEqual(await businessPanels.evaluateAll(els=>els.map(el=>el.dataset.analysisDirection)),['charge','withdraw']);
     assert.equal(await nav.evaluate(el => el.previousElementSibling?.classList.contains('live-reference-totals')), true);
     assert.equal(await region.count(), 0);
     const mainRpcCount = () => page.evaluate(() => fixtureCalls.filter(q =>
@@ -204,6 +207,10 @@ async function inspect(browser, key, width) {
     const merchantSort = merchant('charge').getByRole('button', {name: /总成功率/});
     await merchantSort.click();
     assert.deepEqual(await rows(merchant('charge')), ['示例商户 B', '示例商户 A']);
+    const payoutMerchantSort=merchant('withdraw').locator('th.success-total-rate');
+    assert.equal(await payoutMerchantSort.getAttribute('aria-sort'),'descending');
+    await payoutMerchantSort.getByRole('button').click();
+    assert.equal(await payoutMerchantSort.getAttribute('aria-sort'),'ascending');
     await merchantSort.click();
     assert.deepEqual(await rows(merchant('charge')), ['示例商户 A', '示例商户 B']);
     assert.equal(await rpcCount(), 0, 'The main query already returned complete merchant groups');
@@ -238,7 +245,13 @@ async function inspect(browser, key, width) {
     assert.equal(await provider('charge').locator('tbody td.success-total-rate').first().innerText(), '15.00%');
     await total.click();
     assert.deepEqual(await rows(provider('charge')), ['示例三方 A', '示例三方 B']);
-    await region.getByRole('button', {name: '代付', exact: true}).click();
+    await inspectActive('provider','withdraw');
+    const paySort=provider('withdraw').locator('th.success-total-rate');
+    assert.equal(await paySort.getAttribute('aria-sort'),'descending');
+    await paySort.getByRole('button').click();
+    assert.deepEqual(await rows(provider('withdraw')), ['示例三方 A', '示例三方 B']);
+    assert.equal(await provider('charge').locator('th.success-total-rate').getAttribute('aria-sort'),'descending');
+    await paySort.getByRole('button').click();
     assert.deepEqual(await rows(provider('withdraw')), ['示例三方 B', '示例三方 A']);
     await select(merchantTab);
     assert.deepEqual(await rows(merchant('withdraw')), ['示例商户 A', '示例商户 B']);
@@ -248,22 +261,20 @@ async function inspect(browser, key, width) {
     await select('business');
     assert.equal(await region.count(), 0);
     assert.equal(await main.locator('tbody').first().innerText(), original);
-    await page.evaluate(() => {adminLive.tableSizes['analysis-state'] = 5; livePage(1, 'ref-analysis-state');});
-    const shortFirst = await main.locator('tbody').first().innerText();
-    await main.getByRole('button', {name: '下一页', exact: true}).click();
-    const second = await main.locator('tbody').first().innerText();
-    assert.notEqual(second, shortFirst);
-    if (key === 'time') {
-      for (const view of ['checks', 'trend']) {
-        await select(view);
-        assert.equal(await region.count(), 0);
-        if (view === 'checks') assert.ok(await compact.getByText('掉单金额', {exact: true}).count());
-        if (view === 'trend') assert.ok(await compact.getByRole('heading', {name: /24 小时订单趋势/}).count());
-      }
-    }
+    const groupKind=key==='time'?'hourly':await page.evaluate(()=>adminLive.matrixMode==='range'?'amount_range':'amount');
+    await page.evaluate(group=>{
+      for(const d of ['charge','withdraw'])adminLive.tableSizes['analysis-'+group+'-'+d]=5;
+      livePage(1,'ref-analysis-'+group+'-charge');
+    },groupKind);
+    const chargeFirst=await body(main),payoutFirst=await body(payout);
+    await main.getByRole('button',{name:'下一页',exact:true}).click();
+    const second=await body(main);
+    assert.notEqual(second,chargeFirst);
+    assert.equal(await body(payout),payoutFirst);
+    await payout.getByRole('button',{name:'下一页',exact:true}).click();
+    assert.notEqual(await body(payout),payoutFirst);
+    assert.equal(await body(main),second);
     await select(providerTab);
-    const directionButton = region.getByRole('button', {name: '代付', exact: true});
-    await directionButton.click();
     assert.deepEqual(await rows(provider('withdraw')), ['示例三方 B', '示例三方 A']);
     assert.equal(await rpcCount(), 2);
     if (key === 'amount') await assertCounts(provider('withdraw'), '示例三方 A', '200 ≤ 金额 < 300', 2, 10);
@@ -283,7 +294,6 @@ async function inspect(browser, key, width) {
       assert.ok(typeOffsets.every(left => left === 'auto'), 'Type cells overlay the first visible band on narrow viewports: ' + typeOffsets.join(', '));
     }
     if (evidence) {
-      await region.getByRole('button', {name: '代收', exact: true}).click();
       await region.locator('.band-success-scroll').evaluateAll((scrolls, slot) => {
         for (const el of scrolls) {
           let stickyEnd = el.querySelector('thead th').getBoundingClientRect().right;

@@ -77,7 +77,7 @@
  }
  function build({direction,currency,platforms=[],results=[],providerHours=new Map(),providerType,successAvailable}){
   const source=resultIndex(results),merchants=[],providerCells=new Map(),expected=new Map(platforms.filter(p=>p?.id).map(p=>[p.id,p]));
-  const covered=Array(24).fill(0),ready=new Set();
+  const covered=Array(24).fill(0),ready=new Set(),providerReady=new Set();
   for(const platform of expected.values()){
    const result=source.get(platform.id);
    const merchant=rowModel(platform.id,platform.name||platform.id);
@@ -90,17 +90,20 @@
    const canonical=value=>String(root.HensemProviderNames?.canonical(value,platform.country)??value??'').trim()||'（三方未提供）';
    const providers=providerGroups(providerHours.get(platform.id),direction,currency,canonical);
    if(!providers)continue;
+   let verifiedHours=0;
    for(const hour of providers.ready){
     const group=providers.byHour.get(hour)||new Map();
     const total=sum([...group.values()]);
     if(!total||hourly.get(hour)&&!equal(total,hourly.get(hour)))continue;
     covered[hour]++;
+    verifiedHours++;
     for(const [name,value] of group){
      if(!providerCells.has(name))providerCells.set(name,rowModel(name,name));
      const cells=providerCells.get(name).cells;
      cells[hour]=Object.hasOwn(cells,hour)?add(cells[hour],value):value;
     }
    }
+   if(verified&&verifiedHours===hours.length)providerReady.add(platform.id);
   }
   // Reconcile all contributions above, including manual payments. Apply the
   // success-analysis page's display categories only after that reconciliation.
@@ -122,7 +125,7 @@
   const ordered=rows=>rows.sort((a,b)=>(b.total?.totalCount||0)-(a.total?.totalCount||0)||a.name.localeCompare(b.name)||String(a.key).localeCompare(String(b.key)));
   return {dimension:'time',direction,
    merchant:{columns,ready,rows:ordered(merchants),partial:merchants.some(row=>row.partial)},
-   provider:{columns,rows:ordered(providers),excluded,partial:covered.some(n=>n<expected.size)||providers.some(row=>row.partial)}};
+   provider:{columns,ready:providerReady,rows:ordered(providers),excluded,partial:providerReady.size!==expected.size||covered.some(n=>n<expected.size)||providers.some(row=>row.partial)}};
  }
  root.HensemHourlyRateData={build};
 })(typeof window==='undefined'?globalThis:window);
