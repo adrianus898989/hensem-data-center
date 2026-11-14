@@ -6,7 +6,11 @@
   const text=value=>value==null||value===''?'—':String(value);
   const bool=value=>value===true?'是':value===false?'否':'—';
   const sourceName=value=>({AR:'AR',NEW_AR:'新 AR',newar:'新 AR'}[value]||text(value));
-  const amount=value=>value==null||value===''?'—':root.HensemWorkorderUI.money(value);
+  function amount(value){
+   const [whole,fraction='']=root.HensemWorkorderUI.money(value).split('.');
+   const digits=fraction.replace(/0+$/,'');
+   return digits?whole+'.'+digits:whole;
+  }
   const ticketNumber=row=>row.workorderNo||row.workorderId;
   const timestamp=(r,key)=>r[key]&&r.timezone?formatTime(r[key],r.timezone):'—';
   const isIndia=country=>['印度','IN','INDIA'].includes(String(country||'').toUpperCase());
@@ -20,6 +24,17 @@
    if(ticketValue!=null&&ticketValue!=='')return {value:ticketValue,source:'工单'};
    const value=includeOrder?linkedOrder(row)?.[orderKey]:null;
    return value!=null&&value!==''?{value,source:'充值单'}:{value:null,source:''};
+  }
+  function rechargeStatus(row,includeOrder){
+   const order=includeOrder?linkedOrder(row):null;
+   if(order?.status!=null&&order.status!=='')return {value:receipt(order.status),source:'充值单'};
+   return {value:receipt(row.receiptStatus),source:row.receiptStatus?'工单':''};
+  }
+  function callbackRemark(row,includeOrder){
+   const order=includeOrder?linkedOrder(row):null;
+   if(order?.status==='已支付'&&order.callbackOutcome==='confirmed')return '已回调';
+   if(order?.status==='已取消'&&order.callbackOutcome==='cancelled')return '已回调（取消）';
+   return '';
   }
   const signature=draft=>JSON.stringify(draft);
   const orderAccess=()=>['orders','collection'].some(page=>['view','query','detail'].every(action=>root.hensemRoleAllowed?.(page,action)===true));
@@ -107,14 +122,14 @@
    Promise.resolve().then(()=>{if(isActive()&&state()===s&&actor===context()&&initialDraft===signature(s.draft)&&!s.filters&&!s.error&&!flight&&s.depositAttempted)return load(true);});
   }
   function columns(country,includeDetail,includeOrder){
-   function sourced(label,ticketKey,orderKey,format=text){
-    return [label,row=>format(sourceField(row,ticketKey,orderKey,includeOrder).value),
+   function sourced(label,ticketKey,orderKey){
+    return [label,row=>sourceField(row,ticketKey,orderKey,includeOrder).value,
      row=>sourceField(row,ticketKey,orderKey,includeOrder).source];
    }
    const cols=[['平台',r=>r.platform],['工单号',ticketNumber],['支付订单号',r=>r.orderNo],
-    ['工单类型',r=>r.workorderType],['工单状态',status],sourced('充值状态','receiptStatus','status',receipt),
-    ['工单金额',r=>amount(r.amount)],['申请金额',r=>amount(r.requestedAmount)],['申请币种',r=>r.requestedCurrency]];
-   if(includeOrder)cols.push(['关联充值金额',r=>amount(linkedOrder(r)?.amount)],['关联充值币种',r=>linkedOrder(r)?.currency]);
+    ['工单类型',r=>r.workorderType],['工单状态',status],
+    ['充值状态',r=>rechargeStatus(r,includeOrder).value,r=>rechargeStatus(r,includeOrder).source],
+    ['工单金额',r=>amount(r.amount)]];
    cols.push(sourced('三方','provider','provider'));
    if(isIndia(country))cols.push(sourced('UTR','utr','utr'));
    cols.push(['提交时间',r=>timestamp(r,'submittedAt')],['工单处理 / 更新',r=>historyEntry(r,includeDetail)[0],r=>historyEntry(r,includeDetail)[1]],['工单操作 / 更新人',r=>operatorEntry(r,includeDetail)[0],r=>operatorEntry(r,includeDetail)[1]],['来源系统',r=>sourceName(r.source)]);
@@ -133,9 +148,11 @@
     const value=E(text(read(row)));
     if(label==='工单号'&&read(row)&&includeDetail)return '<button type="button" class="link" title="查看工单详情" onclick="workorderDepositDetail('+i+')">'+value+'</button>';
     if(label==='工单状态'&&row.ticketEvidence==='snapshot_only')return value+' <small class="wo-field-source" title="已采集工单状态，原工单明细尚未入库">仅状态快照</small>';
-    if(label==='关联充值金额'&&row.rechargeOrder?.match&&row.rechargeOrder.match!=='matched')return value+' <small class="wo-field-source">'+E(text(matchLabels[row.rechargeOrder.match]))+'</small>';
+    if(label==='充值状态'&&includeOrder&&value==='—'&&row.rechargeOrder?.match&&row.rechargeOrder.match!=='matched')return value+' <small class="wo-field-source">'+E(text(matchLabels[row.rechargeOrder.match]))+'</small>';
     const basis=source?.(row);
-    return basis&&basis!=='工单'?value+' <small class="wo-field-source">'+E(basis)+'</small>':value;
+    const remark=label==='充值状态'?callbackRemark(row,includeOrder):'';
+    const note=[remark,basis!=='工单'?basis:''].filter(Boolean).join(' · ');
+    return note?value+' <small class="wo-field-source">'+E(note)+'</small>':value;
    }));
    let message='';
    if(!actor)message=accessMessage();
@@ -166,9 +183,10 @@
   function rechargeDetail(row,country){
    const link=row.rechargeOrder;
    if(!link)return '';
-   const fields=[['匹配结果',matchLabels[link.match]]];
+   const fields=[['匹配结果',matchLabels[link.match]]],callback=callbackRemark(row,true);
    if(linkedOrder(row))fields.push(
-    ['支付订单号',row.orderNo],['充值状态',receipt(link.status)],['充值订单金额',amount(link.amount)],['充值订单币种',link.currency],
+    ['支付订单号',row.orderNo],['充值状态',receipt(link.status)],...(callback?[['回调状态',callback]]:[]),
+    ['充值订单金额',amount(link.amount)],['充值订单币种',link.currency],
     ['充值三方',link.provider],['充值渠道',link.channelType],...(isIndia(country)?[['充值单 UTR',link.utr]]:[]),
     ['充值完成时间',timestamp({...link,timezone:row.timezone},'completedAt')]);
    return section('关联充值单',fields);
@@ -198,13 +216,14 @@
   function canExport(s){synchronize(s);return !!s.result?.rows?.length&&!s.busy&&signature(s.filters)===signature(s.draft);}
   function exportRows(s){
    if(!canExport(s))return [];
-   const cols=columns(s.filters.country,mayOpen(s),canReadOrders(s));
+   const includeOrder=canReadOrders(s),cols=columns(s.filters.country,mayOpen(s),includeOrder);
    cols.push(['工单采集记录',r=>ticketEvidence[r.ticketEvidence]]);
    if(canReadOrders(s))cols.push(['充值单匹配结果',r=>matchLabels[r.rechargeOrder?.match]]);
    const headers=cols.flatMap(([label,,source])=>source?[label,label+'来源']:[label]);
-   const data=s.result.rows.map(row=>cols.flatMap(([,read,source])=>{
-    const value=text(read(row));
-    return source?[value,source(row)]:[value];
+   const data=s.result.rows.map(row=>cols.flatMap(([label,read,source])=>{
+    const value=text(read(row)),remark=label==='充值状态'?callbackRemark(row,includeOrder):'';
+    const display=remark?value+' · '+remark:value;
+    return source?[display,source(row)]:[display];
    }));
    return [headers,...data];
   }

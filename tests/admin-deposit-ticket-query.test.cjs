@@ -12,6 +12,7 @@ const migrationsUnderTest = [
   '20261109100500_deposit_ticket_identifier_latency.sql',
   '20261111121301_deposit_ticket_source_fields.sql',
   '20261111123316_deposit_ticket_native_platforms.sql',
+  '20261114110228_deposit_ticket_recharge_callback_outcome.sql',
 ];
 const actor = '00000000-0000-0000-0000-000000000011';
 const permissions = ['workorders.view','workorders.query','workorders.detail'];
@@ -283,6 +284,34 @@ test('only unique same-system/platform recharge records enrich permitted pages, 
   }
   await db.exec('set local role authenticated');
   await rejected(()=>db.query("select private.dashboard_ticket_recharge_order('ar','IN','arOne','Asia/Kolkata','shared-payment')"),/permission denied/);
+});
+
+test('only a known native recharge notification with the matching state exposes the callback outcome', async()=>{
+  await configure('access',{canView:true,permissions:[...permissions,'collection.view','collection.query','collection.detail']});
+  const examples=[
+    ['confirmed','已支付','Third Party Notify Confirm','confirmed'],
+    ['cancelled','已取消','Third Party Notify Cancel','cancelled'],
+    ['paid-only','已支付',null,null],
+    ['manual-note-only','已支付',null,null],
+    ['other-note','已支付','Not Third Party Notify Confirm',null],
+    ['wrong-state','待支付','Third Party Notify Confirm',null],
+    ['conflicting-cancel','已支付','Third Party Notify Cancel',null],
+  ];
+  for(const [key,status,remark] of examples){
+    await ar(key,{payment_order_no:key,status_code:4});
+    await insert('public.ar_collected_orders',{source_system:'AR',country_code:'IN',platform:'arOne',
+      order_kind:'recharge',order_no:key,status,remark,manual_remark:key==='manual-note-only'?'Third Party Notify Confirm':null});
+  }
+  const rows=(await request()).rows;
+  assert.equal(rows.length,examples.length);
+  for(const [key,status,,outcome] of examples){
+    const link=rows.find(r=>r.workorderId===key).rechargeOrder;
+    assert.equal(link.match,'matched');
+    assert.equal(link.status,status);
+    assert.equal(link.callbackOutcome,outcome);
+    assert.equal(Object.hasOwn(link,'remark'),false);
+    assert.equal(Object.hasOwn(link,'manual_remark'),false);
+  }
 });
 
 test('AR form names require the same enabled platform registration, tenant and both scopes; the recharge keeps its own key',async()=>{

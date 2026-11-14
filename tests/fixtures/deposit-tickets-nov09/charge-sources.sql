@@ -1,7 +1,7 @@
 -- Only the fields needed for bounded lookup under the finance detail role.
 create table public.ar_collected_orders (
   source_system text, country_code text, platform text, order_kind text, order_no text,
-  status text, amount numeric, raw_channel text, channel_type text, completed_at timestamp,
+  status text, remark text, manual_remark text, amount numeric, raw_channel text, channel_type text, completed_at timestamp,
   money_format_version smallint, amount_local numeric, currency_local text, money_issue_code text,
   primary key (source_system,country_code,platform,order_kind,order_no)
 );
