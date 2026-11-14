@@ -288,13 +288,13 @@ test('withdraw and refreshed source directories invalidate the identity memo wit
 function flowAggregate(platform,direction,count=10){const r=completeAggregate(platform,count,5);r.summary.forEach(row=>row.direction=direction);Object.values(r.groups).forEach(rows=>rows.forEach(row=>row.direction=direction));return r}
 
 test('fixed business pages hide the direction selector and reject attempts to clear or switch it',async()=>{
- for(const [page,direction]of[['collection','charge'],['payout','withdraw'],['providers','charge'],['provider_payout','withdraw'],['stuck','withdraw']]){
+ for(const [page,direction]of[['collection','charge'],['payout','withdraw'],['providers','charge'],['provider_payout','withdraw'],['stuck','withdraw'],['time','all'],['amount','all']]){
   const h=await ready({page});assert.equal(h.L.direction,direction);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/data-multi="direction"/);
   const calls=h.calls.length;h.c.liveSet('direction','all');h.c.liveSet('direction',direction==='charge'?'withdraw':'charge');h.c.liveMultiClear('direction');h.c.liveSetMultiOption('direction',{value:'all',checked:true});
   assert.equal(h.c.state.page,page);assert.equal(h.L.direction,direction);assert.equal(h.calls.length,calls,'invisible fixed controls cannot start new queries');
   h.c.liveReset();await settle();assert.equal(h.L.direction,direction);assert(h.calls.filter(q=>q.action==='aggregate').every(q=>q.direction===direction));
  }
- const h=await ready({page:'time'});assert.match(h.nodes.get('liveFilters').innerHTML,/data-multi="direction"/);h.c.liveSet('direction','all');assert.equal(h.L.direction,'all');
+ const h=await ready({page:'matrix'});assert.match(h.nodes.get('liveFilters').innerHTML,/data-multi="direction"/);h.c.liveSet('direction','all');assert.equal(h.L.direction,'all');
 });
 
 test('collection and payout show received orders while loading, with source reports and fees deferred',async()=>{
@@ -421,7 +421,7 @@ test('latency alone has a mandatory single direction, changing it never starts a
  const reads=h.calls.length;h.c.liveSet('direction','withdraw');assert.equal(h.L.direction,'withdraw');assert.equal(h.L.dirty,true);assert.equal(h.calls.length,reads);assert.match(h.html(),/点击查询/);
  h.c.liveMultiClear('direction');h.c.liveSetMultiOption('direction',{value:'charge',checked:true});h.c.liveSet('direction','all');assert.equal(h.L.direction,'withdraw');assert.deepEqual([...h.L.multi.direction],['withdraw']);assert.equal(h.calls.length,reads);
  await h.c.liveQuery();await settle();assert(h.calls.filter(q=>q.action==='aggregate').slice(-2).every(q=>q.direction==='withdraw'));assert.match(h.html(),/提款 \/ 代付到账时效/);assert.doesNotMatch(h.html(),/充值 \/ 代收到帐时效|充值 \/ 代收到账时效/);
- h.c.setPage('time');await settle();assert.match(h.nodes.get('liveFilters').innerHTML,/data-multi="direction"/);h.c.liveSetMultiOption('direction',{value:'charge',checked:true});assert.deepEqual([...h.L.multi.direction].sort(),['charge','withdraw']);
+ h.c.setPage('matrix');await settle();assert.match(h.nodes.get('liveFilters').innerHTML,/data-multi="direction"/);h.c.liveSetMultiOption('direction',{value:'charge',checked:true});assert.deepEqual([...h.L.multi.direction].sort(),['charge','withdraw']);
  h.c.setPage('latency');assert.equal(h.L.direction,'withdraw');assert.deepEqual([...h.L.multi.direction],['withdraw']);h.L.direction='all';h.L.multi.direction=['charge','withdraw'];h.c.setPage('workorder_workload');const beforeRestore=h.calls.length;h.c.setPage('latency');assert.equal(h.L.direction,'charge');assert.deepEqual([...h.L.multi.direction],['charge']);assert.equal(h.calls.length,beforeRestore);assert.doesNotMatch(h.html(),/提款 \/ 代付到账时效/);
 });
 

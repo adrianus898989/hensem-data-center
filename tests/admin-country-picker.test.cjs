@@ -32,11 +32,25 @@ test('old shared filter snapshots cannot make regional requests or display anoth
  assert.match(options,/value=""[^>]*>请选择国家/);assertCountries(options);const before=h.calls.length;await h.c.liveQuery();assert.equal(h.calls.length,before);assert.equal(h.L.loading,false);assert.match(h.L.error,/请选择具体国家/);assert.equal(h.L.country,'SA');
  h.c.liveReset();assert.equal(h.L.country,'印度');h.c.liveSet('country','南美');assert.equal(h.L.country,'印度');h.c.liveSet('country','智利');assert.equal(h.L.country,'智利');
 });
-test('retired country clears a pending provider directory and ignores its late response',async()=>{
- const h=await setup('time'),pending=deferred(),cancelled=[],request=h.c.hensemLiveRequest;
- h.c.hensemLiveRequest=q=>q.action==='providerOptions'?pending.promise:request(q);h.c.hensemLiveCancelRequests=actions=>cancelled.push(...actions);
- h.L.providerOptions=['Previously selected country'];h.c.liveSet('direction','withdraw');assert.equal(h.L.providerOptionsBusy,true);
- const serial=h.L.providerOptionsSerial;h.L.country='SA';h.c.liveSet('direction','charge');
+test('time analysis clears a pending two-direction provider directory for a retired country and ignores its late response',async()=>{
+ const h=await setup('time'),pending=deferred(),cancelled=[],reads=[];
+ const request=h.c.hensemLiveRequest;
+ h.c.hensemLiveRequest=q=>{
+  if(q.action!=='providerOptions')return request(q);
+  reads.push(q);return pending.promise;
+ };
+ h.c.hensemLiveCancelRequests=actions=>cancelled.push(...actions);
+ const providerMenu={dataset:{multi:'provider'},isConnected:true,open:true};
+ h.c.document.querySelectorAll=()=>[providerMenu];
+ h.c.liveMultiToggle(providerMenu);
+ assert.equal(h.L.providerOptionsBusy,true);
+ assert.equal(reads.length,1);assert.equal(reads[0].direction,'all');
+ assert.deepEqual(plain(reads[0].platformIds),['country-0']);
+ h.L.providerOptions=['Previously selected country'];
+ const serial=h.L.providerOptionsSerial;
+ // A retained regional filter is invalid even when the original menu request is still running.
+ h.L.country='SA';h.c.liveMultiToggle(providerMenu);
+ assert.equal(reads.length,1);
  assert(h.L.providerOptionsSerial>serial);assert.equal(h.L.providerOptionsBusy,false);assert.equal(h.L.providerOptionsKey,'');assert.deepEqual(plain(h.L.providerOptions),[]);assert(cancelled.includes('providerOptions'));
  const writes=h.writes.length;pending.resolve({providers:['Late provider from the previous country']});await settle();
  assert.equal(h.writes.length,writes);assert.equal(h.L.providerOptionsBusy,false);assert.deepEqual(plain(h.L.providerOptions),[]);assert.equal(h.L.country,'SA');
