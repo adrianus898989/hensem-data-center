@@ -1,8 +1,8 @@
 /* Scoped only to the four analysis drilldowns; overview dimensions keep their layout. */
 body.live-admin .analysis-compact .analysis-expand-table>table,body.live-admin .latency-v3 .analysis-expand-table>table{width:100%;table-layout:auto}
 body.live-admin .analysis-compact .analysis-expand-table>table>thead>tr>th,body.live-admin .analysis-compact .analysis-expand-table>table>tbody>tr>td,body.live-admin .latency-v3 .analysis-expand-table>table>thead>tr>th,body.live-admin .latency-v3 .analysis-expand-table>table>tbody>tr>td{padding:7px 8px;font-size:10px;white-space:nowrap;min-width:0}
-body.live-admin .analysis-compact .analysis-expand-table>table>thead>tr>th:first-child,body.live-admin .analysis-compact .analysis-expand-table>table>tbody>tr>td:first-child{width:45px;max-width:150px}
-body.live-admin .analysis-compact .analysis-expand-table>table>thead>tr>th:nth-child(2){width:125px}
+body.live-admin .analysis-direction .analysis-expand-table>table>thead>tr>th:first-child{width:125px}
+body.live-admin .analysis-direction + .analysis-direction{margin-top:16px}
 body.live-admin .analysis-expand-table>table>tbody>tr>td:last-child{width:45px}
 body.live-admin .analysis-expanded-row>td{padding:0!important;white-space:normal!important;background:#f5f8ff}
 body.live-admin .analysis-drilldown{padding:10px 12px;min-width:0;white-space:normal}
