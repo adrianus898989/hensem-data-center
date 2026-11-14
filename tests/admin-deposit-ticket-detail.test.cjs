@@ -103,16 +103,54 @@ test('ticket fields, matched recharge values, source currency and update-only ti
  const h=harness(async q=>result(q,{rows:tickets}));h.render();await next();
  const [a,b]=currentRows(h);
  assert.equal(a['充值状态'],'已支付');assert.equal(a['充值状态来源'],'充值单');assert.equal(a['工单金额'],'—');
- assert.equal(a['关联充值金额'],'9,007,199,254,740,993.25');assert.equal(a['关联充值币种'],'—');assert.equal(a['申请币种'],'INR');
+ for(const label of ['申请金额','申请币种','关联充值金额','关联充值币种']){
+  assert.equal(a[label],undefined);assert.ok(!h.html().includes('<th>'+label+'</th>'));
+ }
  assert.equal(a['UTR'],'source-utr');assert.equal(a['UTR来源'],'充值单');assert.equal(a['工单处理 / 更新'],'update-only');assert.equal(a['工单处理 / 更新来源'],'最后更新');
  assert.equal(a['工单采集记录'],'仅状态快照');assert.equal(a['工单操作 / 更新人'],'source-updater');assert.equal(a['工单操作 / 更新人来源'],'最后更新人');
- assert.equal(b['三方'],'TicketPay');assert.equal(b['三方来源'],'工单');assert.equal(b['充值状态'],'已支付（Payed）');assert.equal(b['充值状态来源'],'工单');assert.equal(b['工单处理 / 更新来源'],'处理时间');
+ assert.equal(b['三方'],'TicketPay');assert.equal(b['三方来源'],'工单');assert.equal(b['充值状态'],'已取消（Cancel）');assert.equal(b['充值状态来源'],'充值单');assert.equal(b['工单处理 / 更新来源'],'处理时间');
  assert.match(h.html(),/RechargePay <small[^>]*>充值单/);assert.match(h.html(),/update-only <small[^>]*>最后更新/);
  h.root.workorderDepositDetail(0);assert.match(h.drawer(),/<dt>操作时间<\/dt><dd>—/);assert.match(h.drawer(),/来源最后更新时间<\/dt><dd>update-only/);
  assert.match(h.drawer(),/关联充值单/);assert.match(h.drawer(),/充值完成时间<\/dt><dd>receipt-time/);
+ assert.match(h.drawer(),/充值订单金额<\/dt><dd>9,007,199,254,740,993\.25</);assert.match(h.drawer(),/申请币种<\/dt><dd>INR</);
  assert.match(h.drawer(),/来源支付时间<\/dt><dd>—/);assert.match(h.drawer(),/工单内充值状态<\/dt><dd>—/);
  h.root.workorderDepositDetail(1);assert.match(h.drawer(),/TicketPay/);assert.match(h.drawer(),/DifferentPay/);assert.match(h.drawer(),/已取消（Cancel）/);
  assert.equal(h.calls.length,1);
+});
+
+test('ticket money displays only significant decimal digits and keeps unknown and exact integer values in both list and CSV',async()=>{
+ const inputs=['10000.00000000','2500.10500000','9007199254740993.00000001','0.00000000',null,'-3456.70010000'];
+ const expected=['10,000','2,500.105','9,007,199,254,740,993.00000001','0','—','-3,456.7001'];
+ const tickets=inputs.map((amount,i)=>({...rows[0],amount,rechargeOrder:{match:'matched',amount:i===4?'501.2300':amount}}));
+ const h=harness(async q=>result(q,{rows:tickets}));h.render();await next();
+ assert.deepEqual(Array.from(currentRows(h),r=>r['工单金额']),expected);
+ for(const value of expected)assert.ok(h.html().includes('<td>'+value+'</td>'));
+ h.root.workorderDepositDetail(4);
+ assert.match(h.drawer(),/<dt>工单金额<\/dt><dd>—</);assert.match(h.drawer(),/<dt>充值订单金额<\/dt><dd>501\.23</);
+});
+test('linked callback evidence is shown only for an authorized unique match and stays separate from ticket processing and order payment',async()=>{
+ const tickets=[
+  {status:'已支付',callbackOutcome:'confirmed',match:'matched'},
+  {status:'已回调',callbackOutcome:'confirmed',match:'matched'},
+  {status:'已支付',match:'matched'},
+  {status:'待支付',callbackOutcome:'confirmed',match:'matched'},
+  {status:'已回调',callbackOutcome:'confirmed',match:'ambiguous'},
+  {status:null,match:'matched'},
+  {status:'已取消',callbackOutcome:'cancelled',match:'matched'},
+  {status:'已取消',callbackOutcome:'confirmed',match:'matched'}
+ ].map(rechargeOrder=>({...rows[0],receiptStatus:'Wait',rechargeOrder}));
+ const h=harness(async q=>result(q,{rows:tickets}));h.render();await next();
+ assert.deepEqual(Array.from(currentRows(h),r=>[r['充值状态'],r['充值状态来源']]),[
+  ['已支付 · 已回调','充值单'],['已回调','充值单'],['已支付','充值单'],['待支付','充值单'],['等待（Wait）','工单'],['等待（Wait）','工单'],
+  ['已取消 · 已回调（取消）','充值单'],['已取消','充值单']
+ ]);
+ assert.match(h.html(),/已支付 <small[^>]*>已回调 · 充值单</);
+ assert.match(h.html(),/已取消 <small[^>]*>已回调（取消） · 充值单</);
+ assert.match(h.html(),/已回调 <small[^>]*>充值单</);
+ h.root.workorderDepositDetail(0);
+ assert.match(h.drawer(),/<dt>工单内充值状态<\/dt><dd>等待（Wait）</);assert.match(h.drawer(),/<dt>充值状态<\/dt><dd>已支付</);assert.match(h.drawer(),/<dt>回调状态<\/dt><dd>已回调</);
+ h.root.hensemRoleAllowed=(page,action)=>!['orders','collection'].includes(page)||action!=='detail';h.render();await next();
+ assert.ok(currentRows(h).every(r=>r['充值状态']==='等待（Wait）'&&r['充值状态来源']==='工单'));assert.doesNotMatch(h.html(),/已回调/);
 });
 
 test('ambiguous and missing recharge matches cannot expose candidate fields or fill an unknown ticket value',async()=>{
@@ -122,7 +160,7 @@ test('ambiguous and missing recharge matches cannot expose candidate fields or f
  for(const [i,reason] of ['匹配到多张充值单','未找到相同支付订单号','工单缺支付订单号'].entries()){
   h.root.workorderDepositDetail(i);assert.ok(h.drawer().includes(reason));assert.doesNotMatch(h.drawer(),/candidate-only|88,888/);
  }
- for(const row of currentRows(h)){assert.equal(row['关联充值金额'],'—');assert.equal(row['三方'],'—');assert.equal(row['三方来源'],'');}
+ for(const row of currentRows(h)){assert.equal(row['关联充值金额'],undefined);assert.equal(row['三方'],'—');assert.equal(row['三方来源'],'');}
 });
 
 test('revoked recharge access invalidates the released page and open drawer, while native ticket detail remains accessible',async()=>{
