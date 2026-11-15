@@ -370,8 +370,7 @@ body.live-admin .wo-linkage-values .wo-linkage-share{display:inline-block;margin
 body.live-admin .wo-linkage-values small{display:block;font-size:9px;line-height:1.5;color:#71819a;margin-top:2px;overflow-wrap:anywhere}
 body.live-admin .wo-analysis-basis{font-size:10px;margin:6px 0 8px}
 @media(min-width:1250px){
- body.live-admin .wo-operations-filter .wo-records-primary{grid-template-columns:repeat(var(--wo-select-count,5),minmax(72px,1fr)) minmax(247px,2.5fr) repeat(2,minmax(120px,1.4fr))}
- body.live-admin .wo-operations-filter .wo-deposit-primary{--wo-select-count:4}
+ body.live-admin .wo-operations-filter .wo-records-primary{grid-template-columns:repeat(5,minmax(72px,1fr)) minmax(247px,2.5fr) repeat(2,minmax(120px,1.4fr))}
  body.live-admin .wo-operations-filter .wo-records-primary .wo-filter-dates{grid-column:auto}
 }
 @media(max-width:1200px){body.live-admin .wo-analysis-groups{grid-template-columns:1fr}}

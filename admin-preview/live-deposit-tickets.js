@@ -3,9 +3,10 @@
  'use strict';
  root.HensemDepositTickets={create({E,box,table,request,render,state,isActive,scope,accessMessage,checkDisplayScope,openDrawer,formatTime}){
   let flight=null,seenScope,detailsOpen=false;
+  const pageSizes=[20,50,100,200,300,500];
   const text=value=>value==null||value===''?'—':String(value);
   const bool=value=>value===true?'是':value===false?'否':'—';
-  const sourceName=value=>({AR:'AR',NEW_AR:'新 AR',newar:'新 AR'}[value]||text(value));
+  const sourceName=value=>({AR:'AR 中台',NEW_AR:'新 AR',newar:'新 AR'}[value]||text(value));
   function amount(value){
    const [whole,fraction='']=root.HensemWorkorderUI.money(value).split('.');
    const digits=fraction.replace(/0+$/,'');
@@ -76,7 +77,7 @@
   async function load(reset=true){
    if(!isActive())return;
    const s=state(),actor=synchronize(s);if(!actor)return;
-   const draft={...s.draft},size=s.size,pageNo=reset?1:s.current;
+   const draft={...s.draft},size=s.depositPageSize??20,pageNo=reset?1:s.current;
    if(reset||!s.depositPageStarts)s.depositPageStarts=[null];
    const cursor=s.depositPageStarts[pageNo-1];
    const stamp=signature([actor,draft,pageNo,size,cursor]);
@@ -92,7 +93,7 @@
      if(!draft.country||draft.country==='all'||root.HensemLiveReportData?.countrySelectable?.(draft.country)===false)throw Error('请选择具体国家 / 地区。');
      if(!validDates(draft.from,draft.to))throw Error('请选择完整的提交日期范围，最长 93 天。');
      const filters={from:draft.from,to:draft.to};
-     for(const key of ['team','platform','statusCode','workorderNo','orderNo',...(isIndia(draft.country)?['utr']:[])]){
+     for(const key of ['team','source','platform','statusCode','workorderNo','orderNo',...(isIndia(draft.country)?['utr']:[])]){
       const value=String(draft[key]??'').trim();if(value)filters[key]=value;
      }
      checkDisplayScope(filters,draft.country,true);
@@ -101,7 +102,7 @@
      const result=await request({action:'workorderRecords',view:'depositTickets',operation:'list',country:draft.country,filters,offset,limit:size,...(cursor?{cursor}:{})},{signal:task.controller?.signal});
      if(!owns())return;
      if(!result||result.view!=='depositTickets'||!Array.isArray(result.rows)||result.rows.length>size||typeof result.hasMore!=='boolean'||
-        result.offset!==offset||result.limit!==size||(result.hasMore&&(!result.nextCursor||typeof result.nextCursor!=='object'))||result.rows.some(r=>r.issueKind!=='deposit')){
+        result.offset!==offset||result.limit!==size||(result.hasMore&&(!result.nextCursor||typeof result.nextCursor!=='object'))||result.rows.some(r=>r.issueKind!=='deposit'||(filters.source&&r.source!==filters.source))){
       throw Error('读取到的工单与当前查询不一致，请重新查询。');
      }
      s.depositPageStarts.splice(pageNo);
@@ -137,22 +138,20 @@
   }
   function paging(s){
    const result=s.result;if(!result)return '';
-   const begin=(s.current-1)*s.size,end=begin+result.rows.length;
-   return '<div class="live-pager wo-pager"><span>'+ (end>begin?'第 '+(begin+1)+'–'+end+' 条':'本页 0 条')+'</span><div class="right"><select aria-label="每页条数" onchange="workorderDepositSize(this.value)">'+[20,50,100].map(n=>'<option value="'+n+'" '+(n===s.size?'selected':'')+'>'+n+' 条 / 页</option>').join('')+'</select><button type="button" '+(s.current===1?'disabled':'')+' onclick="workorderDepositPage(-1)">上一页</button><span>第 '+s.current+' 页</span><button type="button" '+(!result.hasMore?'disabled':'')+' onclick="workorderDepositPage(1)">下一页</button></div></div>';
+   const size=result.limit,begin=result.offset,end=begin+result.rows.length;
+   return '<div class="live-pager wo-pager"><span>'+ (end>begin?'第 '+(begin+1)+'–'+end+' 条':'本页 0 条')+'</span><div class="right"><select aria-label="每页条数" onchange="workorderDepositSize(this.value)">'+pageSizes.map(n=>'<option value="'+n+'" '+(n===size?'selected':'')+'>'+n+' 条 / 页</option>').join('')+'</select><button type="button" '+(s.current===1?'disabled':'')+' onclick="workorderDepositPage(-1)">上一页</button><span>第 '+s.current+' 页</span><button type="button" '+(!result.hasMore?'disabled':'')+' onclick="workorderDepositPage(1)">下一页</button></div></div>';
   }
   function content(s){
    const actor=synchronize(s);scheduleInitial(s,actor);
    const r=s.result,includeDetail=mayOpen(s),includeOrder=canReadOrders(s),cols=columns(s.draft.country,includeDetail,includeOrder),heads=cols.map(c=>c[0]);
    if(detailsOpen&&!includeDetail)dismiss();
-   const rows=(r?.rows||[]).map((row,i)=>cols.map(([label,read,source])=>{
+   const rows=(r?.rows||[]).map((row,i)=>cols.map(([label,read])=>{
     const value=E(text(read(row)));
     if(label==='工单号'&&read(row)&&includeDetail)return '<button type="button" class="link" title="查看工单详情" onclick="workorderDepositDetail('+i+')">'+value+'</button>';
     if(label==='工单状态'&&row.ticketEvidence==='snapshot_only')return value+' <small class="wo-field-source" title="已采集工单状态，原工单明细尚未入库">仅状态快照</small>';
     if(label==='充值状态'&&includeOrder&&value==='—'&&row.rechargeOrder?.match&&row.rechargeOrder.match!=='matched')return value+' <small class="wo-field-source">'+E(text(matchLabels[row.rechargeOrder.match]))+'</small>';
-    const basis=source?.(row);
     const remark=label==='充值状态'?callbackRemark(row,includeOrder):'';
-    const note=[remark,basis!=='工单'?basis:''].filter(Boolean).join(' · ');
-    return note?value+' <small class="wo-field-source">'+E(note)+'</small>':value;
+    return remark?value+' <small class="wo-field-source">'+E(remark)+'</small>':value;
    }));
    let message='';
    if(!actor)message=accessMessage();
@@ -164,7 +163,7 @@
    const grid=rows.length?table(heads,rows,'wo-deposit-ticket-table'):
     '<div class="live-table table-wrap wo-deposit-ticket-table"><table><thead><tr>'+heads.map(k=>'<th>'+k+'</th>').join('')+'</tr></thead></table></div>';
    const note=message?'<div class="live-status'+(s.error?' live-error':'')+'" role="'+(s.error?'alert':'status')+'">'+E(message)+(s.error?' <button type="button" class="btn" onclick="workorderOperationsLoad()">重试</button>':'')+'</div>':'';
-   return box('存款未到账工单',grid+note+paging(s),'显示 AR 和新 AR 的已采集存款工单，每张一行。'+(includeDetail?'点工单号查看详情。':'')+(includeOrder?'标有“充值单”的值来自同平台匹配的支付订单。':''));
+   return box('存款未到账工单',grid+note+paging(s),'显示 AR 和新 AR 的已采集存款工单，每张一行。'+(includeDetail?'点工单号查看详情。':''));
   }
   function mayOpen(s){
    return !!s.result?.canDetail&&root.hensemRoleAllowed?.('workorders','detail')===true;
@@ -176,8 +175,9 @@
    s.current+=step;return load(false);
   }
   function changeSize(n){
-   if(!isActive()||![20,50,100].includes(Number(n)))return;
-   const s=state();s.size=Number(n);return load(true);
+   if(!isActive()||!pageSizes.includes(Number(n)))return;
+   const s=state();if(Number(n)===(s.depositPageSize??20))return;
+   s.depositPageSize=Number(n);return load(true);
   }
   const section=(title,entries)=>'<section class="wo-ticket-section"><h3>'+title+'</h3><dl>'+entries.map(([label,value])=>'<div><dt>'+label+'</dt><dd>'+E(text(value))+'</dd></div>').join('')+'</dl></section>';
   function rechargeDetail(row,country){
