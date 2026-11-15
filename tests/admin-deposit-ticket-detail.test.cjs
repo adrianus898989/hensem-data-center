@@ -29,15 +29,14 @@ test('default view reads a single bounded ticket list; two tickets for one payme
  assert.match(h.drawer(),/催单次数<\/dt><dd>0/);assert.match(h.drawer(),/UTR 匹配<\/dt><dd>否/);assert.match(h.drawer(),/&lt;example&gt;/);
  assert.match(h.html(),/存款未到账明细/);assert.equal(h.api.canExportDeposit(),true);
 });
-test('deposit date pair follows four selectors in its own wide grid track',()=>{
+test('deposit date pair follows the source and four other selectors in its own wide grid track',()=>{
  const h=harness(async q=>result(q));h.render();
  const primary=h.html().split('class="wo-filter-grid wo-records-primary wo-deposit-primary">')[1].split('class="wo-filter-grid wo-more"')[0];
  const [selectors,dates]=primary.split('<div class="wo-filter-dates">');
- assert.equal((selectors.match(/<select /g)||[]).length,4);
+ assert.equal((selectors.match(/<select /g)||[]).length,5);
  assert.equal((dates.split('</div>')[0].match(/type="date"/g)||[]).length,2);
  const css=fs.readFileSync(path.join(__dirname,'../admin-preview/live-configuration.css'),'utf8');
- assert.match(css,/\.wo-deposit-primary\s*\{\s*--wo-select-count:\s*4\b/);
- assert.match(css,/\.wo-records-primary\s*\{\s*grid-template-columns:repeat\(var\(--wo-select-count,5\)/);
+ assert.match(css,/\.wo-records-primary\s*\{\s*grid-template-columns:repeat\(5,/);
 });
 test('filter edits abort old reads; next page uses the committed query and late rows never repaint under new scope',async()=>{
  let resolve,signal;const h=harness((q,o)=>{if(!q.filters.orderNo){signal=o.signal;return new Promise(r=>{resolve=r;});}return Promise.resolve(result(q,{hasMore:q.offset===0,nextCursor:q.offset===0?{at:'2026-11-08T17:05:00.123456Z',p:'native',t:'6006',k:'AR-1',h:'filter-key'}:null}));});
@@ -109,7 +108,8 @@ test('ticket fields, matched recharge values, source currency and update-only ti
  assert.equal(a['UTR'],'source-utr');assert.equal(a['UTR来源'],'充值单');assert.equal(a['工单处理 / 更新'],'update-only');assert.equal(a['工单处理 / 更新来源'],'最后更新');
  assert.equal(a['工单采集记录'],'仅状态快照');assert.equal(a['工单操作 / 更新人'],'source-updater');assert.equal(a['工单操作 / 更新人来源'],'最后更新人');
  assert.equal(b['三方'],'TicketPay');assert.equal(b['三方来源'],'工单');assert.equal(b['充值状态'],'已取消（Cancel）');assert.equal(b['充值状态来源'],'充值单');assert.equal(b['工单处理 / 更新来源'],'处理时间');
- assert.match(h.html(),/RechargePay <small[^>]*>充值单/);assert.match(h.html(),/update-only <small[^>]*>最后更新/);
+ for(const value of ['已支付','RechargePay','source-utr','update-only','source-updater','handled-time'])assert.ok(h.html().includes('<td>'+value+'</td>'));
+ assert.doesNotMatch(h.html(),/<small[^>]*>(?:充值单|最后更新|最后更新人)<\/small>/);
  h.root.workorderDepositDetail(0);assert.match(h.drawer(),/<dt>操作时间<\/dt><dd>—/);assert.match(h.drawer(),/来源最后更新时间<\/dt><dd>update-only/);
  assert.match(h.drawer(),/关联充值单/);assert.match(h.drawer(),/充值完成时间<\/dt><dd>receipt-time/);
  assert.match(h.drawer(),/充值订单金额<\/dt><dd>9,007,199,254,740,993\.25</);assert.match(h.drawer(),/申请币种<\/dt><dd>INR</);
@@ -144,9 +144,9 @@ test('linked callback evidence is shown only for an authorized unique match and 
   ['已支付 · 已回调','充值单'],['已回调','充值单'],['已支付','充值单'],['待支付','充值单'],['等待（Wait）','工单'],['等待（Wait）','工单'],
   ['已取消 · 已回调（取消）','充值单'],['已取消','充值单']
  ]);
- assert.match(h.html(),/已支付 <small[^>]*>已回调 · 充值单</);
- assert.match(h.html(),/已取消 <small[^>]*>已回调（取消） · 充值单</);
- assert.match(h.html(),/已回调 <small[^>]*>充值单</);
+ assert.match(h.html(),/已支付 <small[^>]*>已回调<\/small>/);
+ assert.match(h.html(),/已取消 <small[^>]*>已回调（取消）<\/small>/);
+ assert.match(h.html(),/<td>已回调<\/td>/);
  h.root.workorderDepositDetail(0);
  assert.match(h.drawer(),/<dt>工单内充值状态<\/dt><dd>等待（Wait）</);assert.match(h.drawer(),/<dt>充值状态<\/dt><dd>已支付</);assert.match(h.drawer(),/<dt>回调状态<\/dt><dd>已回调</);
  h.root.hensemRoleAllowed=(page,action)=>!['orders','collection'].includes(page)||action!=='detail';h.render();await next();
@@ -171,4 +171,44 @@ test('revoked recharge access invalidates the released page and open drawer, whi
  assert.doesNotMatch(h.html(),/restricted-provider|关联充值金额/);h.root.workorderDepositDetail(0);
  assert.match(h.drawer(),/工单信息/);assert.doesNotMatch(h.drawer(),/restricted-provider|关联充值单|未找到相同支付订单号/);
  assert.equal(currentRows(h)[0]['关联充值金额'],undefined);
+});
+
+test('source selector filters permitted platforms, rejects mixed responses and stays in the deposit view',async()=>{
+ const h=harness(async q=>result(q,{rows:rows.filter(row=>!q.filters.source||row.source===q.filters.source)}));
+ h.L.catalog[0].source='ar';
+ h.L.catalog.push({...h.L.catalog[0],id:'other',name:'NewOnly',source:'newar'});
+ h.render();await next();
+ assert.match(h.html(),/aria-label="来源系统"/);
+ h.root.workorderOperationsSet('platform','NewOnly');
+ h.root.workorderOperationsSet('source','AR');
+ assert.doesNotMatch(h.html(),/<option value="NewOnly"/);
+ await h.api.load(true);
+ const q=h.calls.at(-1);assert.equal(q.filters.source,'AR');assert.equal(q.filters.platform,undefined);
+ assert.deepEqual(Array.from(currentRows(h),r=>r['来源系统']),['AR 中台']);
+ h.root.workorderOperationsSet('source','NEW_AR');await h.api.load(true);
+ assert.deepEqual(Array.from(currentRows(h),r=>r['来源系统']),['新 AR']);
+ h.root.workorderOperationsMode('orders');assert.doesNotMatch(h.html(),/aria-label="来源系统"/);
+ h.root.workorderOperationsMode('depositTickets');await next();
+ assert.equal(h.calls.at(-1).filters.source,undefined);
+ const drift=harness(async q=>result(q));drift.render();await next();
+ drift.root.workorderOperationsSet('source','AR');await drift.api.load(true);
+ assert.match(drift.html(),/与当前查询不一致/);assert.equal(drift.api.canExportDeposit(),false);
+});
+
+test('larger page sizes apply to deposit tickets only, reset the cursor and export just the new page',async()=>{
+ const h=harness(async q=>result(q,{rows:Array.from({length:q.limit},(_,i)=>({...rows[0],workorderNo:'ticket-'+(q.offset+i)})),
+  hasMore:q.offset===0,nextCursor:q.offset===0?{at:'2026-11-08T17:05:00Z',p:'native',t:'10',k:'next',h:'scope'}:null}));
+ h.render();await next();
+ for(const size of [20,50,100,200,300,500])assert.ok(h.html().includes(size+' 条 / 页'));
+ for(const size of [200,300,500]){
+  await h.root.workorderDepositSize(String(size));
+  const q=h.calls.at(-1);assert.equal(q.limit,size);assert.equal(q.offset,0);assert.equal(q.cursor,undefined);
+  assert.equal(h.api.exportDepositRows().length,size+1);
+  await h.root.workorderDepositPage(1);
+  assert.equal(h.calls.at(-1).offset,size);assert.equal(h.calls.at(-1).cursor.k,'next');
+  assert.ok(h.html().includes('第 '+(size+1)+'–'+(2*size)+' 条'));
+ }
+ const count=h.calls.length;
+ await h.root.workorderDepositSize('501');await h.root.workorderDepositSize(500);assert.equal(h.calls.length,count);
+ h.root.workorderOperationsMode('orders');assert.equal(h.api.state().size,20);
 });

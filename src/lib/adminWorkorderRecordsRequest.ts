@@ -14,16 +14,17 @@ export function validateWorkorderRecordsRequest(p:Record<string,unknown>):Record
   return{action:'workorderRecords',view,operation,country:p.country,filters};
  }
  if(view==='depositTickets'){
-  const allowed=['team','platform','from','to','statusCode','workorderNo','workorderId','orderNo','utr','issueKind','dateBasis'];
+  const allowed=['team','source','platform','from','to','statusCode','workorderNo','workorderId','orderNo','utr','issueKind','dateBasis'];
   if(operation!=='list'||typeof p.country!=='string'||!['IN','印度','BR','巴西','PK','巴基斯坦','ID','印尼','VN','越南','PH','菲律宾','MY','马来','MM','缅甸','NG','尼日利亚','CO','哥伦比亚','MX','墨西哥','CL','智利'].includes(p.country))throw Error('存款工单查询范围无效');
   const raw=p.filters;if(!raw||typeof raw!=='object'||Array.isArray(raw))throw Error('请选择工单提交日期');
   const f:Record<string,string>={};
   for(const [k,v] of Object.entries(raw)){if(!allowed.includes(k)||typeof v!=='string'||v.length>200||/[\u0000-\u001f\u007f]/.test(v))throw Error('存款工单筛选无效');f[k]=v.trim();}
   const validDate=(s:string)=>/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s+'T00:00Z'))&&new Date(s+'T00:00Z').toISOString().slice(0,10)===s;
   if(!validDate(f.from)||!validDate(f.to)||f.from>f.to||Date.parse(f.to)-Date.parse(f.from)>92*86400000)throw Error('请选择有效的提交日期，最多93天');
+  if(f.source&&!['AR','NEW_AR'].includes(f.source))throw Error('存款工单来源无效');
   if(f.issueKind&&f.issueKind!=='deposit'||f.dateBasis&&f.dateBasis!=='submission'||f.statusCode&&!['1','2','3','4','5'].includes(f.statusCode)||f.utr&&!['IN','印度'].includes(p.country))throw Error('存款工单筛选无效');
   const offset=p.offset??0,limit=p.limit??20;
-  if(!Number.isSafeInteger(offset)||Number(offset)<0||Number(offset)>1000000||typeof limit!=='number'||![20,50,100].includes(limit))throw Error('分页参数无效');
+  if(!Number.isSafeInteger(offset)||Number(offset)<0||Number(offset)>1000000||typeof limit!=='number'||![20,50,100,200,300,500].includes(limit))throw Error('分页参数无效');
   const cursor=p.cursor;
   if(cursor!==undefined){
    if(!cursor||typeof cursor!=='object'||Array.isArray(cursor))throw Error('工单续页位置无效');

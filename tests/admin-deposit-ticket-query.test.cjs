@@ -13,6 +13,7 @@ const migrationsUnderTest = [
   '20261111121301_deposit_ticket_source_fields.sql',
   '20261111123316_deposit_ticket_native_platforms.sql',
   '20261114110228_deposit_ticket_recharge_callback_outcome.sql',
+  '20261115081618_deposit_ticket_page_sizes_and_source.sql',
 ];
 const actor = '00000000-0000-0000-0000-000000000011';
 const permissions = ['workorders.view','workorders.query','workorders.detail'];
@@ -339,4 +340,46 @@ test('AR form names require the same enabled platform registration, tenant and b
   await configure('scope',{IN:['OKWIN','OK.WIN']});
   await db.exec('update private.ar_middle_channel_platforms set enabled=false');assert.equal((await request()).rows.length,0);
   await db.exec("update private.ar_middle_channel_platforms set enabled=true,country_code='PK'");assert.equal((await request()).rows.length,0);
+});
+
+test('larger ticket pages retain exact native source, stable ordering and distinct cursor contexts',async()=>{
+  // Repeat timestamps in both sources, including the exact cut between two pages.
+  await db.exec(`insert into public.ar_workorder_issue_details
+    (system_name,country_code,platform,tenant_id,work_order_id,source_record_id,issue_kind,submitted_date,submitted_at)
+    select 'AR','IN','arOne','10','ar-'||i,'ar-'||i,'deposit','2026-11-08',
+      '2026-11-08 05:00Z'::timestamptz + (i % 7)*interval '1 second' from generate_series(1,503) i;
+    insert into public.newar_detail_records
+    (id,platform,dataset,source_id,workorder_type,created_at,raw)
+    select gen_random_uuid(),'newOne','workorder','new-'||i,'存款未到账',
+      '2026-11-08 05:00Z'::timestamptz + (i % 7)*interval '1 second','{}' from generate_series(1,503) i`);
+  for(const limit of [200,300,500]){
+    const first=await request({}, {limit});
+    const second=await request({}, {limit,offset:limit,cursor:first.nextCursor});
+    assert.equal(first.rows.length,limit);assert.equal(second.rows.length,limit);
+    assert.equal(new Set([...first.rows,...second.rows].map(r=>r.id)).size,limit*2);
+    assert.deepEqual(new Set(first.rows.map(r=>r.source)),new Set(['AR','NEW_AR']));
+    assert.equal(second.offset,limit);
+    if(limit===500){
+      const end=await request({}, {limit,offset:1000,cursor:second.nextCursor});
+      assert.equal(end.rows.length,6);assert.equal(end.hasMore,false);assert.equal(end.nextCursor,null);
+      assert.equal(new Set([...first.rows,...second.rows,...end.rows].map(r=>r.id)).size,1006);
+    }
+  }
+  for(const source of ['AR','NEW_AR']){
+    const first=await request({source},{limit:500});
+    assert.deepEqual(first.sources,[source]);assert.equal(first.rows.length,500);
+    assert.ok(first.rows.every(r=>r.source===source));
+    const next=await request({source},{limit:500,offset:500,cursor:first.nextCursor});
+    assert.equal(next.rows.length,3);assert.equal(next.hasMore,false);
+    assert.equal(new Set([...first.rows,...next.rows].map(r=>r.id)).size,503);
+    await rejected(()=>request({source},{limit:200,cursor:first.nextCursor}),/invalid_ticket_cursor/);
+    await rejected(()=>request({source:source==='AR'?'NEW_AR':'AR'},{limit:500,cursor:first.nextCursor}),/invalid_ticket_cursor/);
+    const other=await request({source,platform:source==='AR'?'NEW ONE':'AR ONE'},{limit:200});
+    assert.deepEqual(other.rows,[]);assert.deepEqual(other.sources,[]);
+  }
+  await rejected(()=>request({source:'other'}),/invalid_filter/);
+  await rejected(()=>request({},{limit:501}),/invalid_filter/);
+  await configure('scope',{IN:['newOne']});
+  const arOutside=await request({source:'AR'},{limit:500});
+  assert.deepEqual(arOutside.rows,[]);assert.deepEqual(arOutside.platforms,[]);
 });
