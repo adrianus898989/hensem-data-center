@@ -22,6 +22,11 @@ test('reconciliation platform directory has a narrow non-paginated India deposit
 test('deposit ticket pages keep the source cursor intact and reject filters from other views',()=>{
  const list={action:'workorderRecords',view:'depositTickets',operation:'list',country:'IN',filters:{from:'2026-11-03',to:'2026-11-09',workorderId:'A007',utr:'UTR009'}};
  assert.equal(validate(list).limit,20);
+ for(const limit of [200,300,500]){
+  assert.equal(validate({...list,limit}).limit,limit);
+  assert.throws(()=>validate({...list,view:'orders',limit}));
+ }
+ for(const limit of [201,501,'500'])assert.throws(()=>validate({...list,limit}));
  const cursor={at:'2026-11-09T00:00:03.000013+05:30',p:'35bf6ddb-4c9f-428c-859b-633277217a00',t:null,k:'A007',h:'a'.repeat(32)};
  const next=validate({...list,cursor,offset:20});
  assert.equal(next.cursor.at,cursor.at);assert.equal(next.cursor.k,'A007');assert.equal(next.offset,20);
