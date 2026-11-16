@@ -8,17 +8,18 @@ const attachments=q=>['rates','workorders','submissionAnalysis','intakeCoverage'
 test('seven-day unavailable query replaces old publication status with its exact current range and no invented zeros',async()=>{
  const h=await fixture();await h.c.liveQuery();assert(h.L.retainedContent);h.L.retainedContent.html+='<div data-provider-published>2026-10-15 全部三方 · 缺 54 项统计</div>';
  range(h);const n=h.calls.length,wait=deferred();let held;
- h.override(q=>{if(main(q)){held=q;return wait.promise.then(()=>prepared(q,'building'));}});const run=h.c.liveQuery();await settle();assert(held);assert.match(h.html(),/data-aggregate-read-status[^>]*><strong>正在读取 · 已读 0 \/ 18 平台/);assert.match(h.html(),/data-aggregate-query-scope>印度 · 2026-10-11T00:00:00 至 2026-10-17T23:59:59 · 成功时间 2026-10-11T00:00:00 至 2026-10-17T23:59:59 · TukPay</);assert.doesNotMatch(h.html(),/data-provider-published|缺 54 项|live-retained-result|主表已完成/);
+ h.override(q=>{if(main(q)){held=q;return wait.promise.then(()=>prepared(q,'building'));}});const run=h.c.liveQuery();await settle();assert(held);assert.match(h.html(),/data-collection-pending aria-busy="true"/);assert.match(h.html(),/<th scope="col">统一三方<\/th>/);assert.doesNotMatch(h.html(),/data-aggregate-read-status|live-read-phase|data-provider-published|缺 54 项|live-retained-result|provider-summary-kpis|当前筛选范围没有已入库记录|<tfoot>/);
+ assert.match(h.c.document.getElementById('liveFilters').innerHTML,/aria-busy="true">查询中…/);
  h.override(q=>main(q)?prepared(q,'building'):undefined);wait.resolve();await run;await settle();assert.equal(h.L.results.length,0);assert.equal(h.L.queryFailures.length,18);assert(h.L.queryFailures.every(f=>f.status==='building'));assert.match(h.html(),/当前范围暂无可用统计 · 已读 0 \/ 18 平台/);assert.match(h.html(),/未完成数据不按 0 计算/);assert.match(h.html(),/data-aggregate-query-scope>印度 · 2026-10-11T00:00:00 至 2026-10-17T23:59:59 · 成功时间 2026-10-11T00:00:00 至 2026-10-17T23:59:59 · TukPay</);assert.doesNotMatch(h.html(),/data-provider-published|缺 54 项|主表已完成|provider-summary-kpis|live-retained-result/);
  const calls=h.calls.slice(n);assert.equal(calls.filter(attachments).length,0);assert.equal(calls.filter(q=>['providerSnapshot','aggregate'].includes(q.action)).length,0);for(const q of calls.filter(main))for(const r of q.requests){assert.equal(r.startAt,'2026-10-10T18:30:00.000Z');assert.equal(r.endAt,'2026-10-17T18:30:00.000Z');assert.equal(r.successStartAt,r.startAt);assert.equal(r.successEndAt,r.endAt);assert.equal(r.providers[0],'TukPay');}
  const before=h.calls.length;await h.c.liveRetryFailed();await settle();assert.equal(h.L.results.length,0);assert.equal(h.calls.slice(before).filter(attachments).length,0,'a manual failed-platform retry also avoids attachments without current orders');
 });
 test('a selected-provider prepared query starts its main reads before a slow rate directory',async()=>{
  const h=await fixture();h.c.HensemAmountBands={profile:()=>({edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]})};range(h);const wait=deferred();let fee;
- h.override(q=>q.action==='rates'?(fee=q,wait.promise):main(q)?prepared(q):undefined);const run=h.c.liveQuery();await settle();assert(h.calls.some(main));assert.equal(h.L.results.length,18);assert.equal(h.L.loading,false);assert(fee);assert.match(h.html(),/主表已完成，正在补充统计/);assert.equal(h.L.amountBandProfiles,null);wait.resolve({rows:[],total:0});await run;await settle();
+ h.override(q=>q.action==='rates'?(fee=q,wait.promise):main(q)?prepared(q):undefined);const run=h.c.liveQuery();await settle();assert(h.calls.some(main));assert.equal(h.L.results.length,18);assert.equal(h.L.loading,false);assert(fee);assert.match(h.html(),/provider-summary-kpis/);assert.doesNotMatch(h.html(),/data-collection-pending|live-read-phase/);assert.equal(h.L.amountBandProfiles,null);wait.resolve({rows:[],total:0});await run;await settle();
 });
 test('partial current orders never claim a complete main table while their attachments run',async()=>{
- const h=await fixture(),wait=deferred();range(h);h.override(q=>main(q)?{version:2,items:q.requests.flatMap(r=>prepared({...q,requests:[r]},r.platformId===platforms[0].id?'missing':'ready').items)}:q.action==='rates'?wait.promise:undefined);const run=h.c.liveQuery();await settle();assert.equal(h.L.results.length,17);assert.equal(h.L.queryFailures.length,1);assert.match(h.html(),/主表读取未完成，正在补充已返回范围的统计/);assert.doesNotMatch(h.html(),/主表已完成，正在补充统计|live-retained-result/);wait.resolve({rows:[],total:0});await run;await settle();assert.equal(h.L.results.length,17);
+ const h=await fixture(),wait=deferred();range(h);h.override(q=>main(q)?{version:2,items:q.requests.flatMap(r=>prepared({...q,requests:[r]},r.platformId===platforms[0].id?'missing':'ready').items)}:q.action==='rates'?wait.promise:undefined);const run=h.c.liveQuery();await settle();assert.equal(h.L.results.length,17);assert.equal(h.L.queryFailures.length,1);assert.match(h.html(),/订单 17 \/ 18 · 读取未完成/);assert.match(h.html(),/只重试未完成平台/);assert.doesNotMatch(h.html(),/live-read-phase|live-retained-result/);wait.resolve({rows:[],total:0});await run;await settle();assert.equal(h.L.results.length,17);
 });
 test('new query and navigation keep old late prepared responses from restoring stale scope',async()=>{
  const h=await fixture(),wait=deferred();range(h);let held;h.override(q=>{if(main(q)){held=q;return wait.promise;}});const run=h.c.liveQuery();await settle();h.c.setPage('amount');wait.resolve(prepared(held));await run;await settle();assert.equal(h.c.state.page,'amount');assert.equal(h.L.results.length,0);assert.doesNotMatch(h.html(),/TukPay|主表已完成/);
@@ -51,4 +52,15 @@ test('prepared comparison and exact-period intake finish while the independent w
  const before=h.calls.length,comparison=JSON.stringify(h.L.comparisonResults),current=JSON.stringify(h.L.providerIntake),previous=JSON.stringify(h.L.providerComparisonIntake);
  wait.resolve({rows:[],total:0,byProvider:[],byDirection:{charge:{submittedCount:0}}});await run;await settle();
  assert.equal(h.L.workordersLoading,false);assert(h.L.workorders);assert.equal(work,1);assert.equal(active,0);assert.equal(h.calls.length,before,'settling the workorder does not start a duplicate attachment round');assert.equal(h.L.comparisonStatus,'ready');assert.equal(JSON.stringify(h.L.comparisonResults),comparison);assert.equal(JSON.stringify(h.L.providerIntake),current);assert.equal(JSON.stringify(h.L.providerComparisonIntake),previous);
+});
+
+test('pending publication shows the selected table headers without displaying the previous date under new filters',async()=>{
+ const h=await fixture();await h.c.liveQuery();assert.equal(h.L.providerReadMode,'published');assert.match(h.html(),/Synthetic provider/);
+ const held=deferred();h.override(q=>q.action==='providerSnapshot'?held.promise:undefined);
+ h.setDay('2026-10-17');const run=h.c.liveQuery();await settle();assert(h.L.loading);
+ assert.match(h.html(),/data-collection-pending/);assert.doesNotMatch(h.html(),/data-provider-published|live-read-phase|Synthetic provider|live-retained-result|data-aggregate-read-status/);
+ const request=h.calls.filter(q=>q.action==='providerSnapshot').at(-1);
+ held.reject(Error('Published read unavailable'));await run;await settle();
+ assert.equal(request.startAt.slice(0,10),'2026-10-17');
+ assert.match(h.html(),/Published read unavailable/);assert.doesNotMatch(h.html(),/Synthetic provider|data-collection-pending/);
 });

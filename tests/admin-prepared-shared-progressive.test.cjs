@@ -37,6 +37,10 @@ for(const page of pages)test(page+': render ready platform facts while an exact 
  assert.equal(h.L.results.length,1);assert.equal(h.L.loading,true);
  assert.match(h.html(),/已读|已读取|部分结果/);assert.match(h.html(),/<table|kpi-value|latency-summary/,'ready page content is visible before slow peers finish');
  assert.doesNotMatch(h.html(),/live-retained-result|查询已完成/);
+ if(page==='providers'){
+  assert.match(h.html(),/1,000\.00/);assert.match(h.html(),/部分结果/);assert.doesNotMatch(h.html(),/data-collection-pending|live-read-phase|data-aggregate-read-status|provider-query-partial/);
+ }
+ if(page==='provider_payout')assert.match(h.html(),/订单 1 \/ 2 · 读取中/);
  const count=h.calls.length;for(let i=0;i<3;i++)h.c.render();await settle();assert.equal(h.calls.length,count,'render does not launch an extra query');
  assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0,'prepared screens do not scan raw aggregates');
  const notices=[];h.c.toast=x=>notices.push(x);h.c.liveExport();assert.equal(h.blobs.length,0);assert(notices.length);
