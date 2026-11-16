@@ -56,12 +56,33 @@
  // Loaded rate snapshots are replaced atomically. Reuse the country/provider
  // index across every platform leaf, fee total, type label and table render.
  const rateIndexes=new WeakMap();
+ // A shared display row does not confer a sibling channel's fee contract.
+ // Resolve the current quote on the original leaf, before adding its money.
+ function pakistanLeafRates(row,records,country){
+  const names=root.HensemProviderNames,group=names?.pakistanProvider?.(row.provider,country);
+  if(!group||!records.length||row.items?.length||row.fee_items?.length)return records;
+  const rawNames=Array.isArray(row.provider_names)&&row.provider_names.length?row.provider_names:[row.sourceProvider||row.provider];
+  const exact=name=>String(name??'').trim().toLowerCase().replace(/\s*[-‐‑‒–—﹘﹣－]\s*/g,'-');
+  const identities=new Set(rawNames.map(exact));
+  const methods=new Set(rawNames.map(raw=>row.direction==='charge'?names.pakistanCollectionMethod(raw,country):''));
+  const nativeMethod=methods.size===1?[...methods][0]:'';
+  const method=methods.size===1?normalized(nativeMethod||row.fee_category||row.channel_type):'';
+  const network=group.startsWith('USDT-');
+  return records.filter(record=>{
+   const source=exact(record.sourceTypeProvider||record.provider);
+   const brandContract=!network&&source===exact(group);
+   const channelContract=source!==exact(group)&&identities.size===1&&identities.has(source);
+   if(!brandContract&&!channelContract)return false;
+   const category=normalized(record.category);
+   return !category||category===method||(network&&(category==='usdt'||'usdt'+category===normalized(group)));
+  });
+ }
  function rateRecords(row,rates,country){
   if(!Array.isArray(rates))return [];
   let snapshot=rateIndexes.get(rates);if(!snapshot||snapshot.length!==rates.length){snapshot={length:rates.length,countries:new Map()};rateIndexes.set(rates,snapshot)}
   let index=snapshot.countries.get(country);
   if(!index){index=new Map();for(const r of rates){if(normalized(r.country)!==normalized(country)&&normalized(r.scopeGroup)!==normalized(country))continue;const key=normalized(canonical(r.provider,country));if(!index.has(key))index.set(key,[]);index.get(key).push(r)}snapshot.countries.set(country,index)}
-  return index.get(normalized(canonical(row.provider,country)))||[];
+  return pakistanLeafRates(row,index.get(normalized(canonical(row.provider,country)))||[],country);
  }
  function feeCandidates(row,rates,country){
   if(!isProviderBusiness(row?.provider))return [];

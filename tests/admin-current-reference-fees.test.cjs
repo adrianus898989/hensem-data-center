@@ -10,6 +10,35 @@ const grouped=(rows,extra={})=>({fee_items:rows,currency:'INR',success_count:row
 const near=(actual,expected)=>assert.ok(Math.abs(actual-expected)<1e-8,`${actual} !== ${expected}`);
 const hasReason=(r,key)=>assert.ok(r.reasons.some(reason=>reason.reason===key),JSON.stringify(r.reasons));
 const version=(r,amount)=>({...r,fee_version_state:'complete',fee_version_matched_count:r.success_count,fee_version_unmatched_count:0,fee_version_estimated_amount:amount});
+test('Pakistan wallet quotes apply only to the verified collection method of each original leaf',()=>{
+ const country='巴基斯坦';
+ const pkLeaf=raw=>leaf({country,currency:'PKR',provider:'CPay',sourceProvider:raw});
+ const pkRate=(category,collectFee)=>rate({country,provider:'CPay',category,collectFee});
+ const easy=pkRate('EASYPAISA','2%'),jazz=pkRate('JAZZCASH','5%');
+ const both=grouped([pkLeaf('CPay-EP'),pkLeaf('cpay-jz')],{currency:'PKR'});
+ assert.equal(facts(both,[easy,jazz],country).amount,70);
+ const partial=facts(both,[easy],country);
+ assert.equal(partial.amount,20);
+ assert.equal(partial.matchedCount,10);
+ assert.equal(partial.complete,false);
+ assert.equal(facts({...pkLeaf('CPay'),provider_names:['CPay-EP','cpay-jz']},[easy],country).amount,null);
+ assert.equal(facts({...pkLeaf('cpay-jz'),direction:'withdraw'},[{...jazz,payoutFee:'5%'}],country).amount,null);
+ const easyOnly={...easy,category:'',sourceTypeProvider:'CPay-EP'};
+ assert.equal(facts(pkLeaf('cpay-jz'),[easyOnly],country).amount,null);
+ assert.equal(facts(pkLeaf('CPay-EP'),[easyOnly],country).amount,20);
+});
+test('Pakistan USDT network totals retain the fee source of each native channel',()=>{
+ const country='巴基斯坦',group='USDT-TRC20';
+ const pkLeaf=raw=>leaf({country,currency:'PKR',provider:group,sourceProvider:raw});
+ const pkRate=(raw,collectFee)=>rate({country,provider:raw,category:'USDT',collectFee});
+ const tron=pkRate('Tronpay-TRC20','1%'),wallet=pkRate('66Wallet-TRC20','3%');
+ const both=grouped([pkLeaf('Tronpay-TRC20'),pkLeaf('66Wallet-TRC20')],{currency:'PKR'});
+ assert.equal(facts(both,[wallet,tron,pkRate('Tronpay-BEP20','8%')],country).amount,40);
+ assert.equal(facts(both,[tron],country).matchedCount,10);
+ assert.equal(facts(pkLeaf('Unipay-TRC20'),[tron,wallet],country).amount,null);
+ assert.equal(facts({...pkLeaf(group),provider_names:['Tronpay-TRC20','66Wallet-TRC20']},[tron],country).amount,null);
+ assert.equal(facts(pkLeaf(group),[pkRate(group,'10%')],country).amount,null);
+});
 function tier(amounts,extra={}){
  const known=amounts.filter(n=>n!==null&&n>=0),low=known.filter(n=>n<=2000),high=known.filter(n=>n>=2001),gap=known.filter(n=>n>2000&&n<2001),sum=rows=>rows.reduce((n,x)=>n+x,0);
  return leaf({provider:'Speed2Pay',direction:'withdraw',success_count:amounts.length,success_amount:amounts.includes(null)?null:sum(amounts),fee_low_count:low.length,fee_low_amount:sum(low),fee_high_count:high.length,fee_high_amount:sum(high),fee_gap_count:gap.length,fee_gap_amount:sum(gap),fee_unpriced_count:amounts.length-known.length,...extra});

@@ -38,10 +38,17 @@ test('the five confirmed raw names agree in TypeScript, generated browser aliase
   assert.equal(browser.HensemProviderNames.canonical(raw,country),expected);
   assert.equal((await db.query('select private.dashboard_admin_live_provider_alias($1,$2) value',[country,raw])).rows[0].value,expected);
  }
- for(const country of ['巴西','印尼','尼日利亚','巴基斯坦','IN-extra',''])for(const [raw]of pairs){
+ for(const country of ['巴西','印尼','尼日利亚','IN-extra',''])for(const [raw]of pairs){
   assert.equal(names.confirmedIndiaThirdPartyAlias(raw,country),'');
   assert.equal(browser.HensemProviderNames.canonical(raw,country),raw);
   assert.equal((await db.query('select private.dashboard_admin_live_confirmed_usdt_provider($1,$2) value',[country,raw])).rows[0].value,null);
+ }
+ for (const [raw] of pairs) {
+  assert.equal(names.confirmedIndiaThirdPartyAlias(raw,'巴基斯坦'), '');
+  const network = raw.includes('(TRC20)') ? 'USDT-TRC20' : raw.includes('(BEP20)') ? 'USDT-BEP20' : null;
+  assert.equal(browser.HensemProviderNames.canonical(raw,'巴基斯坦'), network ?? raw);
+  // This test initializes an immutable 09-27 SQL migration, preceding the PKR aliases.
+  assert.equal((await db.query('select private.dashboard_admin_live_confirmed_usdt_provider($1,$2) value',['巴基斯坦',raw])).rows[0].value,null);
  }
  for(const raw of ['USDT','USDT(TRC20)-6','USDT(TRC20)-30','USDT(BEP20)-4','Wallet66-USDT2'])assert.equal(browser.HensemProviderNames.canonical(raw,'印度'),raw);
  assert.equal(names.canonicalThirdPartyName('USDT-5','印度'),'AYPayUSDT','a different previously-confirmed raw identity is untouched');
