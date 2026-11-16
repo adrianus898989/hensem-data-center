@@ -11,6 +11,7 @@ import {
   DASHBOARD_SESSION_EVENT,
   ensureDashboardSession,
   fetchDashboardProfile,
+  isDashboardAccessUnverifiedError,
   isDashboardAuthTerminalError,
   normalizedPermissions,
   readSavedDashboardSession,
@@ -39,6 +40,25 @@ export function useDashboardAuth() {
   return useContext(AuthContext);
 }
 
+async function readVerifiedProfile(session: DashboardSession, observe: (active: DashboardSession) => void, signal: AbortSignal) {
+  let active = session;
+  let profile: DashboardProfile;
+  signal.throwIfAborted();
+  try {
+    profile = await fetchDashboardProfile(active, signal);
+  } catch (cause) {
+    signal.throwIfAborted();
+    if (isDashboardAccessUnverifiedError(cause) || !(cause && typeof cause === "object" && "status" in cause && cause.status === 401)) throw cause;
+    active = await ensureDashboardSession(active, true);
+    observe(active);
+    signal.throwIfAborted();
+    profile = await fetchDashboardProfile(active, signal);
+  }
+  signal.throwIfAborted();
+  await verifyDashboardAccess(active, observe, signal);
+  return profile;
+}
+
 export default function DashboardAuthGate({ children }: { children: ReactNode }) {
   const enabled = dashboardAuthEnabled();
   const [ready, setReady] = useState(!enabled);
@@ -61,6 +81,8 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   const [passwordMessage, setPasswordMessage] = useState("");
   const menuRef = useRef<HTMLDivElement | null>(null);
   const operationRef = useRef(0);
+  const restoreControllerRef = useRef<AbortController | null>(null);
+  const loginControllerRef = useRef<AbortController | null>(null);
   const accessVerifiedRef = useRef<{accountId:string;token:string;checkedAt:number}|null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
@@ -82,26 +104,37 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     setReady(true);
   }
 
-  function clearAuthenticatedView() {
+  function hideAuthenticatedView() {
     operationRef.current += 1;
+    restoreControllerRef.current?.abort();
+    loginControllerRef.current?.abort();
     accessVerifiedRef.current = null;
     stopDashboardPresence();
-    clearLastActivity();
     clearDashboardDataCaches();
     setDashboardDataViewer(null);
     sessionRef.current = null;
     setSession(null);
     setProfile(null);
     setPassword("");
+    setBusy(false);
     setUserMenuOpen(false);
     setProfileOpen(false);
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setPasswordMessage("");
+  }
+
+  function clearAuthenticatedView() {
+    hideAuthenticatedView();
+    clearLastActivity();
     setRestorePending(false);
     setAuthWarning("");
     setReady(true);
   }
 
   function logout() {
-    const endingSession = sessionRef.current;
+    const endingSession = sessionRef.current || readSavedDashboardSession();
     saveDashboardSession(null);
     clearAuthenticatedView();
     if (endingSession) void signOutDashboard(endingSession).catch(() => {});
@@ -112,11 +145,27 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     setError(cause instanceof Error ? cause.message : "登录会话已失效，请重新登录。");
   }
 
+  function waitForVerification(cause: unknown) {
+    hideAuthenticatedView();
+    setRestorePending(true);
+    setAuthWarning(isDashboardAccessUnverifiedError(cause)
+      ? "暂时无法确认后台访问权限。已保留登录状态，验证通过后会自动打开后台。"
+      : "登录连接暂时不可用，已保留登录状态；恢复网络后将自动重试。");
+    setReady(true);
+  }
+
+  function retryRestore() {
+    if (!restoreControllerRef.current && !sessionRef.current && readSavedDashboardSession()) {
+      setRestoreAttempt(n => n + 1);
+    }
+  }
+
   useEffect(() => {
     const verified=(event:Event)=>{
       const detail=(event as CustomEvent).detail;
       const saved=readSavedDashboardSession();
-      if(detail?.profile?.auth_user_id===saved?.user.id&&detail?.session?.access_token===saved?.access_token)applyAuthenticated(detail.session,detail.profile);
+      if(sessionRef.current && saved && accessVerifiedRef.current?.accountId===saved.user.id &&
+         detail?.profile?.auth_user_id===saved.user.id&&detail?.session?.access_token===saved.access_token)applyAuthenticated(detail.session,detail.profile);
     };
     window.addEventListener(DASHBOARD_PROFILE_EVENT,verified);
     return ()=>window.removeEventListener(DASHBOARD_PROFILE_EVENT,verified);
@@ -125,12 +174,14 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
 
   useEffect(() => {
     if (!enabled) return;
-    let cancelled = false;
+    const operation = operationRef.current;
+    const controller = new AbortController();
+    restoreControllerRef.current = controller;
     void (async () => {
       const saved = readSavedDashboardSession();
       if (!saved) {
         clearLastActivity();
-        if (!cancelled) setReady(true);
+        setReady(true);
         return;
       }
 
@@ -138,7 +189,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       if (lastActivity > 0 && Date.now() - lastActivity >= DASHBOARD_IDLE_MS) {
         saveDashboardSession(null);
         clearLastActivity();
-        if (!cancelled) setReady(true);
+        setReady(true);
         return;
       }
       // 老版本升级过来还没有活动时间时，从本次打开开始计时。
@@ -147,38 +198,28 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       let active = saved;
       try {
         active = await ensureDashboardSession(saved);
-        let nextProfile: DashboardProfile;
-        try { nextProfile = await fetchDashboardProfile(active); }
-        catch (cause) {
-          // An unknown/legacy expiry still gets a single authenticated refresh on 401.
-          if (!(cause && typeof cause === "object" && "status" in cause && cause.status === 401)) throw cause;
-          active = await ensureDashboardSession(active, true);
-          nextProfile = await fetchDashboardProfile(active);
-        }
-        await verifyDashboardAccess(active, current => { active = current; });
+        const nextProfile = await readVerifiedProfile(active, current => { active = current; }, controller.signal);
         const current = readSavedDashboardSession();
-        if (!cancelled && current?.access_token === active.access_token && current.user.id === active.user.id) applyAuthenticated(active, nextProfile, true);
+        if (controller.signal.aborted || operation !== operationRef.current) return;
+        if (current?.access_token === active.access_token && current.user.id === active.user.id) applyAuthenticated(active, nextProfile, true);
+        else if (current) setRestoreAttempt(n => n + 1);
+        else clearAuthenticatedView();
       } catch (cause) {
-        if (cancelled) return;
+        if (controller.signal.aborted || operation !== operationRef.current) return;
         const current = readSavedDashboardSession();
         if (!current || isDashboardAuthTerminalError(cause)) {
           if (!current || current.user.id === active.user.id && current.access_token === active.access_token) logoutWithReason(cause);
           else { setReady(false); setRestoreAttempt(n => n + 1); }
-        } else {
-          // A temporary connection failure must not discard a valid refresh token.
-          setRestorePending(true);
-          setAuthWarning("登录连接暂时不可用，已保留登录状态；恢复网络后将自动重试。");
-          setReady(true);
-        }
+        } else waitForVerification(cause);
       }
-    })();
-    return () => { cancelled = true; };
+    })().finally(() => { if (restoreControllerRef.current === controller) restoreControllerRef.current = null; });
+    return () => { controller.abort(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, restoreAttempt]);
 
   useEffect(() => {
     if (!enabled || !restorePending) return;
-    const retry = () => setRestoreAttempt(n => n + 1);
+    const retry = retryRestore;
     const timer = window.setInterval(retry, 30000);
     window.addEventListener("online", retry);
     window.addEventListener("focus", retry);
@@ -193,16 +234,11 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       const saved = readSavedDashboardSession(), previous = sessionRef.current;
       if (!saved) { clearAuthenticatedView(); return; }
       if (!previous) {
-        if (event.type === "storage") { operationRef.current += 1; setReady(false); setRestoreAttempt(n => n + 1); }
+        if (event.type === "storage") { hideAuthenticatedView(); setReady(false); setRestoreAttempt(n => n + 1); }
         return;
       }
       if (previous.user.id !== saved.user.id) {
-        operationRef.current += 1;
-        accessVerifiedRef.current = null;
-        stopDashboardPresence();
-        setDashboardDataViewer(null);
-        clearDashboardDataCaches();
-        sessionRef.current = null; setSession(null); setProfile(null);
+        hideAuthenticatedView();
         setReady(false); setRestoreAttempt(n => n + 1); return;
       }
       sessionRef.current = saved;
@@ -218,11 +254,17 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     if (!enabled || !session || profile?.active !== true) { stopDashboardPresence(); return; }
     setDashboardPresenceSession(session, dashboardScopeIdentity(profile));
   }, [enabled, session, profile]);
-  useEffect(() => () => stopDashboardPresence(), []);
+  useEffect(() => () => {
+    operationRef.current++;
+    loginControllerRef.current?.abort();
+    setDashboardDataViewer(null);
+    stopDashboardPresence();
+  }, []);
 
   useEffect(() => {
     if (!enabled || !session?.user.id) return;
     const verified = accessVerifiedRef.current;
+    const controller = new AbortController();
     const sameSession = verified?.accountId === session.user.id && verified.token === session.access_token;
     let disposed = false, checking = false, checkedToken = sameSession ? verified.token : "", checkedAt = sameSession ? verified.checkedAt : 0;
     const check = async () => {
@@ -231,31 +273,27 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       if (!previous) return;
       const last = readLastActivity();
       if (last && Date.now() - last >= DASHBOARD_IDLE_MS) { logout(); return; }
+      const operation = operationRef.current;
       checking = true;
       let active = previous;
       try {
         active = await ensureDashboardSession(previous);
-        if (disposed) return;
+        if (disposed || operation !== operationRef.current) return;
         if (active.access_token !== checkedToken || Date.now() - checkedAt >= 30000) {
-          let nextProfile: DashboardProfile;
-          try { nextProfile = await fetchDashboardProfile(active); }
-          catch (cause) {
-            if (!(cause && typeof cause === "object" && "status" in cause && cause.status === 401)) throw cause;
-            active = await ensureDashboardSession(active, true);
-            nextProfile = await fetchDashboardProfile(active);
-          }
-          await verifyDashboardAccess(active, current => { active = current; });
+          const nextProfile = await readVerifiedProfile(active, current => { active = current; }, controller.signal);
           const current = readSavedDashboardSession();
-          if (!disposed && current?.access_token === active.access_token && current.user.id === active.user.id) {
+          if (!disposed && operation === operationRef.current && current?.access_token === active.access_token && current.user.id === active.user.id) {
             applyAuthenticated(active, nextProfile, true);
             checkedToken = active.access_token; checkedAt = Date.now();
           }
         } else setAuthWarning("");
       } catch (cause) {
-        if (disposed) return;
+        if (disposed || operation !== operationRef.current) return;
         const current = readSavedDashboardSession();
         if (!current || isDashboardAuthTerminalError(cause)) {
           if (!current || current.user.id === active.user.id && current.access_token === active.access_token) logoutWithReason(cause);
+        } else if (isDashboardAccessUnverifiedError(cause)) {
+          if (current.user.id === active.user.id && current.access_token === active.access_token) waitForVerification(cause);
         } else setAuthWarning("登录连接暂时不稳定，已保留会话，正在自动重试。");
       } finally { checking = false; }
     };
@@ -266,7 +304,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     window.addEventListener("online", trigger);
     document.addEventListener("visibilitychange", visible);
     trigger();
-    return () => { disposed = true; window.clearInterval(timer); window.removeEventListener("focus", trigger); window.removeEventListener("online", trigger); document.removeEventListener("visibilitychange", visible); };
+    return () => { disposed = true; controller.abort(); window.clearInterval(timer); window.removeEventListener("focus", trigger); window.removeEventListener("online", trigger); document.removeEventListener("visibilitychange", visible); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, session?.user.id, session?.access_token]);
 
@@ -280,29 +318,56 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   }, [userMenuOpen]);
 
   useEffect(() => {
-    if (!enabled || !profile?.username) return;
+    if (!enabled || (!profile?.username && !restorePending)) return;
 
     return installDashboardIdleMonitor(logout);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, profile?.username]);
+  }, [enabled, profile?.username, restorePending]);
 
   async function submitLogin(event: React.FormEvent) {
     event.preventDefault();
+    if (loginControllerRef.current && !loginControllerRef.current.signal.aborted) return;
     const operation = ++operationRef.current;
+    const controller = new AbortController();
+    loginControllerRef.current = controller;
     setBusy(true);
     setError("");
+    let nextSession: DashboardSession | null = null;
+    let passwordSession: DashboardSession | null = null;
     try {
-      let nextSession = await signInDashboard(username, password);
-      const nextProfile = await fetchDashboardProfile(nextSession);
-      await verifyDashboardAccess(nextSession, current => { nextSession = current; });
+      passwordSession = await signInDashboard(username, password);
+      if (operation !== operationRef.current) return;
+      nextSession = passwordSession;
+      const nextProfile = await fetchDashboardProfile(nextSession, controller.signal);
+      controller.signal.throwIfAborted();
+      await verifyDashboardAccess(nextSession, current => { nextSession = current; }, controller.signal);
       if (operation !== operationRef.current) return;
       writeLastActivity();
       applyAuthenticated(nextSession, nextProfile, true);
       setPassword("");
     } catch (err) {
-      if (operation === operationRef.current) setError(err instanceof Error ? err.message : "登录失败");
+      if (operation !== operationRef.current) return;
+      if (nextSession && !isDashboardAuthTerminalError(err)) {
+        // The password was accepted. Save that response with its original
+        // login proof so the next attempt only repeats the read-only checks.
+        try {
+          if (nextSession === passwordSession) saveDashboardSession(nextSession);
+          else {
+            const saved = readSavedDashboardSession();
+            if (!saved || saved.user.id !== nextSession.user.id || saved.access_token !== nextSession.access_token || saved.refresh_token !== nextSession.refresh_token) return;
+          }
+          writeLastActivity();
+          waitForVerification(err);
+        } catch (changed) {
+          setError(changed instanceof Error ? changed.message : "登录会话已改变，请重试");
+        }
+      } else {
+        const saved = readSavedDashboardSession();
+        if (nextSession && saved?.access_token === nextSession.access_token && saved.user.id === nextSession.user.id) logoutWithReason(err);
+        else setError(err instanceof Error ? err.message : "登录失败");
+      }
     } finally {
-      setBusy(false);
+      if (loginControllerRef.current === controller) { loginControllerRef.current = null; setBusy(false); }
     }
   }
 
@@ -370,7 +435,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   if (restorePending && !profile) {
     return <div className="auth-loading-page"><div className="auth-loading-card" role="status" style={{display:"grid",gap:16,maxWidth:480}}>
       <strong>正在恢复登录连接</strong><span>{authWarning}</span>
-      <button type="button" onClick={() => setRestoreAttempt(n => n + 1)}>重试连接</button>
+      <button type="button" onClick={retryRestore}>重试连接</button>
       <button type="button" onClick={logout}>退出此登录</button>
     </div></div>;
   }

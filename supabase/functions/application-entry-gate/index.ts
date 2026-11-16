@@ -7,7 +7,8 @@ declare const Deno: { env: { get(name: string): string | undefined }; serve(hand
 // account-management proxy key. This fingerprint is not the server secret.
 const ENTRY_PROXY_KEY_SHA256 = '5ca06495bb01d44b87a8cba0a12548f0eb438b42bdc05c82f0a028a1b5daecfa';
 const url = Deno.env.get('SUPABASE_URL') || '', service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-const timedFetch: typeof fetch = (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(4000), redirect: 'error' });
+// Leave room for the Edge response within the Worker’s five-second gate check.
+const timedFetch: typeof fetch = (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(4500), redirect: 'error' });
 const admin = createClient(url, service, {
   auth: { persistSession: false, autoRefreshToken: false },
   global: { fetch: timedFetch },

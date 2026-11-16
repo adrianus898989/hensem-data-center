@@ -185,6 +185,39 @@ test('entry Edge service failure does not leak privileged errors or authorize an
  const handler=createEntryGateHandler({allowed:async()=>{throw Error('private credentials or table detail')}},{proxyKeySha256:proxyHash});const r=await handler(edgeRequest());assert.equal(r.status,503);const body=await r.text();assert(!body.includes('private credentials'));assert(!body.includes('allowed":true'));
 });
 
+test('a slow entry RPC can finish after four seconds; a response past the Edge deadline cannot authorize entry',async()=>{
+ const filename=path.join(root,'supabase/functions/application-entry-gate/index.ts');
+ const compiled=ts.transpileModule(fs.readFileSync(filename,'utf8'),{
+  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},
+ }).outputText;
+ function requestAfter(delay){
+  let handler;
+  vm.runInNewContext(compiled,{
+   exports:{},AbortSignal,
+   Deno:{env:{get:()=>''},serve:fn=>{handler=fn;}},
+   fetch:(_input,{signal})=>new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>resolve(new Response('true')),delay);
+    signal.addEventListener('abort',()=>{clearTimeout(timer);reject(signal.reason);},{once:true});
+   }),
+   require(name){
+    if(name==='./handler.ts')return{createEntryGateHandler:gateway=>createEntryGateHandler(gateway,{proxyKeySha256:proxyHash})};
+    assert.match(name,/^jsr:@supabase\/supabase-js@/);
+    return{createClient:(_url,_key,{global})=>({
+     async rpc(rpcName){
+      assert.equal(rpcName,'application_dashboard_entry_allowed');
+      const response=await global.fetch('https://synthetic.invalid/rpc');
+      return{data:await response.json(),error:null};
+     },
+    })};
+   },
+  },{filename});
+  return handler(edgeRequest());
+ }
+ const [slow,late]=await Promise.all([requestAfter(4150),requestAfter(4850)]);
+ assert.equal(slow.status,200);assert.deepEqual(await slow.json(),{ok:true,allowed:true});
+ assert.equal(late.status,503);assert.equal((await late.json()).allowed,undefined);
+});
+
 const owner='11111111-1111-4111-8111-111111111111',viewer='22222222-2222-4222-8222-222222222222',staff='33333333-3333-4333-8333-333333333333';
 async function dbFixture(){
  const db=new PGlite();await db.exec(`create schema auth;create schema private;create role anon;create role authenticated;create role service_role bypassrls;

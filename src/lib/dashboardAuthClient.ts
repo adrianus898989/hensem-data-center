@@ -124,8 +124,12 @@ export function isInvalidDashboardRefreshError(error: unknown): boolean {
   return error instanceof DashboardHttpError && error.code === "refresh_invalid";
 }
 
+export function isDashboardAccessUnverifiedError(error: unknown): boolean {
+  return error instanceof DashboardHttpError && error.code === "access_unverified";
+}
+
 export function isDashboardAuthTerminalError(error: unknown): boolean {
-  return error instanceof DashboardHttpError && (
+  return error instanceof DashboardHttpError && !isDashboardAccessUnverifiedError(error) && (
     ["refresh_invalid", "session_changed", "session_logged_out", "profile_denied"].includes(error.code)
     || error.status === 401 || error.status === 403
   );
@@ -322,6 +326,26 @@ async function readJson(response: DashboardJsonResponse) {
   return json;
 }
 
+// Only a recognized account/session decision can end a login. The entry
+// proxy may deny a request before it ever reaches the account check.
+const accessDecisionCodes = new Set([
+  "application_session_denied", "account_disabled", "account_denied", "account_locked",
+  "ip_denied", "profile_denied", "auth_token_invalid", "login_required", "bad_jwt",
+  "invalid_jwt", "session_expired", "session_not_found", "user_not_found", "user_banned",
+  "PGRST301", "PGRST303",
+]);
+
+async function readDashboardAccessResponse(response: DashboardJsonResponse) {
+  try {
+    return await readJson(response);
+  } catch (error) {
+    if (error instanceof DashboardHttpError && [401, 403].includes(error.status) && !accessDecisionCodes.has(error.code)) {
+      throw new DashboardHttpError("当前入口未能确认访问权限，请重新验证连接。", error.status, "access_unverified");
+    }
+    throw error;
+  }
+}
+
 type DashboardNetworkOptions = {
   timeoutMessage: string;
   networkMessage: string;
@@ -351,6 +375,7 @@ async function dashboardNetworkFetch(
       const response = await fetch(input, { ...init, signal: abort.signal });
       // Preserve the deadline until the complete response body arrives.
       const text = await response.text();
+      init.signal?.throwIfAborted();
       return { ok: response.ok, status: response.status, text: async () => text };
     } catch (error) {
       init.signal?.throwIfAborted();
@@ -609,7 +634,7 @@ export async function dashboardAuthenticatedFetch(
   return send(refreshed); // Exactly one read-only replay; never refresh on 403.
 }
 
-export async function fetchDashboardProfile(session: DashboardSession): Promise<DashboardProfile> {
+export async function fetchDashboardProfile(session: DashboardSession, signal?: AbortSignal): Promise<DashboardProfile> {
   const { url, anonKey } = publicConfig();
   const userId = String(session?.user?.id || "");
   if (!userId) throw new Error("登录状态缺少用户 ID");
@@ -619,7 +644,7 @@ export async function fetchDashboardProfile(session: DashboardSession): Promise<
   params.set("limit", "1");
   const response = await dashboardNetworkFetch(dashboardBootstrapReadUrl("profile") ?? `${url}/rest/v1/dashboard_profiles?${params.toString()}`, {
     headers: { apikey: anonKey, Authorization: `Bearer ${session.access_token}`, Accept: "application/json" },
-    cache: "no-store",
+    cache: "no-store", signal,
   }, {
     timeoutMessage: "账号密码已验证，但读取账号权限超时，请检查网络后重试",
     networkMessage: "账号密码已验证，但暂时无法读取账号权限，请检查网络、代理或浏览器扩展后重试",
@@ -627,11 +652,12 @@ export async function fetchDashboardProfile(session: DashboardSession): Promise<
     networkCode: "profile_network_error",
     retryReadOnce: true,
   });
-  const rows = await readJson(response);
+  const rows = await readDashboardAccessResponse(response);
+  signal?.throwIfAborted();
   if (!Array.isArray(rows) || rows.length > 1) throw new DashboardHttpError("账号权限响应不完整，请稍后重试", 503, "profile_response_invalid");
+  if (rows.length === 0) throw new DashboardHttpError("这个账号还没有配置后台权限", 403, "profile_denied");
   const profile = rows[0];
-  if (!profile) throw new DashboardHttpError("这个账号还没有配置后台权限", 403, "profile_denied");
-  if (profile.auth_user_id !== userId || typeof profile.active !== "boolean"
+  if (!profile || profile.auth_user_id !== userId || typeof profile.active !== "boolean"
       || !["owner", "admin", "viewer"].includes(profile.role) || typeof profile.username !== "string" || !profile.username) {
     throw new DashboardHttpError("账号权限响应不完整，请稍后重试", 503, "profile_response_invalid");
   }
@@ -712,7 +738,7 @@ async function callAdminFunction(session: DashboardSession, body: Record<string,
     timeoutCode: isAccessCheck ? "access_check_timeout" : "admin_timeout",
     networkCode: isAccessCheck ? "access_check_network_error" : "admin_network_error",
   });
-  return await readJson(response);
+  return isAccessCheck ? readDashboardAccessResponse(response) : readJson(response);
 }
 
 export async function createDashboardAccount(
@@ -931,22 +957,31 @@ export type DashboardIpSettings = {
   rows: DashboardIpWhitelistRow[];
 };
 
-export async function verifyDashboardAccess(session: DashboardSession, observeSession?: (current: DashboardSession) => void) {
-  let active = await ensureDashboardSession(session);
-  observeSession?.(active);
+export async function verifyDashboardAccess(
+  session: DashboardSession,
+  observeSession?: (current: DashboardSession) => void,
+  signal?: AbortSignal,
+) {
   const check = async (current: DashboardSession) => {
-    const result = await callAdminFunction(current, { action: "check-access" });
+    signal?.throwIfAborted();
+    observeSession?.(current);
+    const result = await callAdminFunction(current, { action: "check-access" }, signal);
+    signal?.throwIfAborted();
     currentFreshSignIn(current, readSavedDashboardSession());
+    if (result?.ok !== true || result.allowed !== true) {
+      throw new DashboardHttpError("访问权限尚未确认，请重新验证连接。", 503, "access_unverified");
+    }
     return result;
   };
+  signal?.throwIfAborted();
+  const active = await ensureDashboardSession(session);
   try { return await check(active); }
   catch (error) {
-    // Only this read may replay once after a verified invalid-token response.
-    // Policy 403s, transient failures and account management writes never replay.
+    signal?.throwIfAborted();
+    // Only a verified invalid token permits one replay. Other callers may
+    // still own the shared renewal when this particular access read is cancelled.
     if (!(error instanceof DashboardHttpError) || error.status !== 401 || error.code !== "auth_token_invalid") throw error;
-    active = await ensureDashboardSession(active, true);
-    observeSession?.(active);
-    return await check(active);
+    return check(await ensureDashboardSession(active, true));
   }
 }
 
