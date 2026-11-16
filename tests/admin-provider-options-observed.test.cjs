@@ -7,6 +7,34 @@ function result(p=P,name='RAPayINR-QR'){const r=aggregate(p,5);r.groups.provider
 function dataHandler(options={}){return q=>{if(q.action==='catalog')return {platforms:options.platforms||[P]};if(q.action==='providerOptions')return options.options?options.options(q):{providers:['ATPay']};if(q.action==='rates')return {rows:[],total:0};if(q.action==='workorders')return {rows:[],byProvider:[],total:0,summary:{},byDirection:{}};return options.result?options.result(q):result((options.platforms||[P]).find(p=>p.id===q.platformId)||P);};}
 async function setup(options={}){const h=harness({page:'overview',ancillaryHandler:true,platforms:options.platforms,handler:dataHandler(options)});await settle();Object.assign(h.L,{from:'2026-09-22T00:00:00',to:'2026-09-22T05:59:59',country:'印度',direction:'charge',dirty:true});return h;}
 async function queried(options={}){const h=await setup(options);await h.c.liveQuery();await settle();return h;}
+test('a selected Pakistan provider includes native spellings from its scoped cached leaves',async()=>{
+ const pk={...P,country:'巴基斯坦',scopeGroup:'PK',currency:'PKR',timezone:'Asia/Karachi'};
+ const h=await setup({platforms:[pk],options:()=>({providers:['CPay']}),result:q=>{
+  const scoped=result(pk,'CPay');
+  Object.assign(scoped.groups.provider[0],{direction:'charge',currency:'PKR',provider_names:['cPAY — Ep']});
+  scoped.groups.provider.push({...scoped.groups.provider[0],currency:'USDT',provider_names:['CpAY — Jz']});
+  return {...scoped,startAt:q.startAt,endAt:q.endAt};
+ }});
+ h.L.country=pk.country;
+ await h.c.liveQuery();await settle();
+ h.c.liveProvider('CPay');
+ await h.c.liveQuery();
+ await settle();
+ const q=h.calls.find(r=>r.action==='aggregate'&&r.platformId===pk.id&&r.providers?.includes('CPay'));
+ assert.ok(q,'selected provider queried on its actual platform');
+ assert.ok(q.providers.includes('cPAY — Ep'),'original stored spelling is available to the exact read');
+ assert.ok(!q.providers.includes('CpAY — Jz'),'currency-scoped expansion excludes foreign observed leaves');
+ for(const change of [
+  ()=>h.c.liveSet('from','2026-09-21T00:00:00'),
+  ()=>{h.c.hensemDataScope={mode:'all',identity:'another-session'};}
+ ]){
+  change();
+  const offset=h.calls.length;
+  await h.c.liveQuery(true);await settle();
+  const next=h.calls.slice(offset).find(r=>r.action==='aggregate'&&r.platformId===pk.id);
+  assert.ok(next?.providers.includes('CPay')&&!next.providers.includes('cPAY — Ep'),'changed scope never carries previous observed spellings');
+ }
+});
 test('late directory cannot remove a provider already returned by this query',async()=>{
  const wait=deferred(),h=await setup({options:()=>wait.promise});await h.c.liveQuery();await settle();assert(available(h).includes('RAPay'));
  wait.resolve({providers:['3TPay','3cPay','99Pay','ATPay','ArbPay']});await settle();assert(available(h).includes('RAPay'));

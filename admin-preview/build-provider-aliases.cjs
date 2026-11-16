@@ -8,7 +8,7 @@ function load(name,extra=''){
   const code=ts.transpileModule(fs.readFileSync(path.join(base,name+'.ts'),'utf8')+extra,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
   vm.runInNewContext(code,{module:out,exports:out.exports,require:id=>load(id.replace(/^\.\//,''))},{filename:name});return out.exports;
 }
-const api=load('thirdPartyNameMap','\nexport const approvedAdminAliases=[...UPLOADED_THIRD_PARTY_ALIASES,...MANUAL_THIRD_PARTY_ALIAS_FIXES,{country:"印度",canonical:"",aliases:[...CONFIRMED_INDIA_CHANNEL_ALIASES.keys(),...CONFIRMED_INDIA_CHANNEL_ALIASES.values()]}];\nexport const approvedDisplayAliases=CONFIRMED_DISPLAY_ALIASES; export const approvedQueryAliases=CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES;');
+const api=load('thirdPartyNameMap','\nexport const approvedAdminAliases=[...UPLOADED_THIRD_PARTY_ALIASES,...MANUAL_THIRD_PARTY_ALIAS_FIXES,{country:"印度",canonical:"",aliases:[...CONFIRMED_INDIA_CHANNEL_ALIASES.keys(),...CONFIRMED_INDIA_CHANNEL_ALIASES.values()]}];\nexport const approvedDisplayAliases=CONFIRMED_DISPLAY_ALIASES; export const approvedQueryAliases=CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES; export const pakistanQueryAliases=PAKISTAN_QUERY_PROVIDER_ALIASES; export const pakistanRawAliases=pakistanAliasMap; export const pakistanCollectionMethods=pakistanMethods; export const pakistanScope=isPakistanProviderScope; export const pakistanKey=pakistanChannelKey; export const legacyPakistanNamesByGroup=LEGACY_PAKISTAN_PROVIDER_NAMES;');
 const byCountry={};
 // Preserve punctuation/version identity; normalize whitespace around an actual dash.
 const key=name=>name.trim().toLowerCase().replace(/\s*[-‐‑‒–—﹘﹣－]\s*/g,'-');
@@ -16,8 +16,13 @@ for(const group of api.approvedAdminAliases){
   const names=byCountry[group.country]??={};
   for(const name of [...group.aliases,group.canonical].filter(Boolean))names[key(name)]=api.canonicalThirdPartyName(name,group.country);
 }
+for (const [canonical, aliases] of Object.entries(api.legacyPakistanNamesByGroup)) {
+  for (const raw of [canonical,...aliases]) byCountry["巴基斯坦"][key(raw)] = canonical;
+}
+for (const [raw, canonical] of api.pakistanRawAliases) byCountry["巴基斯坦"][raw] = canonical;
 const sorted=Object.fromEntries(Object.keys(byCountry).sort().map(country=>[country,Object.fromEntries(Object.entries(byCountry[country]).sort(([a],[b])=>a.localeCompare(b,'en')))]));
 const countryAliases=Object.fromEntries(['IN','INDIA','印度线下','印度盘口','印度线下盘口','香港','红膏蟹','紅膏蟹','HK_TEAM','HONG_KONG','GAME66_HK','RED_CRAB','GAME66_RED_CRAB'].map(name=>[name,'印度']));
+for (const scope of ['PK','PKR','PAKISTAN']) countryAliases[scope]='巴基斯坦';
 // Enumerate existing approved outputs only; hints never become directory rows.
 // The server independently resolves every name and proves any empty projection.
 function canonicalNames(country){
@@ -50,12 +55,34 @@ revoke all on function private.dashboard_admin_live_provider_alias(text,text) fr
 -- This helper is private and grants no new client access.
 create or replace function private.dashboard_admin_live_confirmed_usdt_provider(p_country text,p_raw text)
 returns text language sql immutable set search_path='' as $function$
- select case when coalesce($countries$${JSON.stringify(countryAliases)}$countries$::jsonb->>upper(btrim(p_country)),p_country)='印度'
- then $confirmed$${JSON.stringify(confirmedRaw)}$confirmed$::jsonb->>regexp_replace(lower(btrim(regexp_replace(btrim(p_raw),$suffix$${suffix}$suffix$,''))),'[[:space:]]*[-‐‑‒–—﹘﹣－][[:space:]]*','-','g') end;
+ select (case coalesce($countries$${JSON.stringify(countryAliases)}$countries$::jsonb->>upper(btrim(p_country)),p_country)
+   when '印度' then $confirmed$${JSON.stringify(confirmedRaw)}$confirmed$::jsonb
+   when '巴基斯坦' then $pakistan$${JSON.stringify(Object.fromEntries(api.pakistanRawAliases))}$pakistan$::jsonb
+ end)->>regexp_replace(lower(btrim(regexp_replace(btrim(p_raw),$suffix$${suffix}$suffix$,''))),'[[:space:]]*[-‐‑‒–—﹘﹣－][[:space:]]*','-','g');
 $function$;
 revoke all on function private.dashboard_admin_live_confirmed_usdt_provider(text,text) from public,anon,authenticated;
 commit;
 `;
 fs.writeFileSync(path.join(__dirname,'../supabase/admin-live-provider-aliases.sql'),sql);
-fs.writeFileSync(path.join(__dirname,'live-provider-aliases.js'),`// Generated approved country aliases; no production rows.\n(function(root){'use strict';const names=${JSON.stringify(sorted)},countries=${JSON.stringify(countryAliases)},display=${JSON.stringify(display)},suffix=new RegExp(${JSON.stringify(suffix)}),key=${key.toString()};const CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES=${JSON.stringify(api.approvedQueryAliases)},canonicalThirdPartyName=(name,country)=>{const raw=String(name??'').trim(),base=raw.replace(suffix,'').trim()||raw,scope=countries[String(country??'').trim().toUpperCase()]||country,map=names[scope],compact=s=>s.toLowerCase().replace(/\\s+/g,'');return display[compact(raw)]??map?.[key(raw)]??display[compact(base)]??map?.[key(base)]??base};root.HensemProviderNames={canonical:canonicalThirdPartyName,canonicalNames:${canonicalNames.toString()},queryNames:${api.confirmedThirdPartyQueryNames.toString()}};})(typeof window==='object'?window:globalThis);\n`);
+const browser=`// Generated approved country aliases; no production rows.
+(function(root){'use strict';
+const names=${JSON.stringify(sorted)},countries=${JSON.stringify(countryAliases)},display=${JSON.stringify(display)},suffix=new RegExp(${JSON.stringify(suffix)}),providerAliasKey=${key.toString()};
+const CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES=${JSON.stringify(api.approvedQueryAliases)};
+const PAKISTAN_QUERY_PROVIDER_ALIASES=${JSON.stringify(api.pakistanQueryAliases)};
+const pakistanAliasMap=new Map(PAKISTAN_QUERY_PROVIDER_ALIASES.flatMap(([raw,canonical])=>[[providerAliasKey(raw),canonical],[providerAliasKey(canonical),canonical]]));
+const pakistanMethods=new Map(${JSON.stringify([...api.pakistanCollectionMethods])});
+const isPakistanProviderScope=${api.pakistanScope.toString()};
+const pakistanTypeSuffix=suffix,pakistanChannelKey=${api.pakistanKey.toString()};
+const stripThirdPartyTypeSuffix=name=>String(name??'').trim().replace(suffix,'').trim()||String(name??'').trim();
+const pakistanProvider=${api.pakistanProvider.toString()};
+const pakistanCollectionMethod=${api.pakistanCollectionMethod.toString()};
+function canonicalThirdPartyName(name,country){
+  const raw=String(name??'').trim(),base=stripThirdPartyTypeSuffix(raw),scope=countries[String(country??'').trim().toUpperCase()]||country,map=names[scope];
+  const compact=s=>s.toLowerCase().replace(/\\s+/g,'');
+  return display[compact(raw)]??map?.[providerAliasKey(raw)]??display[compact(base)]??map?.[providerAliasKey(base)]??base;
+}
+root.HensemProviderNames={canonical:canonicalThirdPartyName,canonicalNames:${canonicalNames.toString()},queryNames:${api.confirmedThirdPartyQueryNames.toString()},pakistanProvider,pakistanCollectionMethod};
+})(typeof window==='object'?window:globalThis);
+`;
+fs.writeFileSync(path.join(__dirname,'live-provider-aliases.js'),browser);
 console.log('Generated approved provider aliases for '+Object.keys(sorted).length+' countries.');

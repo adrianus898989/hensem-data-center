@@ -128,3 +128,68 @@ test('old volume snapshots and fee matching use the same canonical identity with
  const rates=['Wallet66','RushPay','FFPay'].map((provider,i)=>({provider,country:'印度',scopeType:'country',payoutFee:`${i+1}%`}));
  for(const [raw,expected]of pairs){const order={provider:raw,country:'印度',currency:'INR',direction:'withdraw',success_amount:100,success_count:1};assert.deepEqual(Array.from(browser.HensemProviderSummary.feeCandidates(order,rates,'印度'),r=>r.provider),[expected])}
 });
+
+test('Pakistan provider names and network-specific USDT use the same exact identities in the browser, source and SQL', async () => {
+  const cases = [
+    ['onepay-ep', 'OnePay'], ['OpenPayPKR-ep', 'OpenPay'], ['OwenPay', 'OwenPay'],
+    ['CPay-EP', 'CPay'], ['cpay-jz', 'CPay'], ['CPayPKR-Jazz', 'CPay'],
+    ['PopoPayPKR-easypaisa', 'PopoPay'], ['PopoPayPKR-jazzcash', 'PopoPay'],
+    ['OmniPay-Jazz', 'EPay'], ['OmniPay','EPay'], ['ATPay-JZ','ATPay'], ['Ok -EP  QR','OkPay'],
+    ['owPay','OwenPay'], ['OP3Pay','OpenPay'], ['MCB','MCBPay'],
+    ['StarPagoPayPKR-Jazz2', 'StarPago'], ['PKPayWalletPKR-PayIn', 'PKPayWallet'],
+    ['Tronpay-BEP20', 'USDT-BEP20'], ['USDT(BEP20)-5', 'USDT-BEP20'],
+    ['66Wallet-TRC20', 'USDT-TRC20'], ['Unipay-TRC20', 'USDT-TRC20'],
+    ['USDT (TRC20)-4', 'USDT-TRC20'], ['USDT-TRC20', 'USDT-TRC20'],
+    ['USDT', 'UniPayUSDT'], ['USDT-5', 'USDT-5'], ['Unknown-TRC20', 'Unknown-TRC20'],
+    ['NotCPayPKR-Jazz', 'NotCPayPKR-Jazz'], ['All2pay-jz', 'AllPay2'], ['AllPay3', 'AllPay3'],
+  ];
+  const local = new PGlite();
+  try {
+    await local.exec('create schema private; create role anon; create role authenticated;');
+    await local.exec(sql('admin-live-provider-aliases.sql'));
+    for (const scope of ['巴基斯坦','Pakistan','PK','pkr']) {
+      const result = await local.query(
+        'select private.dashboard_admin_live_provider_alias($1, raw) as name from unnest($2::text[]) raw',
+        [scope, cases.map(([raw]) => raw)]
+      );
+      assert.deepEqual(result.rows.map(r => r.name), cases.map(([,name]) => name));
+      for (const [raw, canonical] of cases) {
+        assert.equal(names.canonicalThirdPartyName(raw,scope), canonical);
+        assert.equal(browser.HensemProviderNames.canonical(raw,scope), canonical);
+        assert.equal(names.canonicalThirdPartyName(canonical,scope), canonical);
+        assert.equal(browser.HensemProviderNames.canonical(canonical,scope), canonical);
+      }
+    }
+    for (const [country, raw, canonical] of [
+      ['巴基斯坦', '66Wallet-BEP20', 'USDT-BEP20'], ['印尼','66Wallet-BEP20',null],
+      ['印度','USDT(TRC20)-3','TronPayUSDT'], ['巴基斯坦','USDT(TRC20)-3','USDT-TRC20'],
+      ['巴基斯坦','USDT-3',null], ['巴基斯坦','TronPayUSDTCU',null],
+    ]) {
+      const result = await local.query('select private.dashboard_admin_live_confirmed_usdt_provider($1,$2) as name',[country,raw]);
+      assert.equal(result.rows[0].name, canonical);
+    }
+  } finally {
+    await local.close();
+  }
+});
+
+test('Pakistan filters expand only the selected channel group and fee methods require independent raw channel evidence', () => {
+  const br = browser.HensemProviderNames;
+  for (const queryNames of [names.confirmedThirdPartyQueryNames, br.queryNames]) {
+    const selected = Array.from(queryNames(['USDT-TRC20'], 'PK', ['UNIPAY-TRC20','Unknown-TRC20','USDT(BEP20)-5','USDT-3']));
+    assert(selected.includes('Unipay-TRC20') && selected.includes('UNIPAY-TRC20') && selected.includes('66Wallet-TRC20'));
+    assert(!selected.some(raw => raw.includes('BEP20') || raw === 'Unknown-TRC20' || raw === 'USDT-3'));
+    const unrelated = () => { throw Error('this lookup has no matching aliases'); };
+    assert.deepEqual(Array.from(queryNames(['onepay-ep'],'印尼',unrelated)), ['onepay-ep']);
+    assert.deepEqual(Array.from(queryNames(['Unknown-TRC20'],'PK',unrelated)), ['Unknown-TRC20']);
+    assert.deepEqual(Array.from(queryNames([],'PK',unrelated)), []);
+  }
+  for (const method of [names.pakistanCollectionMethod, br.pakistanCollectionMethod]) {
+    assert.equal(method('CPay-EP','PKR'), 'Easypaisa');
+    assert.equal(method('cpay-jz','PK'), 'Jazzcash');
+    assert.equal(method('CPay','巴基斯坦'), '');
+    assert.equal(method('USDT-4','PK'), '');
+    assert.equal(method('66Wallet-BEP20','巴基斯坦'), 'USDT-BEP20');
+    assert.equal(method('CPay-EP','印尼'), '');
+  }
+});

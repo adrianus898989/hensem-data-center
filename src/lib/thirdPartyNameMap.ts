@@ -42,7 +42,7 @@ function countryKey(value?: string): string {
   if (/^(?:IN|INDIA|香港|红膏蟹|紅膏蟹|HK_TEAM|HONG_KONG|GAME66_HK|RED_CRAB|GAME66_RED_CRAB)$/i.test(raw)) return "印度";
   if (raw.includes("胖虎巴西")) return "巴西";
   if (raw.includes("巴西")) return "巴西";
-  if (raw.includes("巴基斯坦")) return "巴基斯坦";
+  if (isPakistanProviderScope(raw) || raw.includes("巴基斯坦")) return "巴基斯坦";
   if (raw.includes("菲律宾")) return "菲律宾";
   if (raw.includes("尼日利亚")) return "尼日利亚";
   if (raw.includes("哥伦比亚") || /colombia/i.test(raw)) return "哥伦比亚";
@@ -114,6 +114,156 @@ export const CONFIRMED_INDIA_RAW_PROVIDER_ALIASES = new Map<string, string>([
   ["rapay", "RAPay"],
 ]);
 
+// Complete PKR channel names from the native directory. Keep network and
+// provider identities separate from other countries' numbered USDT channels.
+// Each row carries its native collection method when the channel registry
+// proves it. A provider-only name carries no method, even if the fee table
+// currently has a single matching row.
+const PAKISTAN_PROVIDER_CHANNELS: readonly (readonly [string, string, readonly string[]])[] = [
+  ["AllPay2", "", ["AllPay2-Jazz", "AllPay2PKR", "AllPay2PKR-Wallet2"]],
+  ["AllPay2", "Easypaisa", ["All2pay-ep", "all2pay-ep", "AllPay2PKR-Easy"]],
+  ["AllPay2", "Jazzcash", ["All2pay-jz", "all2pay-jz", "AllPay2PKR-Jazz"]],
+  ["ATPay", "", ["ATPayPKR"]],
+  ["ATPay", "Easypaisa", ["ATPayPKR-Easy2"]],
+  ["ATPay", "Jazzcash", ["ATPayPKR-Jazz2"]],
+  ["CowPay", "", ["CowPayPKR"]],
+  ["CowPay", "Easypaisa", ["CowPayPKR-Easy"]],
+  ["CowPay", "Jazzcash", ["CowPayPKR-Jazz"]],
+  ["CPay", "", ["CPayPKR"]],
+  ["CPay", "Easypaisa", ["CPay-EP", "cpay-ep", "CPayPKR-Easy"]],
+  ["CPay", "Jazzcash", ["CPay-jazz", "cpay-jz", "CPayPKR-Jazz"]],
+  ["DeePay", "", ["DeePayPKR"]],
+  ["DeePay", "Easypaisa", ["Dee-EP", "deep-ep", "DeePay-Easy", "DeePayPKR-Easy", "DeePayPKR-Easy2"]],
+  ["DeePay", "Jazzcash", ["Dee-Jazz", "deep-jz", "DeePay-Jazz", "DeePayPKR-Jazz", "DeePayPKR-Jazz2"]],
+  ["EPay", "", ["EPay2PKR"]],
+  ["EPay", "Easypaisa", ["EPay-Easy", "EPay-EP", "EPay2PKR-Easy", "EPay2PKR-Easy2", "EPay2PKR-ep"]],
+  ["EPay", "Jazzcash", ["EPay-Jazz", "EPay-Jazz1", "EPay2PKR-Jazz", "EPay2PKR-Jazz2", "EPay2PKR-jz"]],
+  ["EZPay", "", ["EZPayPKR"]],
+  ["EZPay", "Easypaisa", ["EZPayPKR-Easy"]],
+  ["EZPay", "Jazzcash", ["EZPayPKR-Jazz"]],
+  ["FuliPay", "", ["FuliPayPKR"]],
+  ["FuliPay", "Jazzcash", ["FuliPayPKR-Jazz2"]],
+  ["GoldPay", "", ["GoldPayPKR"]],
+  ["GoldPay", "Jazzcash", ["GoldPayPKR-JazzQR"]],
+  ["iPay", "", ["iPayPKR"]],
+  ["iPay", "Easypaisa", ["iPayPKR-Easy"]],
+  ["iPay", "Jazzcash", ["iPayPKR-Jazz"]],
+  ["MCBPay", "", ["MCB", "MCB-JZ", "MCBPay-EP", "MCBPay-Jazz", "MCBPayPKR"]],
+  ["MCBPay", "Easypaisa", ["MCB-EP", "MCBPayPKR-Easy", "MCBPayPKR-ep"]],
+  ["MCBPay", "Jazzcash", ["MCB-Jazz", "MCBPayPKR-Jazz", "MCBPayPKR-jz"]],
+  ["MegaPay", "", ["MegaPayPKR"]],
+  ["MegaPay", "Easypaisa", ["Mega-EP", "MegaPayPKR-Easy", "MegaPayPKR-Easy2"]],
+  ["MegaPay", "Jazzcash", ["Mega-Jazz", "MegaPayPKR-Jazz"]],
+  ["NOPayWallet", "", ["NOPayWalletPKR"]],
+  ["NOPayWallet", "NOPay", ["NOPayWalletPKR-PayIn"]],
+  ["OkPay", "", ["OkPayPKR"]],
+  ["OkPay", "Easypaisa", ["Ok -EP  QR", "Ok-EP", "OkPay-Easy", "OkPayPKR-Easy", "OkPayPKR-Easy2", "OkPayPKR-EasyQR", "OkPayPKR-ep"]],
+  ["OkPay", "Jazzcash", ["Ok-Jazz", "OkPayPKR-Jazz", "OkPayPKR-Jazz2", "OkPayPKR-jz"]],
+  // The existing Pakistan business mapping identifies OmniPay as EPay.
+  ["EPay", "", ["OmniPay", "EPay-OmniPay", "EPay(OmniPay)", "OmniPayPKR", "OmniPayPKR-EP", "OmniPayPKR-JZ"]],
+  ["EPay", "Easypaisa", ["OmniPay-EP", "OmniPayPKR-Easy"]],
+  ["EPay", "Jazzcash", ["OmniPay-Jazz", "OmniPayPKR-Jazz"]],
+  ["OnePay", "", ["OnePayPKR"]],
+  ["OnePay", "Easypaisa", ["onepay-ep", "OnePayPKR-Easy", "OnePayPKR-ep"]],
+  ["OnePay", "Jazzcash", ["onepay-jz", "OnePayPKR-Jazz", "OnePayPKR-jz"]],
+  ["OpenPay", "", ["OpenPayPKR", "Open", "OP3Pay", "OpenPay-OP3Pay", "OpenPay(OP3Pay)"]],
+  ["OpenPay", "Easypaisa", ["Open-EP", "OpenPayPKR-Easy", "OpenPayPKR-Easy2", "OpenPayPKR-ep"]],
+  ["OpenPay", "Jazzcash", ["Open-Jazz", "OpenPayPKR-Jazz", "OpenPayPKR-Jazz2", "OpenPayPKR-jz"]],
+  ["OsPay", "", ["OSPayPKR"]],
+  ["OsPay", "Easypaisa", ["OSPayPKR-EasyAPP", "OSPayPKR-EasyQR", "OSPayPKR-EasyTransfe", "OSPayPKR-EasyTransfer", "OSPayPKR-ep"]],
+  ["OsPay", "Jazzcash", ["OSPayPKR-JazzAPP"]],
+  ["OwenPay", "", ["OwenPayPKR", "owPay", "OwenPay-OWPay", "OwenPay(OWPay)"]],
+  ["OwenPay", "Easypaisa", ["Owen-EP", "OwenPayPKR-Easy", "OwenPayPKR-Easy2", "OwenPayPKR-ep"]],
+  ["OwenPay", "Jazzcash", ["Owen-Jazz", "OwenPayPKR-Jazz", "OwenPayPKR-Jazz2", "OwenPayPKR-jz"]],
+  ["P777Pay", "", ["P777PayPKR"]],
+  ["P777Pay", "Easypaisa", ["777pay-ep", "P777-EP", "P777PayPKR-Easy", "P777PayPKR-Easy2"]],
+  ["P777Pay", "Jazzcash", ["777pay-jz", "P777-Jazz", "P777PayPKR-Jazz", "P777PayPKR-Jazz2"]],
+  ["PKPayWallet", "", ["PKPayWalletPKR"]],
+  ["PKPayWallet", "PKPayWallet", ["PKPayWalletPKR-PayIn"]],
+  ["PopoPay", "", ["PopoPayPKR", "PopoPayPKR-easypaisa", "PopoPayPKR-jazzcash"]],
+  ["PopoPay", "Easypaisa", ["PopoPayPKR-Easy"]],
+  ["PopoPay", "Jazzcash", ["PopoPayPKR-Jazz"]],
+  ["RsPay", "", ["RsPayPKR"]],
+  ["RsPay", "Easypaisa", ["RsPayPKR-Easy", "RSpayPKR-ep"]],
+  ["RsPay", "Jazzcash", ["RsPayPKR-Jazz", "RsPayPKR-jz"]],
+  ["SlipPay", "", ["SlipPayPKR"]],
+  ["SlipPay", "Easypaisa", ["slip-ep", "SlipPayPKR-Easy"]],
+  ["SlipPay", "Jazzcash", ["slip-jz", "SlipPayPKR-Jazz"]],
+  ["StarPago", "", ["StarPagoPayPKR"]],
+  ["StarPago", "Easypaisa", ["StarPago-EP", "StarPagoPayPKR-Easy", "StarPagoPayPKR-Easy2", "StarPagoPayPKR-ep"]],
+  ["StarPago", "Jazzcash", ["StarPago-Jazz", "StarPagoPayPKR-Jazz", "StarPagoPayPKR-Jazz2", "StarPagoPayPKR-jz"]],
+  ["UnisPay", "", ["UnisPayPKR"]],
+  ["UnisPay", "Easypaisa", ["UnisPayPKR-Easy2", "UnisPayPKR-EasyQR"]],
+  ["UnisPay", "Jazzcash", ["UnisPayPKR-Jazz2", "UnisPayPKR-JazzQR"]],
+  ["USDT-BEP20", "USDT-BEP20", ["66Wallet-BEP20", "Tronpay-BEP20", "USDT(BEP20)-3", "USDT(BEP20)-5"]],
+  ["USDT-TRC20", "USDT-TRC20", ["66Wallet-TRC20", "Tronpay-TRC20", "Unipay-TRC20", "USDT (TRC20)-4", "USDT(TRC20)-3", "USDT(TRC20)-4", "USDT(TRC20)-5"]],
+  ["V8Pay", "", ["V8PayPKR"]],
+  ["V8Pay", "Easypaisa", ["v8pay-ep", "V8PayPKR-Easy"]],
+  ["V8Pay", "Jazzcash", ["v8pay-jz", "V8PayPKR-Jazz"]],
+  ["YcoinPay", "", ["YcoinPayPKR"]],
+  ["YcoinPay", "Easypaisa", ["YcoinPayPKR-Easy"]],
+  ["YcoinPay", "Jazzcash", ["YcoinPayPKR-Jazz"]],
+];
+
+// Older PKR data also contains historical codes and short spellings. They
+// belong only to Pakistan, even when the same label is used in another country.
+const LEGACY_PAKISTAN_PROVIDER_NAMES: Record<string, readonly string[]> = {
+  "ATPay": ["atpay", "atpayep", "atpayjazz", "atpayjz", "ATPay-JZ", "atpaywallet2", "atpaypkrjazzcash", "atpaypkrjazz", "ATPayPKR-Jazz", "atpaypkreasypaisa", "atpaypkreasy", "ATPayPKR-Easy"],
+  "DeePay": ["deepay", "deepayep", "DeePay-EP", "deeep", "deejazz", "deejz", "Dee-JZ", "deepaypkreasypaisa", "deepaypkreasy", "DeePayPKR-Easy", "deepaypkrjazzcash", "deepaypkrjazz", "DeePayPKR-Jazz", "deepaywallet2", "depay", "deepayablepay", "ablepay", "deepayjazz"],
+  "EPay": ["epay", "epayep", "epayjazz", "epay2pkreasy", "epay2pkrjazz", "epay2pkrjazzcash", "EPay2PKR-Jazzcash", "epay2wallet2", "newepay", "newepayep", "newepayjazz", "omnipay", "epayomnipay", "EPay(OmniPay)"],
+  "OkPay": ["okpay", "okpayep", "okpayjazz", "okep", "okjazz", "okpaypkreasypaisa", "okpaypkrjazzcash", "okpaywallet2", "okpaypkrjazz", "OkPayPKR-Jazz", "okpkrjazz", "okpkreasy"],
+  "OpenPay": ["openpay", "openpayep", "OpenPay-EP", "openpayjazz", "OpenPay-Jazz", "openjz", "Open-JZ", "openep", "openjazz", "openpaypkreasy", "openpaypkrjazz", "OpenPayPKR-Jazz", "openpaypkrjazzcash", "openpaywallet2", "oppay", "oppayep", "oppayjazz", "opay", "opayep", "OPay-EP", "opayjazz", "OPay-Jazz", "oppaypkreasy", "oppaypkrjazzcash", "oppaypkrjazz", "oppaywallet2", "openpayjz", "open", "openpaypkr", "op3pay", "openpayop3pay", "OP3Pay", "OpenPay-OP3Pay", "OpenPay(OP3Pay)", "OpenPay-JZ"],
+  "OwenPay": ["owenpay", "owen", "own", "owenep", "owenjazz", "owenpaypkreasypaisa", "owenpaypkrjazzcash", "owenpaywallet2", "owpay", "owenpayowpay", "OWPay", "OwenPay-OWPay", "OwenPay(OWPay)"],
+  "P777Pay": ["p777pay", "p777", "p777ep", "p777jazz", "p777paypkreasy", "p777paypkrjazz", "p777paypkrjazzcash", "P777PayPKR-Jazzcash", "gxpay", "gxpayep", "gxpayjazz", "gxppay", "gxppayep", "GxpPay-EP", "gxppayjazz", "GxpPay-Jazz", "gxpaypkreasy", "gxpaypkrjazzcash", "777pay"],
+  "PkPay": ["pkpay", "pkpayep", "PkPay-EP", "pkpayjz", "PkPay-JZ", "pkep", "pkjazz", "pkpaypkreasypaisa", "pkpaypkreasy", "pkpaypkrjazzcash", "pkpaypkrjazz", "pkpaywallet2", "pkjz", "pkpayjazz", "Pk-JZ"],
+  "StarPago": ["starpago", "starpagoep", "starpagojazz", "starpagopkreasy", "StarPagoPKR-Easy", "starpagopkrjazzcash", "StarPagoPKR-Jazzcash", "starpagojz", "StarPago-JZ"],
+  "Pay4z": ["pay4z", "pay4zep", "Pay4z-EP", "pay4zjazz", "Pay4z-Jazz"],
+  "ShanPay": ["shan", "shanep", "Shan-EP", "shanjazz", "Shan-Jazz", "shanpay"],
+  "MegaPay": ["megapay", "megajazz", "Mega-Jazz", "megaep", "Mega-EP", "mega", "megajz", "Mega-JZ"],
+  "UniPayUSDT": ["unipayusdt", "usdt", "unipayusdtu"],
+  "MCBPay": ["mcb", "mcbpay", "mcbep", "mcbjz", "mcbjazz", "mcbjzpay", "MCB-JZPay"],
+};
+const legacyPakistanNames = new Map<string,string>();
+for (const [canonical, aliases] of Object.entries(LEGACY_PAKISTAN_PROVIDER_NAMES)) {
+  for (const raw of [canonical,...aliases]) legacyPakistanNames.set(aliasKey(raw), canonical);
+}
+
+function isPakistanProviderScope(country?: string): boolean {
+  return /^(?:PK|PKR|Pakistan|巴基斯坦)$/i.test(String(country || "").trim());
+}
+
+const pakistanTypeSuffix = new RegExp(THIRD_PARTY_TYPE_SUFFIX_PATTERN);
+function pakistanChannelKey(value: string): string {
+  const raw = String(value ?? "").trim();
+  return providerAliasKey(raw.replace(pakistanTypeSuffix, "").trim() || raw);
+}
+
+function providerAliasKey(name: string): string {
+  return name.trim().toLowerCase().replace(/\s*[-‐‑‒–—﹘﹣－]\s*/g, "-");
+}
+
+const PAKISTAN_QUERY_PROVIDER_ALIASES = PAKISTAN_PROVIDER_CHANNELS.flatMap(([canonical, , names]) =>
+  names.map(raw => [raw, canonical] as const));
+
+const pakistanAliasMap = new Map<string, string>();
+const pakistanMethods = new Map<string, string>();
+for (const [canonical, method, names] of PAKISTAN_PROVIDER_CHANNELS) {
+  pakistanAliasMap.set(providerAliasKey(canonical), canonical);
+  for (const name of names) {
+    const key = providerAliasKey(name);
+    pakistanAliasMap.set(key, canonical);
+    if (method) pakistanMethods.set(key, method);
+  }
+}
+
+export function pakistanProvider(value: string, country?: string): string {
+  return isPakistanProviderScope(country) ? pakistanAliasMap.get(pakistanChannelKey(value)) || "" : "";
+}
+
+export function pakistanCollectionMethod(value: string, country?: string): string {
+  return isPakistanProviderScope(country) ? pakistanMethods.get(pakistanChannelKey(value)) || "" : "";
+}
+
 // Owner confirmed these exact stored India channels on 2026-10-17.
 // This same list expands read filters while DB/prepared identities stay intact.
 const CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES: readonly (readonly [string, string])[] = [
@@ -129,12 +279,16 @@ export function confirmedThirdPartyQueryNames(providers: readonly string[], coun
   const valid = (name: unknown): name is string => typeof name === "string" && name.trim().length > 0 && name.length <= 200 && !/[\u0000-\u001f\u007f]/.test(name);
   if (providers.some(name => !valid(name))) throw Error("三方筛选名称无效");
   if (!providers.length) return [];
-  const wanted = new Set(providers.map(name => canonicalThirdPartyName(name, country))), affected = new Set(CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES.map(([, canonical]) => canonical).filter(name => wanted.has(name)));
-  if (!affected.size || !/^(?:IN|INDIA|印度(?:线下)?(?:盘口)?|香港|红膏蟹|紅膏蟹|HK_TEAM|HONG_KONG|GAME66_HK|RED_CRAB|GAME66_RED_CRAB)$/i.test(String(country || "").trim())) return [...providers];
+  const pakistan = isPakistanProviderScope(country);
+  const aliases = pakistan ? PAKISTAN_QUERY_PROVIDER_ALIASES : CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES;
+  if (!pakistan && !/^(?:IN|INDIA|印度(?:线下)?(?:盘口)?|香港|红膏蟹|紅膏蟹|HK_TEAM|HONG_KONG|GAME66_HK|RED_CRAB|GAME66_RED_CRAB)$/i.test(String(country || "").trim())) return [...providers];
+  const wanted = new Set(providers.map(name => canonicalThirdPartyName(name, country)));
+  const affected = new Set(aliases.map(([, canonical]) => canonical).filter(name => wanted.has(name)));
+  if (!affected.size) return [...providers];
   const observedNames = typeof observed === "function" ? observed() : observed;
   if (!Array.isArray(observedNames) || observedNames.length > 10000) throw Error("三方原始名称过多，请缩小范围");
   const names = new Set(providers);for (const name of affected) names.add(name);
-  for (const [raw, canonical] of CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES) if (affected.has(canonical)) names.add(raw);
+  for (const [raw, canonical] of aliases) if (affected.has(canonical)) names.add(raw);
   for (const raw of observedNames) if (typeof raw === "string" && raw.trim() && affected.has(canonicalThirdPartyName(raw, country))) names.add(raw);
   if (names.size > 200 || [...names].some(name => !valid(name))) throw Error("三方筛选名称过多或无效，请缩小范围");
   return [...names].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
@@ -439,26 +593,8 @@ function normalizeCanonicalByCountry(name: string, country?: string): string {
   }
 
   if (cKey === "巴基斯坦") {
-    const pakistanMain: Array<[RegExp, string]> = [
-      [/^(atpay|atpayep|atpayjazz|atpayjz|atpaywallet2|atpaypkrjazzcash|atpaypkrjazz|atpaypkreasypaisa|atpaypkreasy)$/, "ATPay"],
-      [/^(deepay|deepayep|deeep|deejazz|deejz|deepaypkreasypaisa|deepaypkreasy|deepaypkrjazzcash|deepaypkrjazz|deepaywallet2)$/, "DeePay"],
-      [/^(epay|epayep|epayjazz|epay2pkreasy|epay2pkrjazz|epay2pkrjazzcash|epay2wallet2)$/, "EPay"],
-      [/^(okpay|okpayep|okpayjazz|okep|okjazz|okpaypkreasypaisa|okpaypkrjazzcash|okpaywallet2|okpaypkrjazz|okpkrjazz|okpkreasy)$/, "OkPay"],
-      [/^(openpay|openpayep|openpayjazz|openjz|openep|openjazz|openpaypkreasy|openpaypkrjazz|openpaypkrjazzcash|openpaywallet2)$/, "OpenPay"],
-      [/^(oppay|oppayep|oppayjazz|opay|opayep|opayjazz|oppaypkreasy|oppaypkrjazzcash|oppaypkreasy|oppaypkrjazz|oppaypkrjazzcash|oppaywallet2)$/, "OpenPay"],
-      [/^(owenpay|owen|own|owenep|owenjazz|owenpaypkreasypaisa|owenpaypkrjazzcash|owenpaywallet2)$/, "OwenPay"],
-      [/^(p777pay|p777|p777ep|p777jazz|p777paypkreasy|p777paypkrjazz|p777paypkrjazzcash)$/, "P777Pay"],
-      [/^(gxpay|gxpayep|gxpayjazz|gxppay|gxppayep|gxppayjazz|gxpaypkreasy|gxpaypkrjazzcash)$/, "P777Pay"],
-      [/^(pkpay|pkpayep|pkpayjz|pkep|pkjazz|pkpaypkreasypaisa|pkpaypkreasy|pkpaypkrjazzcash|pkpaypkrjazz|pkpaywallet2)$/, "PkPay"],
-      [/^(starpago|starpagoep|starpagojazz|starpagopkreasy|starpagopkrjazzcash)$/, "StarPago"],
-      [/^(pay4z|pay4zep|pay4zjazz)$/, "Pay4z"],
-      [/^(shan|shanep|shanjazz|shanpay)$/, "ShanPay"],
-      [/^(megapay|megajazz|megaep|mega)$/, "MegaPay"],
-      [/^(unipayusdt|usdt|unipayusdtu)$/, "UniPayUSDT"]
-    ];
-    for (const [re, canonical] of pakistanMain) {
-      if (re.test(key)) return canonical;
-    }
+    const canonical = legacyPakistanNames.get(key);
+    if (canonical) return canonical;
   }
 
   if (cKey === "马来") {
@@ -792,15 +928,6 @@ function confirmedUserThirdPartyAlias(value: string, country?: string): string {
   // 用户确认：越南 MegiPay / EPAY-MegiPay 就是 EPay。
   if (c === "越南" && /^(megipay|epaymegi|epaymegipay)$/.test(key)) return "EPay";
 
-  // 用户确认：巴基斯坦三方别名统一。
-  if (c === "巴基斯坦") {
-    if (/^(mcb|mcbpay|mcbep|mcbjz|mcbjazz|mcbjzpay)$/.test(key)) return "MCBPay";
-    if (/^(owpay|owenpay|owenpayowpay)$/.test(key)) return "OwenPay";
-    if (/^(open|openpaypkr|op3pay|openpay|openpayop3pay)$/.test(key)) return "OpenPay";
-    if (/^(omnipay|epay|epayomnipay)$/.test(key)) return "EPAY";
-  }
-
-  // 已确认的印度主三方别名。这里只统一名称，不写任何费率。
   if (c === "印度") {
     // 用户确认：IcePay、Ice、Intnetpay、Intnet-QR 是同一个印度三方；统一后代收代付合并显示并匹配同一费率。
     if (/^(ice|icepay|intnet|intnetpay|intnetqr)$/.test(key)) return "Intnet";
@@ -842,11 +969,17 @@ export function canonicalThirdPartyName(value: string, country?: string): string
   const rawAliasKey = aliasKey(strippedRaw);
   const originalAliasKey = aliasKey(raw);
   const cKeyNow = countryKey(country);
-  if(cKeyNow==="巴基斯坦"&&rawAliasKey==="epay")return "EPay";
   const rawBrazilKey = cKeyNow === "巴西" ? brazilPixAliasKey(strippedRaw) : rawAliasKey;
   const currencyKey = currencyFreeAliasKey(strippedRaw || raw);
   const confirmedAlias = confirmedUserThirdPartyAlias(strippedRaw || raw, country) || confirmedUserThirdPartyAlias(raw, country);
   if (confirmedAlias) return confirmedAlias;
+  if (cKeyNow === "巴基斯坦") {
+    const exact = pakistanProvider(value, country);
+    if (exact) return exact;
+    const legacy = COUNTRY_ALIAS_MAP.get(`${cKeyNow}|||${rawAliasKey}`);
+    if (legacy) return normalizeCanonicalByCountry(legacy, country);
+    return legacyPakistanNames.get(rawAliasKey) || strippedRaw;
+  }
 
   if (cKeyNow === "越南") {
     const vnStrict: Record<string, string> = {
@@ -920,29 +1053,6 @@ export function canonicalThirdPartyName(value: string, country?: string): string
       p24: "P24hrPay", p24hr: "P24hrPay", p24hrpay: "P24hrPay"
     };
     if (ngExplicit[rawAliasKey] || ngExplicit[currencyKey]) return ngExplicit[rawAliasKey] || ngExplicit[currencyKey];
-  }
-
-  if (cKeyNow === "巴基斯坦") {
-    const pkExplicit: Record<string, string> = {
-      atpay: "ATPay", atpayep: "ATPay", atpayjazz: "ATPay", atpayjz: "ATPay", atpaywallet2: "ATPay", atpaypkrjazz: "ATPay", atpaypkreasy: "ATPay",
-      deepay: "DeePay", depay: "DeePay", deepayablepay: "DeePay", ablepay: "DeePay", deepaypkreasypaisa: "DeePay", deepaypkrjazzcash: "DeePay", deepaypkrjazz: "DeePay", deepaypkreasy: "DeePay", deepayep: "DeePay", deepayjazz: "DeePay", deeep: "DeePay", deejazz: "DeePay", deejz: "DeePay", deepaywallet2: "DeePay",
-      epay: "EPay", newepay: "EPay", newepayep: "EPay", newepayjazz: "EPay", epay2pkreasy: "EPay", epay2pkrjazz: "EPay", epay2pkrjazzcash: "EPay", epayep: "EPay", epayjazz: "EPay", epay2wallet2: "EPay",
-      okpay: "OkPay", okpaypkreasypaisa: "OkPay", okpaypkrjazzcash: "OkPay", okep: "OkPay", okjazz: "OkPay", okpaywallet2: "OkPay", okpayep: "OkPay", okpayjazz: "OkPay",
-      openpay: "OpenPay", openpaypkreasy: "OpenPay", openpaypkrjazzcash: "OpenPay", openpaypkrjazz: "OpenPay", openpayjazz: "OpenPay", openpayjz: "OpenPay", openpayep: "OpenPay", openep: "OpenPay", openjazz: "OpenPay", openjz: "OpenPay", openpaywallet2: "OpenPay",
-      oppay: "OpenPay", oppayep: "OpenPay", oppayjazz: "OpenPay", opay: "OpenPay", opayep: "OpenPay", opayjazz: "OpenPay",
-      owenpay: "OwenPay", owen: "OwenPay", own: "OwenPay", owenep: "OwenPay", owenjazz: "OwenPay", owenpaypkreasypaisa: "OwenPay", owenpaypkrjazzcash: "OwenPay", owenpaywallet2: "OwenPay",
-      p777pay: "P777Pay", p777: "P777Pay", p777ep: "P777Pay", p777jazz: "P777Pay", p777paypkreasy: "P777Pay", p777paypkrjazz: "P777Pay", "777pay": "P777Pay",
-      gxpay: "P777Pay", gxpayep: "P777Pay", gxpayjazz: "P777Pay", gxppay: "P777Pay", gxppayep: "P777Pay", gxppayjazz: "P777Pay",
-      pkpay: "PkPay", pkep: "PkPay", pkjazz: "PkPay", pkjz: "PkPay", pkpayep: "PkPay", pkpayjazz: "PkPay", pkpayjz: "PkPay", pkpaypkreasypaisa: "PkPay", pkpaypkrjazzcash: "PkPay", pkpaypkrjazz: "PkPay", pkpaypkreasy: "PkPay", pkpaywallet2: "PkPay",
-      starpago: "StarPago", starpagoep: "StarPago", starpagojazz: "StarPago", starpagojz: "StarPago",
-      mega: "MegaPay", megapay: "MegaPay", megaep: "MegaPay", megajazz: "MegaPay", megajz: "MegaPay",
-      mcb: "MCBPay", mcbpay: "MCBPay", mcbep: "MCBPay", mcbjz: "MCBPay", mcbjazz: "MCBPay", mcbjzpay: "MCBPay",
-      owpay: "OwenPay", owenpayowpay: "OwenPay",
-      open: "OpenPay", openpaypkr: "OpenPay", op3pay: "OpenPay", openpayop3pay: "OpenPay",
-      omnipay: "EPAY", epayomnipay: "EPAY",
-      unipayusdt: "UniPayUSDT", usdt: "UniPayUSDT"
-    };
-    if (pkExplicit[rawAliasKey]) return pkExplicit[rawAliasKey];
   }
 
   if (countryKey(country) === "越南") {
@@ -1096,7 +1206,6 @@ export function canonicalThirdPartyName(value: string, country?: string): string
   if (/vstarpay|vstar-pay/.test(x)) return "VstarPay";
   if (/1vnpay|1vn-pay/.test(x)) return "1VNPay";
   if (/fast[-_ ]?pay[-_ ]?momo|fast[-_ ]?momo/.test(x)) return "FASTPay";
-  if (cKeyNow === "巴基斯坦" && /new[-_ ]?epay|newepay/.test(x)) return "EPay";
   if (/lucky/.test(x)) return "LUCKYPAY";
   if (/usdt|trc20|erc20/.test(x)) return "USDT";
   return prettyFallbackName(strippedRaw);

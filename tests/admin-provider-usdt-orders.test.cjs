@@ -13,6 +13,26 @@ function fixture(){
  return {root,api,L,platforms,records,requests,drawers,setHandler:fn=>{handler=fn},html:()=>drawers.at(-1).html};
 }
 
+test('a Pakistan network opens its exact original channels on the selected currency and platform',async()=>{
+ const h=fixture();
+ vm.runInContext(fs.readFileSync(path.join(folder,'live-provider-aliases.js'),'utf8'),h.root);
+ const platform=k=>({...h.platforms[k],country:'巴基斯坦',currency:'PKR',timezone:'Asia/Karachi'});
+ const row=(provider,currency='PKR')=>({provider,currency,direction:'charge',all_count:1,success_count:1});
+ h.L.results=[
+  {platform:platform(0),groups:{provider:[row('66Wallet-BEP20'),row('Tronpay-BEP20'),row('Tronpay-TRC20')]}},
+  {platform:platform(1),groups:{provider:[row('66Wallet-TRC20'),row('66Wallet-BEP20','USDT')]}},
+  {platform:platform(2),groups:{provider:[row('TronPayUSDT')]}}
+ ];
+ await h.api.open('USDT-BEP20','','charge','','PKR');
+ assert.equal(h.requests.length,1);
+ const q=h.requests[0];
+ assert.equal(q.platformId,'a');
+ assert.equal(q.currency,'PKR');
+ assert.ok(q.providers.includes('66Wallet-BEP20')&&q.providers.includes('Tronpay-BEP20'));
+ assert.ok(q.providers.includes('USDT(BEP20)-3')&&q.providers.includes('USDT(BEP20)-5'));
+ assert.ok(!q.providers.includes('Tronpay-TRC20')&&!q.providers.includes('TronPayUSDT'));
+});
+
 test('USDT drawer presents unmodified original channel/type with an explicit unconfirmed merchant explanation',async()=>{
  const h=fixture(),before=JSON.stringify(h.L);await h.api.open('USDT','','charge');
  assert.match(h.html(),/USDT\(TRC20\)-3/);assert.match(h.html(),/USDT\(TRC20\)-4/);assert.match(h.html(),/原始三方 \/ 通道/);assert.match(h.html(),/支付商尚未确认/);assert.match(h.html(),/28 笔/);assert.doesNotMatch(h.html(),/Other provider only|DO-NOT-RENDER|UniPay|TronPay/);
