@@ -94,3 +94,91 @@ test('role/preview cancellation and account switch guards run before sending a r
   await assert.rejects(which==='role'?api.readDashboardRoleAccess(s):api.adminPreviewRequest(s));assert.equal(h.calls.length,0);
  }
 });
+test('unrecognized gateway 401 and 403 remain unverified and recover on the same session', async () => {
+  const {h, s} = setup();
+  const profile = {auth_user_id:s.user.id, username:'fixture', role:'viewer', active:true};
+  for (const status of [401, 403]) {
+    for (const body of ['Access denied', '<html>Gateway</html>', JSON.stringify({code:'unknown_policy'})]) {
+      for (const read of [() => h.api.fetchDashboardProfile(s), () => h.api.verifyDashboardAccess(s)]) {
+        h.setFetch(() => new Response(body, {status}));
+        await assert.rejects(read, error =>
+          error.status === status && h.api.isDashboardAccessUnverifiedError(error) && !h.api.isDashboardAuthTerminalError(error));
+      }
+    }
+  }
+  h.setFetch(call => json(call.method === 'GET' ? [profile] : {ok:true, allowed:true}));
+  assert.equal((await h.api.fetchDashboardProfile(s)).auth_user_id, s.user.id);
+  assert.equal((await h.api.verifyDashboardAccess(s)).allowed, true);
+  assert.equal(h.refreshCalls().length, 0);
+  assert.equal(h.saved().access_token, s.access_token);
+});
+
+test('only affirmative access and valid profiles succeed; confirmed denials remain terminal', async () => {
+  const {h, s} = setup();
+  for (const body of ['<html>Gateway</html>', '{}', '{"ok":true}', '{"allowed":true}',
+      '{"ok":true,"allowed":false}', '{"ok":true,"allowed":"true"}']) {
+    h.setFetch(() => new Response(body));
+    await assert.rejects(h.api.verifyDashboardAccess(s), error =>
+      h.api.isDashboardAccessUnverifiedError(error) && !h.api.isDashboardAuthTerminalError(error));
+  }
+  for (const rows of [null, {}, [null], [{active:true}]]) {
+    h.setFetch(() => json(rows));
+    await assert.rejects(h.api.fetchDashboardProfile(s), error =>
+      error.code === 'profile_response_invalid' && !h.api.isDashboardAuthTerminalError(error));
+  }
+  h.setFetch(() => json([]));
+  await assert.rejects(h.api.fetchDashboardProfile(s), error =>
+    error.code === 'profile_denied' && h.api.isDashboardAuthTerminalError(error));
+  for (const code of ['account_disabled', 'ip_denied', 'application_session_denied', '42501']) {
+    h.setFetch(() => json({code, message:'application_session_denied'}, 403));
+    await assert.rejects(h.api.verifyDashboardAccess(s), error =>
+      error.code === (code === '42501' ? 'application_session_denied' : code) && h.api.isDashboardAuthTerminalError(error));
+  }
+  assert.equal(h.refreshCalls().length, 0);
+});
+
+test('cancelling profile and access reads prevents retries even when a late network reply arrives', async () => {
+  const {h, s, r} = setup();
+  for (const path of ['profile','access']) {
+    const cancel = new AbortController();
+    const reply = r.deferred();
+    const start = h.calls.length;
+    h.setFetch(() => reply.promise);
+    const pending = path === 'profile' ? h.api.fetchDashboardProfile(s, cancel.signal)
+      : h.api.verifyDashboardAccess(s, undefined, cancel.signal);
+    await r.tick();
+    assert.equal(h.calls.length, start + 1);
+    cancel.abort();
+    assert.equal(h.calls[start].signal.aborted, true);
+    if (path === 'profile') reply.reject(new TypeError('Transport interrupted'));
+    else reply.resolve(json({code:'auth_token_invalid'}, 401));
+    await assert.rejects(pending, error => error.name === 'AbortError');
+    assert.equal(h.calls.length, start + 1);
+  }
+  assert.equal(h.refreshCalls().length, 0);
+  assert.equal(h.saved().access_token, s.access_token);
+});
+
+test('cancelled access checks neither start a renewal nor cancel another consumer’s shared renewal', async () => {
+  const {h, r} = setup();
+  const old = r.session('near-expiry', 1), next = r.session('renewed');
+  h.api.saveDashboardSession(old);
+  const alreadyCancelled = new AbortController();
+  alreadyCancelled.abort();
+  await assert.rejects(h.api.verifyDashboardAccess(old, undefined, alreadyCancelled.signal), error => error.name === 'AbortError');
+  assert.equal(h.calls.length, 0);
+
+  const cancel = new AbortController(), reply = r.deferred(), observed = [];
+  h.setFetch(() => reply.promise);
+  const other = h.api.ensureDashboardSession(old);
+  const access = h.api.verifyDashboardAccess(old, current => observed.push(current), cancel.signal);
+  await r.tick();
+  assert.equal(h.refreshCalls().length, 1);
+  cancel.abort();
+  reply.resolve(r.json(next));
+  assert.equal((await other).access_token, next.access_token);
+  await assert.rejects(access, error => error.name === 'AbortError');
+  assert.equal(h.saved().access_token, next.access_token);
+  assert.equal(observed.length, 0);
+  assert.equal(h.dataCalls().length, 0);
+});

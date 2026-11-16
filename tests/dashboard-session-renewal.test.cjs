@@ -457,8 +457,9 @@ test('access-check distinguishes expired application session, disabled account a
 });
 
 // Render the real gate with minimal hooks to verify terminal-error presentation and stale-request isolation.
-function gateHarness(profileRead, accessRead=async()=>({})) {
-  const h=harness(),old=session();h.api.saveDashboardSession(old);
+function gateHarness(profileRead, accessRead=async()=>({}), {saved=true}={}) {
+  const h=harness(),old=session();
+  if(saved)h.api.saveDashboardSession(old);
   const intervals=new Map(),listeners=new Map();let timerId=0;
   h.window.setInterval=(fn,ms)=>{intervals.set(++timerId,{fn,ms});return timerId;};
   h.window.clearInterval=id=>intervals.delete(id);
@@ -472,7 +473,7 @@ function gateHarness(profileRead, accessRead=async()=>({})) {
     useEffect:(fn,values)=>{const i=eindex++;if(!deps[i]||values.some((v,k)=>v!==deps[i][k])){deps[i]=values;pending.push(()=>{cleanups[i]?.();cleanups[i]=fn();});}}};
   const box={exports:{}},filename=path.join(repo,'src/components/DashboardAuthGate.tsx');
   const text=ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
-  vm.runInNewContext(text,{module:box,exports:box.exports,Error,window:h.window,document:{addEventListener(){},removeEventListener(){}},StorageEvent:class extends Event{},Date:class extends Date {static now(){return h.now();}},
+  vm.runInNewContext(text,{module:box,exports:box.exports,Error,AbortController,window:h.window,document:{addEventListener(){},removeEventListener(){}},StorageEvent:class extends Event{},Date:class extends Date {static now(){return h.now();}},
     require:name=>{
       if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
       if(name.endsWith('/dashboardAuthClient'))return{...h.api,dashboardAuthEnabled:()=>true,fetchDashboardProfile:profileRead,verifyDashboardAccess:accessRead,signOutDashboard:async()=>({})};
