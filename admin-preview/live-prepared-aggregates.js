@@ -314,9 +314,15 @@
      const index=queue.findIndex(job=>!job.refreshOnly||job.refreshReleased);if(index<0)break;
      const job=queue[index];if(job.refreshOnly&&[...batches].some(batch=>batch.jobs.some(item=>!item.refreshOnly)))break;if(jobs.get(job.key)!==job||!prune(job)){queue.splice(index,1);continue;}
      if(selected.length&&(job.retryProbeAlone||selected[0].retryProbeAlone))break;
-     let probe=job.retryProbeAlone||!!job.readyOnlyProbe&&!probedPhases.has(job.readyOnlyProbePhase);
+     // The collection table can show a verified native subtotal immediately.
+     // Split only a larger primary batch. Small selections keep one round trip,
+     // and the rest of a country shares the usual bulk probe in the second lane.
+     const progressive=job.readyOnlyProbePhase==='provider-primary';
+     const phaseStarted=probedPhases.has(job.readyOnlyProbePhase);
+     let probe=job.retryProbeAlone||!!job.readyOnlyProbe&&(progressive||!phaseStarted);
      if(probe&&!readyRequestFits(selected,job)){if(selected.length)break;probe=false;}
-     if(selected.length&&(selected.length>=(readyOnlyProbe?50:maxBatchSize)||probe!==readyOnlyProbe||probe&&job.readyOnlyProbePhase!==selected[0].readyOnlyProbePhase||!!job.refreshOnly!==!!selected[0].refreshOnly||(job.forceRefresh&&!job.polling)!==(selected[0].forceRefresh&&!selected[0].polling)||job.responseProfile!==selected[0].responseProfile||!readyOnlyProbe&&selected[0].responseProfile&&selected.length>=3))break;
+     const probeLimit=progressive&&!phaseStarted&&selected.length+queue.length>maxBatchSize?1:50;
+     if(selected.length&&(selected.length>=(readyOnlyProbe?probeLimit:maxBatchSize)||probe!==readyOnlyProbe||probe&&job.readyOnlyProbePhase!==selected[0].readyOnlyProbePhase||!!job.refreshOnly!==!!selected[0].refreshOnly||(job.forceRefresh&&!job.polling)!==(selected[0].forceRefresh&&!selected[0].polling)||job.responseProfile!==selected[0].responseProfile||!readyOnlyProbe&&selected[0].responseProfile&&selected.length>=3))break;
      queue.splice(index,1);if(job.polling&&(now()>=job.deadlineAt||job.attempts>=pollMaxAttempts)){endPoll(job);continue;}if(!selected.length)readyOnlyProbe=probe;selected.push(job);
     }
     if(!selected.length)break;
@@ -333,7 +339,7 @@
     if(responseProfile!==undefined){if(publicationVersion!==2)throw failure('invalid');profileGroups(responseProfile,q);}
     if(readOptions.readyOnlyProbe!==undefined&&typeof readOptions.readyOnlyProbe!=='boolean'||readOptions.readyOnlyProbe&&(publicationVersion!==2||readOptions.forceRefresh||!(q.view==='providers'&&responseProfile===undefined||(q.view||'full')==='full'&&responseProfile==='time-v1')))throw failure('invalid');
     const readyOnlyProbePhase=readOptions.readyOnlyProbePhase===undefined?'main':readOptions.readyOnlyProbePhase;
-    if(!['main','comparison'].includes(readyOnlyProbePhase)||readOptions.readyOnlyProbePhase!==undefined&&!readOptions.readyOnlyProbe)throw failure('invalid');
+    if(!['main','comparison','provider-primary'].includes(readyOnlyProbePhase)||readOptions.readyOnlyProbePhase!==undefined&&!readOptions.readyOnlyProbe||readyOnlyProbePhase==='provider-primary'&&(q.view!=='providers'||q.direction!=='charge'||q.successBasis!=='created'))throw failure('invalid');
     const forceRefresh=readOptions.forceRefresh===true,reuseScope=completedContext,cacheKey=completedKey(reuseScope,nativeIdentity,q,responseProfile),family=completedFamily(reuseScope,nativeIdentity,q),key=encode([scope,nativeIdentity,q,forceRefresh,responseProfile??null]);
     if(forceRefresh)invalidateCompleted(family,key);
     else{const cached=completedResult(cacheKey,reuseScope,nativeIdentity,q,native);if(cached&&!(typeof readOptions.onRefresh==='function'&&cached.result._preparedPublication.interactiveRefreshAt!=null&&(cached.result._preparedPublication.freshness==='refresh_due'||['queued','running'].includes(cached.result._preparedPublication.refreshState)))){const mine=generation,cacheGeneration=completedGeneration;return Promise.resolve().then(()=>{if(mine!==generation||cacheGeneration!==completedGeneration||cached.entry.invalidated||readOptions.signal?.aborted||scope!==syncContext()||readOptions.isCurrent&&!readOptions.isCurrent()||nativeKey(options.platform(q.platformId))!==nativeIdentity)throw failure('cancelled');const current=completedResult(cacheKey,reuseScope,nativeIdentity,q,native);return current?copy(current.result):read(q,readOptions);});}}

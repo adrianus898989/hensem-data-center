@@ -691,7 +691,8 @@
   return p.reasons.length>0||!p.reasonGroups.length||p.reasonGroups.some(g=>!g.informational&&!knownScope.has(g.key))||p.details.some(d=>d.coverage.sourceCoverage?.complete===false||d.coverage.expectedAvailable===false||knownNumber(d.coverage.unexplainedDetailMismatchCount)===null&&(d.expected===null||d.received===null||d.expected!==d.received));
  }
  function readNotice(ctx){
-  const {L,E,C}=ctx,c=queryCoverage(L);if(!c.partial)return '';
+  const {L,E,C}=ctx;if(ctx.quietCollection&&(L.loading||L.queryRetrying))return '';
+  const c=queryCoverage(L);if(!c.partial)return '';
   const state=L.queryRetrying?'正在重试':L.loading?'读取中':L.queryPaused?'已暂停':'读取未完成';
   const detail=(c.empty?'本次尚无平台返回，数据暂不可用。':'仅显示已返回平台的部分结果。')+'已返回 '+c.received+' / '+c.requested+' 个平台；未返回平台不计入下方金额、笔数与占比，不代表零交易或未上传。'+(L.queryRetrying?'正在补读未完成平台，已返回数据保留。':'');
   return '<div class="provider-query-partial provider-status-actions" role="status" title="'+E(detail)+'"><button type="button" class="link" onclick="providerSummaryPlatformCoverage()">订单 '+C(c.received)+' / '+C(c.requested)+' · '+state+'</button>'+(c.failures.length&&typeof root.liveRetryFailed==='function'?'<button class="link" onclick="liveRetryFailed()" '+(L.queryRetrying||L.loading?'disabled':'')+'>'+(L.queryRetrying?'正在重试…':'只重试未完成平台')+'</button>':'')+'</div>';
@@ -759,6 +760,14 @@
   const platformText=intake.missing.length?'缺 '+names(intake.missing):readState.partial?'未读 '+names(readState.missing):unseen.length?'未见创建 '+names(unseen):intake.complete!==intake.requested?'完整性待核验':'查看平台';
   if(!unavailable)for(const card of cards)card.change.detail=(range.calendarDays>1?'较前期':'较昨日')+(comparison.label?' · '+comparison.label:'')+'；'+card.change.detail;
   return '<div class="provider-summary-kpis">'+cards.map(c=>'<div class="provider-kpi provider-kpi-'+c.tone+'" title="'+E(c.change.detail)+'"><div class="provider-kpi-value"><label>'+c.label+(c.badge?'<span class="provider-partial">'+c.badge+'</span>':'')+'</label><strong>'+c.value+'</strong></div><div class="provider-kpi-comparison">'+(c.platformCoverage?'<button type="button" class="link provider-platform-coverage-button" onclick="providerSummaryPlatformCoverage()" title="'+E(platformText+(intake.error?'；'+intake.error:'')+'；点击查看采集与接口读取明细')+'">'+E(platformText)+'</button>':'')+(c.change.text?'<span class="provider-kpi-change '+E(c.change.trend)+'">'+E(c.change.text)+'</span>':'')+'</div></div>').join('')+'</div>';
+ }
+ function summaryColumns(direction){
+  return [['统一三方','provider'],['平台','platform_count'],['类型','type'],['全部金额','all_amount'],['全部笔数','all_count'],['成功金额','success_amount'],['成功笔数','success_count'],['金额占比','amount_share'],['笔数占比','count_share'],['成功率','success_rate'],...(direction==='charge'?[['剔除后成功率','adjusted_rate'],['无充值人数','invalid_members'],['无效笔数','invalid_count']]:[]),...(direction==='withdraw'?[['代付中金额','pending_amount'],['代付中笔数','pending_count']]:[]),['当前参考费率','fee_rate'],['估算手续费','estimated_fee'],['手续费占比','fee_share'],
+   ['工单提交金额','issue_submittedAmount'],['工单提交笔数','issue_submittedCount'],['工单已处理金额','issue_successAmount'],['工单已处理笔数','issue_successCount'],['工单未处理金额','issue_notReceivedAmount'],['工单未处理笔数','issue_notReceivedCount'],...(direction==='charge'?[['未处理KYC连接笔数','issue_uniqueNotReceivedKycCount'],['未处理KYC连接金额','issue_uniqueNotReceivedKycAmount']]:[]),['工单处理率','issue_success_rate'],['平台明细',null]];
+ }
+ function pendingCollectionTable(box){
+  const headers=summaryColumns('charge').map(([label])=>'<th scope="col">'+label+'</th>').join('');
+  return box('代收三方汇总','<div class="live-table table-wrap" data-collection-pending aria-busy="true"><table aria-label="代收三方汇总"><thead><tr>'+headers+'</tr></thead><tbody></tbody></table></div>');
  }
  function render(ctx,direction){
   const {L,E,N,C,R,plus,combine,groupRows,box,table,pager,submissionAnalysis,feeForRow,ensureFeeLookup,providerCell,openDrawer}=ctx,name=direction==='charge'?'代收':'代付',issueLabel=direction==='charge'?'存款未到账':'取款未到账';
@@ -892,8 +901,7 @@
     ?box('当前确认规则','<p class="live-definition">'+E(tierExplanation(tier))+'</p>')+box('原表费率记录',sourceTable)
     :box('当前匹配规则','<p class="live-definition">'+E(rule?.note||'优先匹配原平台专属记录；平台规则缺失或冲突时不回退国家费率。无平台专属记录时匹配国家规则。')+'</p>'+sourceTable)));
   };
-  const columns=[['统一三方','provider'],['平台','platform_count'],['类型','type'],['全部金额','all_amount'],['全部笔数','all_count'],['成功金额','success_amount'],['成功笔数','success_count'],['金额占比','amount_share'],['笔数占比','count_share'],['成功率','success_rate'],...(direction==='charge'?[['剔除后成功率','adjusted_rate'],['无充值人数','invalid_members'],['无效笔数','invalid_count']]:[]),...(direction==='withdraw'?[['代付中金额','pending_amount'],['代付中笔数','pending_count']]:[]),['当前参考费率','fee_rate'],['估算手续费','estimated_fee'],['手续费占比','fee_share'],
-   ['工单提交金额','issue_submittedAmount'],['工单提交笔数','issue_submittedCount'],['工单已处理金额','issue_successAmount'],['工单已处理笔数','issue_successCount'],['工单未处理金额','issue_notReceivedAmount'],['工单未处理笔数','issue_notReceivedCount'],...(direction==='charge'?[['未处理KYC连接笔数','issue_uniqueNotReceivedKycCount'],['未处理KYC连接金额','issue_uniqueNotReceivedKycAmount']]:[]),['工单处理率','issue_success_rate'],['平台明细',null]];
+  const columns=summaryColumns(direction);
   const header=(text,key,active=sort,ascending=!!L.providerSortAsc,index=null)=>{if(!key)return E(text);const next=active===key?!ascending:textSortKeys.has(key),basis=key==='fee_rate'?'按百分比、单笔费依次排序；多档或未匹配置后。':key.startsWith('issue_')?'按原订单号去重后的工单数据排序。':'';return '<button class="link provider-sort-heading" title="'+E(basis+'点击按'+text+(next?'升序':'降序')+'排列；空值置后')+'" onclick="'+(index===null?'providerSummarySort(\''+key+'\')':'providerSummaryPlatformSort('+index+',\''+key+'\')')+'">'+E(text)+' <span class="provider-sort-arrow" aria-hidden="true">'+(active===key?(ascending?'↑':'↓'):'↕')+'</span></button>'};
   const headers=columns.map(([text,key])=>header(text,key));
   // Keep the full label and sort arrow on one line. Long workorder headings
@@ -1026,6 +1034,6 @@
    '<div class="provider-report-panel">'+box(name+'三方汇总'+(partial?'（部分结果）':'')+' · '+issueLabel+'工单'+(publishedWindow(L)?.intraday?'（完整自然日独立统计）':''),toolbar+(uniqueCoverageNote||workorderGapNote||detailOnlyNote?'<div class="provider-workorder-notices">'+uniqueCoverageNote+workorderGapNote+detailOnlyNote+'</div>':'')+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
     '')+'</div></div>';
  }
- root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,currentReferenceFeeFacts,feeModeRow,tieredFeeRule,feeSummary,feeCoverageText,feeHistoryLabel,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,indonesiaMethods,lg111Methods:indonesiaMethods,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
+ root.HensemProviderSummary={render,pendingCollectionTable,buildRows,parseFee,estimate,estimateFacts,currentReferenceFeeFacts,feeModeRow,tieredFeeRule,feeSummary,feeCoverageText,feeHistoryLabel,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,indonesiaMethods,lg111Methods:indonesiaMethods,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;
 })(typeof window!=='undefined'?window:globalThis);
