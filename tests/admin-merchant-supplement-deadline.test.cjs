@@ -45,7 +45,7 @@ for(const change of ['filter','navigation'])test(change+': obsolete member owner
 for(const change of ['identity','native'])test(change+': changed ownership rejects in-flight member evidence and stops remaining windows',async()=>{
  const h=await fixture(),{run}=await main(h),old=h.waiting.find(e=>e.q.action==='memberDaily');if(change==='identity')h.c.hensemDataScope={mode:'all',identity:'Synthetic replacement'};else h.L.catalog=h.L.catalog.map(p=>({...p,sourceName:'Synthetic replacement native'}));
  await advanceAction(h,'memberDaily');for(const e of h.waiting.splice(0))e.d.resolve(memberReply(e.q));await settle();await run;
- assert.equal(h.members.state.results.length,0);assert.equal(h.L.dirty,true);assert.equal(h.L.results.length,0);assert.equal(h.deadline(),undefined);assert.equal(h.history.filter(q=>q.action==='memberDaily').length,1);assert.equal(h.controls.ready(),true);
+ assert.equal(h.members.state.results.length,0);assert.equal(h.L.dirty,true);assert.equal(h.L.results.length,0);assert.equal(h.deadline(),undefined);assert.equal(h.history.filter(q=>q.action==='memberDaily').length,1);assert.equal(h.controls.ready(),false,'background health waits for a query under the new authority');assert.equal(h.L.pageQueried,false);assert.equal(h.L.loading,false);
 });
 
 for(const code of ['ADMIN_LIVE_CANCELLED','ADMIN_LIVE_PERMISSION_DENIED'])test(code+': current member authority interruption ends sibling owners and leaves no auto-retry',async()=>{
