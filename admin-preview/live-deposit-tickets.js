@@ -1,7 +1,7 @@
 /* Source ticket rows for the deposit-not-received view. */
 (function(root){
  'use strict';
- root.HensemDepositTickets={create({E,box,table,request,render,state,isActive,scope,accessMessage,checkDisplayScope,openDrawer,formatTime}){
+ root.HensemDepositTickets={create({E,box,table,request,render,state,isActive,scope,onQuery,accessMessage,checkDisplayScope,openDrawer,formatTime}){
   let flight=null,seenScope,detailsOpen=false;
   const pageSizes=[20,50,100,200,300,500];
   const text=value=>value==null||value===''?'—':String(value);
@@ -99,6 +99,7 @@
      checkDisplayScope(filters,draft.country,true);
      const offset=(pageNo-1)*size;
      if(pageNo>1&&!cursor)throw Error('分页位置已失效，请重新查询。');
+     if(onQuery?.()===false)return;
      const result=await request({action:'workorderRecords',view:'depositTickets',operation:'list',country:draft.country,filters,offset,limit:size,...(cursor?{cursor}:{})},{signal:task.controller?.signal});
      if(!owns())return;
      if(!result||result.view!=='depositTickets'||!Array.isArray(result.rows)||result.rows.length>size||typeof result.hasMore!=='boolean'||

@@ -44,8 +44,8 @@ test('configuration deep links wait for a query then source tabs reuse the autho
  await h.c.liveQuery();await settle();assert.equal(api.state().platform,'SYNTHETIC_CONFIG_PLATFORM');const before=h.calls.length;
  api.selectSystem(1);await settle();assert.equal(h.calls.length,before);assert.equal(api.state().snapshotStatus,'ready');assert.match(h.html(),/SYNTHETIC_CONFIG_PLATFORM/);
 });
-test('configuration query continues across navigation and results remain when returning',async()=>{
+test('configuration navigation stops queued snapshots and returning runs a fresh complete query',async()=>{
  const h=harness({page:'payout_config'});await settle();let release;const gate=new Promise(resolve=>{release=resolve});
  h.setHandler(async q=>{await gate;const target={platform:'PRIVATE_CONFIG',country_code:'IN'};return q.operation==='index'?{version:1,system:q.system,readOnly:true,targets:[target],summaries:[]}:{version:1,system:q.system,readOnly:true,target,snapshot:{configuration:{fields:[],groups:[]}}};});
- const pending=h.c.liveQuery();await settle();h.c.setPage('amount');release();await pending;await settle();assert.equal(h.calls.filter(q=>q.operation==='snapshot').length,6);assert.doesNotMatch(h.html(),/PRIVATE_CONFIG/);const n=h.calls.length;h.c.setPage('payout_config');await settle();assert.equal(h.calls.length,n);assert.match(h.html(),/PRIVATE_CONFIG/);assert.equal(h.c.HensemLivePayoutConfig.state().snapshotStatus,'ready');
+ const pending=h.c.liveQuery();await settle();h.c.setPage('amount');release();await pending;await settle();assert.equal(h.calls.filter(q=>q.operation==='snapshot').length,0);assert.doesNotMatch(h.html(),/PRIVATE_CONFIG/);const n=h.calls.length;h.c.setPage('payout_config');await settle();const fresh=h.calls.slice(n);assert.equal(fresh.filter(q=>q.operation==='index').length,6);assert.equal(fresh.filter(q=>q.operation==='snapshot').length,6);assert.match(h.html(),/PRIVATE_CONFIG/);assert.equal(h.c.HensemLivePayoutConfig.state().snapshotStatus,'ready');
 });

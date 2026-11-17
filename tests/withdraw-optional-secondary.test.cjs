@@ -23,13 +23,13 @@ for(const view of ['auto_withdraw','withdraw_operators']){
 test('background polling detects equal-clock manual intent added without a control callback',async()=>{
  const f=fixture(),timers=new Map();let id=0;f.context.setTimeout=fn=>{timers.set(++id,fn);return id};f.context.clearTimeout=key=>timers.delete(key);const run=f.page.load();f.pending.shift().resolve({prepared:{status:'building'}});await run;assert.equal(timers.size,1);f.L.successFrom=f.L.from;f.L.successTo=f.L.to;const [key,fn]=timers.entries().next().value;timers.delete(key);fn();await new Promise(resolve=>setImmediate(resolve));assert.equal(f.calls.length,1);assert.equal(f.page.state.prepared,null);assert.equal(f.page.state.dirty,true);assert.equal(timers.size,0);
 });
-test('verified not-requested response preserves local country-to-team projection without a second read',async()=>{
- const f=team.teamFixture({edit:blank});await f.page.load();const original=copy(f.page.state.data);f.ctx.withdrawTeam('M8');assert.equal(f.calls.length,1);assert.equal(f.page.state.dirty,false);assert.equal(f.page.state.data.totals.total,20);assert.equal(f.page.state.data.previousTotals.total,16);assert.deepEqual(copy(f.page.state.data.secondary),original.secondary);assert.deepEqual(copy(f.page.state.data.prepared),original.prepared);assert.equal(f.page.state.applied.query.includeSecondary,false);assert.equal(f.page.state.data.secondary.complete,false);
+test('a verified omitted secondary window still needs a source read for a new team',async()=>{
+ const f=team.teamFixture({edit:blank});await f.page.load();f.ctx.withdrawTeam('M8');assert.equal(f.calls.length,1);assert.equal(f.page.state.data,null);await f.page.load(true);assert.equal(f.calls.length,2);assert.equal(f.calls[1].q.includeSecondary,false);assert(!f.calls[1].q.platforms.includes('HK'));
 });
 for(const [name,change] of [
  ['missing echo',d=>delete d.windows.includeSecondary],['extra secondary total',d=>d.secondary.total=0],['wrong secondary state',d=>d.secondary.state='observed_records'],['upgraded complete',d=>d.secondary.complete=true],['wrong basis',d=>d.secondary.basis='source_updated'],['wrong date',d=>d.secondary.startAt='2026-10-16T00:00:00.000Z'],['missing intersection marker',d=>delete d.secondary.createdIntersection],['nonempty secondary',d=>d.secondary.rows=[{country:'印度',platform:'M0'}]]
 ])test(name+' cannot bypass native secondary coverage during local team projection',async()=>{
- const f=team.teamFixture({edit:(d,L)=>{blank(d,L);change(d);}});await f.page.load();const original=f.page.state.data;f.ctx.withdrawTeam('M8');assert.equal(f.calls.length,1);assert.equal(f.page.state.dirty,true);assert.equal(f.page.state.data,original);
+ const f=team.teamFixture({edit:(d,L)=>{blank(d,L);change(d);}});await f.page.load();f.ctx.withdrawTeam('M8');assert.equal(f.calls.length,1);assert.equal(f.page.state.dirty,true);assert.equal(f.page.state.data,null);
 });
 test('default no-secondary snapshot cannot serve a manually filled equal success window',async()=>{
  const f=team.teamFixture({edit:blank});await f.page.load();f.L.successFrom=f.L.from;f.L.successTo=f.L.to;f.ctx.withdrawTeam('M8');assert.equal(f.calls.length,1);assert.equal(f.page.state.dirty,true);assert.equal(f.page.canExport(),false);

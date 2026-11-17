@@ -17,7 +17,7 @@
   const {L,E,C,R,N,box,table,request,render}=ctx;
   const S={localSnapshot:false,serverPaging:false,applied:null,data:null,dataKey:'',loadingKey:'',prepared:null,error:'',loading:false,dirty:false,serial:0,view:'auto',metricView:'created',secondaryPage:1,platforms:[],rowCountry:'',account:'',sort:'total',asc:false,daily:false,historical:false,page:1,size:20,open:false,search:'',reason:null,reasonData:null,reasonError:'',reasonSelectionChanged:false,reasonBusy:false,reasonSerial:0,reasonPage:1,reasonSize:20,reasonLabel:'',reasonQuery:'',reasonSelectionGrouping:'',reasonTrigger:null,originalNote:'',originalNoteTitle:'驳回原文',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false};
   const initialState={...S,platforms:[]};
-  let readController=null,pendingRead=null,preparedTimer=null,readDeadlineTimer=null,loadedBase=null,readingScope=null;
+  let readController=null,pendingRead=null,preparedTimer=null,readDeadlineTimer=null,readingScope=null;
   const setLoading=value=>{S.loading=value;ctx.onLoading?.(value)};
   function stopRead(){readingScope=null;if(preparedTimer!==null){root.clearTimeout?.(preparedTimer);preparedTimer=null;}if(readDeadlineTimer!==null){root.clearTimeout?.(readDeadlineTimer);readDeadlineTimer=null;}readController?.abort();readController=null;pendingRead=null;}
   const jsArgument=value=>JSON.stringify(String(value??'')).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -36,7 +36,7 @@
   const resultDaily=()=>S.applied?.query.daily??S.daily;
   const displayAllowed=p=>root.HensemLiveReportData?.displayAllowed?.(p)!==false;
   const accessKey=()=>{const a=root.hensemRoleAccess||{},s=root.hensemDataScope||{},entries=[...(L.catalog||[]),...(L.withdrawCatalog||[])].map(p=>JSON.stringify([p.id||'',p.source||p.system||'',p.identityCountry??p.country,p.sourceName||p.source_name||p.name,p.team||'',p.scopeGroup||p.scope_group||'',displayAllowed(p)])).sort();return JSON.stringify([s.mode||'document',s.identity||'document',a.mode||'document',a.roleId||'',a.version??null,a.assignmentVersion??null,a.canView??null,Array.isArray(a.permissions)?a.permissions.slice().sort():[],entries]);};
-  function clearResult(){loadedBase=null;reasonSnapshot=null;reasonSemantics.clear();S.serial++;stopRead();stopReasonRead();S.reasonSerial++;setLoading(false);Object.assign(S,{applied:null,data:null,dataKey:'',loadingKey:'',localSnapshot:false,serverPaging:false,reason:null,reasonData:null,reasonBusy:false,reasonError:'',reasonSelectionChanged:false,reasonLabel:'',reasonQuery:'',reasonSelectionGrouping:'',originalNote:'',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false,prepared:null,error:'',dirty:true});}
+  function clearResult(){reasonSnapshot=null;reasonSemantics.clear();S.serial++;stopRead();stopReasonRead();S.reasonSerial++;setLoading(false);Object.assign(S,{applied:null,data:null,dataKey:'',loadingKey:'',localSnapshot:false,serverPaging:false,reason:null,reasonData:null,reasonBusy:false,reasonError:'',reasonSelectionChanged:false,reasonLabel:'',reasonQuery:'',reasonSelectionGrouping:'',originalNote:'',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false,prepared:null,error:'',dirty:true});}
   const retiredYashClassification=data=>{
    const retired=value=>value?.classificationBasis==='confirmed_manual_only';
    // Retire only the superseded YASH policy, including saved tabs and prior rows.
@@ -79,7 +79,7 @@
    }
    return base;
   }
-  function invalidate(keepBase=false){if(!keepBase)loadedBase=null;reasonSnapshot=null;S.serial++;stopRead();stopReasonRead();setLoading(false);S.loadingKey='';S.error='';S.prepared=null;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;}
+  function invalidate(){ctx.onDraft?.();reasonSnapshot=null;S.serial++;stopRead();stopReasonRead();setLoading(false);S.loadingKey='';S.error='';S.prepared=null;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;}
   function preparedProgress(prepared){
    const p=prepared.progress;if(p==null)return null;
    if(prepared.contract!=='withdraw-independent-windows-v2'||prepared.status!=='building'||p.contract!=='withdraw-stages-v1'||typeof p.generation!=='string'||!/^[a-f0-9]{32}$/.test(p.generation)
@@ -89,13 +89,14 @@
    return {generation:p.generation,done:p.doneParts,at:Date.parse(p.lastProgressAt),running:p.running};
   }
   async function load(reset=false,override=null){
-   resultAllowed();loadedBase=null;stopReasonRead();reasonSnapshot=null;S.reasonSerial++;S.reason=null;S.reasonData=null;
+   resultAllowed();stopReasonRead();reasonSnapshot=null;S.reasonSerial++;S.reason=null;S.reasonData=null;
    if(!L.catalogReady)return;if(reset)S.page=1;
    if(root.hensemRoleAccess?.canView===false)return;
    const scope=override?.applied.scopeKey||selectionKey();
    if(!override&&S.applied&&draftChanged())clearResult();
    const target=view();if(S.view!==target){clearResult();S.view=target;S.page=1;S.sort=target==='operators'?'processed':'total';S.asc=false;S.daily=false;S.reason=null}
    let targetQuery,key;try{targetQuery=override?.query||query();key=JSON.stringify([scope,targetQuery])}catch(e){S.serial++;stopRead();setLoading(false);S.loadingKey='';S.error=e.message||'读取失败';S.dirty=true;render();return}
+   if(!override&&ctx.onQuery?.()===false){clearResult();render();return;}
    if(S.loading&&S.loadingKey===key)return pendingRead;
    if(!override&&preparedTimer!==null&&S.prepared?.queryKey===key)return;
    const applied=override?{...override.applied,query:targetQuery,accessKey:accessKey(),nativeStamp:nativeStamp()}:{query:targetQuery,scopeKey:scope,country:displayCountry(),teams:activeTeams().slice(),catalog:scopeCatalog().map(p=>({...p})),platforms:S.platforms.slice(),rowCountry:S.rowCountry,historical:S.historical,successWindowExplicit:!!(L.successFrom&&L.successTo),accessKey:accessKey(),nativeStamp:nativeStamp()};
@@ -147,15 +148,12 @@
        },Math.min(delay,Math.max(0,budget-elapsed)));
       }
       return;
-     }if(retiredYashClassification(data))throw Error(retiredYashMessage);S.prepared=null;S.secondaryPage=1;S.applied=applied;if(!applied.successWindowExplicit)S.metricView='created';S.data={...data,country:applied.country,rawCountry:targetQuery.country,scopeTargets:targetQuery.scopeTargets||null,scopeKey:scope};S.dataKey=key;S.dirty=false;S.localSnapshot=target==='auto'&&!targetQuery.daily&&targetQuery.offset===0&&targetQuery.limit===500&&Array.isArray(data.rows)&&data.total!==null&&data.total!==undefined&&data.total!==''&&typeof data.total!=='boolean'&&Number.isSafeInteger(Number(data.total))&&Number(data.total)>=0&&Number(data.total)<=500&&data.rows.length===Number(data.total);S.serverPaging=target==='auto'&&!targetQuery.daily&&!S.localSnapshot;if(!S.localSnapshot&&targetQuery.limit!==500)S.page=Math.floor((targetQuery.offset||0)/S.size)+1;if(S.serverPaging){if(targetQuery.limit===500){S.sort=targetQuery.sort;S.asc=targetQuery.ascending;S.page=1;}if(Array.isArray(S.data.rows)&&S.data.rows.length>S.size)S.data.rows=S.data.rows.slice(0,S.size);}S.page=Math.min(S.page,Math.max(1,Math.ceil(Number(data.total||0)/S.size)));setLoading(false);S.loadingKey='';rememberLoadedBase();render()}
+     }if(retiredYashClassification(data))throw Error(retiredYashMessage);S.prepared=null;S.secondaryPage=1;S.applied=applied;if(!applied.successWindowExplicit)S.metricView='created';S.data={...data,country:applied.country,rawCountry:targetQuery.country,scopeTargets:targetQuery.scopeTargets||null,scopeKey:scope};S.dataKey=key;S.dirty=false;S.localSnapshot=target==='auto'&&!targetQuery.daily&&targetQuery.offset===0&&targetQuery.limit===500&&Array.isArray(data.rows)&&data.total!==null&&data.total!==undefined&&data.total!==''&&typeof data.total!=='boolean'&&Number.isSafeInteger(Number(data.total))&&Number(data.total)>=0&&Number(data.total)<=500&&data.rows.length===Number(data.total);S.serverPaging=target==='auto'&&!targetQuery.daily&&!S.localSnapshot;if(!S.localSnapshot&&targetQuery.limit!==500)S.page=Math.floor((targetQuery.offset||0)/S.size)+1;if(S.serverPaging){if(targetQuery.limit===500){S.sort=targetQuery.sort;S.asc=targetQuery.ascending;S.page=1;}if(Array.isArray(S.data.rows)&&S.data.rows.length>S.size)S.data.rows=S.data.rows.slice(0,S.size);}S.page=Math.min(S.page,Math.max(1,Math.ceil(Number(data.total||0)/S.size)));setLoading(false);S.loadingKey='';render()}
     catch(e){if(serial!==S.serial)return;if(deadlineExpired||e?.code==='WITHDRAW_READ_BUDGET'){S.prepared={status:'paused',queryKey:key,reason:'read_budget_elapsed'};S.dirty=true;setLoading(false);S.loadingKey='';render();return;}if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(e?.code||''))||/^(preview_denied|synthetic_session_denied|assigned_role_required|page_action_denied|role_permission_denied|session_denied)$/.test(String(e?.message||''))){clearResult();S.error='登录或查询权限已变化，请重新验证后查询。';render();return;}setLoading(false);S.loadingKey='';S.prepared=null;S.error=e.message||'读取失败';render()}
     finally{if(serial===S.serial){if(readDeadlineTimer!==null){root.clearTimeout?.(readDeadlineTimer);readDeadlineTimer=null;}readController=null;pendingRead=null;if(!S.prepared)readingScope=null;}}
    })();pendingRead=run;return run;
   }
-  const clone=value=>JSON.parse(JSON.stringify(value));
   const nativeStamp=()=>JSON.stringify([accessKey(),root.hensemRoleAccess||{},root.hensemDataScope||{},catalog().map(p=>JSON.stringify(p)).sort(),[...(L.catalog||[]),...(L.withdrawCatalog||[])].map(p=>JSON.stringify(p)).sort()]);
-  const nativeKey=p=>JSON.stringify([rawTarget(p),platformKey(requestPlatform(p))]);
-  const nativePhysical=p=>JSON.stringify([String(p.source||p.system||'').toLowerCase(),p.id||nativeKey(p)]);
   const rajaFamily=p=>root.HensemLiveReportData?.confirmedAliasKey?.(p)||null;
   const rajaRaw=p=>String(p.sourceName||p.source_name||p.name||'').toUpperCase();
   function chosenWithdrawNative(rows){
@@ -170,156 +168,6 @@
    });
   }
 
-  function nativeIndex(list){
-   const index=new Map(),physical=new Map();
-   const descriptor=p=>JSON.stringify([rawTarget(p),p.identityCountry??p.country,p.scopeGroup??p.scope_group??'',requestPlatform(p),p.sourceName||p.source_name||p.name,p.timezone||'',p.currency||'',p.capabilities??null]);
-   for(const p of list){
-    const source=String(p.source||p.system||'').toLowerCase();if(source!=='withdraw'){const identity=nativePhysical(p),stamp=descriptor(p);if(physical.has(identity)&&physical.get(identity)!==stamp)throw Error('conflicting native metadata');physical.set(identity,stamp);}
-    const key=nativeKey(p),old=index.get(key);if(!old){index.set(key,p);continue;}
-    if(old.team!==p.team)throw Error('ambiguous ownership');
-    const a=String(old.source||old.system||'').toLowerCase(),b=String(p.source||p.system||'').toLowerCase();
-    // withdraw_platforms also emits source-neutral report seeds with synthetic IDs.
-    // They are the same exact country/key group, not a second physical native target.
-    if(a==='withdraw'||b==='withdraw'){if(a==='withdraw')index.set(key,p);continue;}
-    if(a!==b||old.id&&p.id&&old.id!==p.id||descriptor(old)!==descriptor(p))throw Error('ambiguous native');index.set(key,p);
-   }
-   return index;
-  }
-  function nativeFor(row,index){
-   const country=rawTarget({...row,country:row.sourceCountry||row.country}),raw=JSON.stringify([country,platformKey(row.platform)]),normalized=identity({...row,country:row.sourceCountry||row.country,name:row.platform});
-   let direct=index.get(raw);if(!direct&&rajaFamily(normalized)){const candidate=index.get(JSON.stringify([country,platformKey(normalized.name)]));if(candidate&&rajaFamily(candidate)&&String(candidate.source||candidate.system||'').toLowerCase()==='ar'&&rajaRaw(candidate)==='RAJA')direct=candidate;}
-   const matches=direct?[direct]:[...index.values()].filter(p=>rawTarget(p)===country&&platformKey(p.name)===platformKey(row.platform));
-   if(matches.length!==1)throw Error('unknown native');const p=matches[0];
-   if(row.source&&String(row.source).toLowerCase()!==String(p.source||p.system||'').toLowerCase())throw Error('source mismatch');
-   return nativeKey(p);
-  }
-  function nativeMetadata(rows,index,kind){
-   const stable=value=>value&&typeof value==='object'?Array.isArray(value)?value.map(stable):Object.fromEntries(Object.keys(value).sort().map(k=>[k,stable(value[k])])):value;
-   const comparable=row=>{const value={...row};delete value.platform;return JSON.stringify(stable(value));};
-   const unavailable=row=>kind==='availability'?row.available===false&&Object.keys(row).every(k=>['platform','country','available','reason'].includes(k)):row.capability?.available===false&&row.state==='timestamp_unavailable'&&row.complete!==true&&row.coverageVerified!==true&&['count','amount','observedCount'].every(k=>row[k]==null)&&Array.isArray(row.operatorRows)&&row.operatorRows.length===0&&Object.keys(row).every(k=>['platform','country','source','timezone','currency','capability','count','amount','observedCount','complete','coverageVerified','state','operatorAttributionAvailable','operatorRows'].includes(k));
-   const groups=new Map();for(const row of rows){const key=nativeFor(row,index);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
-   return [...groups].map(([key,group])=>{
-    if(group.length===1)return group[0];const target=index.get(key);
-    if(!target||!rajaFamily(target)||String(target.source||target.system||'').toLowerCase()!=='ar'||rajaRaw(target)!=='RAJA')throw Error('duplicate native metadata');
-    const representative=group.find(row=>String(row.platform).toUpperCase()==='RAJA')||group[0],expected=comparable(representative);
-    if(group.some(row=>row!==representative&&comparable(row)!==expected&&!unavailable(row)))throw Error('conflicting RAJA metadata');
-    return representative;
-   });
-  }
-  function singleObservedDay(data,q,previous=false){
-   const day=q.startAt.slice(0,10);if(q.startAt!==day+'T00:00:00.000Z'||q.endAt!==day+'T23:59:59.000Z'||data.startDate!==day||data.endDate!==day)return null;
-   const actual=previous?addDay(day,-1):day;if(previous&&(data.previousStartDate!==actual||data.previousEndDate!==actual))return null;
-   return {day:actual,previous};
-  }
-  function exactSum(values){
-   let n=0n,d=1n,any=false;
-   for(const value of values){if(value==null)continue;const x=decimalSort(value);if(!x)throw Error('unknown number');const scale=d>x.d?d:x.d;n=n*(scale/d)+x.n*(scale/x.d);d=scale;any=true;}
-   if(!any)return null;const negative=n<0n;n=negative?-n:n;const width=d.toString().length-1,digits=n.toString().padStart(width+1,'0');return (negative?'-':'')+(width?digits.slice(0,-width)+'.'+digits.slice(-width):digits);
-  }
-  const exactEqual=(a,b)=>{if(a==null||b==null)return a==null&&b==null;const x=decimalSort(a),y=decimalSort(b);return !!x&&!!y&&x.n*y.d===y.n*x.d;};
-  const numericValue=value=>{if(value==null)return null;const x=decimalSort(value);if(!x||x.n%x.d!==0n)return value;const n=x.n/x.d;return n>=-9007199254740991n&&n<=9007199254740991n?Number(n):value;};
-  const remainder=row=>{if(Object.hasOwn(row,'unclassifiedCount'))return row.unclassifiedCount;const values=['total','autoCount','manualCount'].map(k=>observedCount(row[k]));if(values.some(n=>n===null))throw Error('unknown classification');return String(values[0]>values[1]+values[2]?values[0]-values[1]-values[2]:0n);};
-  // A single-day source placeholder proves no observed counts, not a zero day.
-  // It may not contradict another observed native's exact day union; its NULLs stay intact.
-  const unobservedDayPlaceholder=(r,day)=>!!day&&r.source==='NEWAR'&&r.statisticBasis==='created_at_current_status'&&r.complete===false&&r.coveredDays===0&&r.expectedDays===1&&r.dataDate===day.day&&r.durationSampleCount===0&&['total','success','rejected','autoCount','manualCount','unclassifiedCount','durationTotalSeconds','avgSeconds'].every(k=>Object.hasOwn(r,k)&&r[k]===null);
-  const durationText=value=>value===null||typeof value==='string'&&value.length<=512&&/^(0|[1-9]\d*)(\.\d+)?$/.test(value);
-  const durationLanding=(text,value)=>durationText(text)&&(text===null?value===null:typeof value==='number'?Number.isFinite(value)&&Number(text)===value:typeof value==='string'&&exactEqual(text,value));
-  function projectionDuration(data,index){
-   if(!Object.hasOwn(data,'teamDurationExact'))return {rows:data.rows,totals:data.totals,previousTotals:data.previousTotals};
-   const e=data.teamDurationExact,exactKeys=(x,keys)=>x&&typeof x==='object'&&!Array.isArray(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));
-   if(!exactKeys(e,['contract','direction','window','current','previous'])||e.contract!=='auto-team-duration-v1'||e.direction!=='withdraw'||JSON.stringify(e.window)!==JSON.stringify([data.windows?.creationStartAt,data.windows?.creationEndAt,data.previousStartDate])||!exactKeys(e.current,['rows','total'])||!exactKeys(e.previous,['total'])||!Array.isArray(e.current.rows)||e.current.rows.length!==data.rows.length||data.previousRowsContract!=='auto-team-previous-v1')throw Error('unknown duration evidence');
-   const rows=data.rows.map((row,i)=>{const value=e.current.rows[i];if(!exactKeys(value,['index','country','platform','value'])||value.index!==i||value.country!==row.country||value.platform!==row.platform||nativeFor(value,index)!==nativeFor(row,index)||!Object.hasOwn(row,'durationTotalSeconds')||!durationLanding(value.value,row.durationTotalSeconds))throw Error('duration row evidence mismatch');return {...row,durationTotalSeconds:value.value};});
-   if(!Object.hasOwn(data.totals,'durationTotalSeconds')||!durationLanding(e.current.total,data.totals.durationTotalSeconds)||data.previousTotals!=null&&(!Object.hasOwn(data.previousTotals,'durationTotalSeconds')||!durationLanding(e.previous.total,data.previousTotals.durationTotalSeconds))||data.previousTotals==null&&e.previous.total!==null)throw Error('duration total evidence mismatch');
-   return {rows,totals:{...data.totals,durationTotalSeconds:e.current.total},previousTotals:data.previousTotals==null?null:{...data.previousTotals,durationTotalSeconds:e.previous.total}};
-  }
-  function completePreviousRows(data,index){
-   if(!Object.hasOwn(data,'previousRows')&&!Object.hasOwn(data,'previousRowsContract'))return null;
-   if(data.previousRowsContract!=='auto-team-previous-v1'||!Array.isArray(data.previousRows)||data.previousRows.length>500||data.previousStartDate!==data.previousEndDate)throw Error('unknown previous rows contract');
-   const rows=data.previousRows,keys=new Map();for(const row of rows){if(!row||row.dataDate!==data.previousStartDate||data.teamDurationExact&&!durationText(row.durationTotalSeconds))throw Error('unknown previous row date');const key=nativeFor(row,index);if(keys.has(key))throw Error('duplicate previous native');keys.set(key,row);}
-   for(const row of data.rows){const other=keys.get(nativeFor(row,index));if(!!row.previous!==!!other)throw Error('previous native join mismatch');if(row.previous)for(const k of ['total','success','rejected','autoCount','manualCount','unclassifiedCount','durationSampleCount','durationTotalSeconds'])if(Object.hasOwn(row.previous,k)&&!(k==='durationTotalSeconds'&&data.teamDurationExact?durationLanding(other[k],row.previous[k]):exactEqual(row.previous[k],other[k])))throw Error('previous row differs from original');}
-   return rows;
-  }
-  // Reconcile every additive field against the original server total before permitting a subset.
-  // Equal per-native day cardinality and union cardinality prove the date sets coincide.
-  function scopeTotals(rows,original,verify=false,observedDay=null){
-   if(!verify&&(!rows.length||rows.every(r=>r.total==null)))throw Error('no observed selected rows');
-   if(!rows.length){if(verify&&original!=null&&Object.keys(original).length)throw Error('unrepresented totals');return {};}
-   const observedPartial=r=>observedDay&&original?.coveredDays===1&&r.coveredDays===0&&r.expectedDays===1&&r.complete===false&&['KB','NEWAR'].includes(String(r.source||'').toUpperCase())&&observedCount(r.total)>0n&&(observedDay.previous?r.dataDate==null||r.dataDate===observedDay.day:r.dataDate===observedDay.day);
-   if(!original||!Number.isSafeInteger(original.coveredDays)||original.coveredDays<1||rows.every(r=>unobservedDayPlaceholder(r,observedDay))||rows.some(r=>r.coveredDays!==original.coveredDays&&!observedPartial(r)&&!(original.coveredDays===1&&unobservedDayPlaceholder(r,observedDay))))throw Error('unproven day union');
-   const result={},fields=['total','success','rejected','autoCount','manualCount','unclassifiedCount','durationSampleCount','durationTotalSeconds'];
-   const allowed=new Set([...fields,'avgSeconds','durationBasis','platforms','coveredDays','classificationAvailable','classificationPartial','classificationComparable','reasonAvailable','comparisonComparable','comparisonBasis']);
-   if(Object.keys(original).some(k=>!allowed.has(k)))throw Error('unknown total contract');
-   for(const k of fields){const values=rows.map(r=>k==='unclassifiedCount'?remainder(r):r[k]);if(values.some(v=>v!=null&&(k==='durationTotalSeconds'?(!decimalSort(v)||decimalSort(v).n<0n):observedCount(v)===null)))throw Error('invalid additive field');const value=exactSum(values);if(verify&&!exactEqual(value,original[k]))throw Error('unreconciled '+k);result[k]=numericValue(value);}
-   result.platforms=rows.length;result.coveredDays=original.coveredDays;
-   const bases=new Set(rows.filter(r=>Number(r.durationSampleCount)>0&&r.durationBasis!=null).map(r=>r.durationBasis));result.durationBasis=bases.size>1?'mixed_source_processing':bases.size?[...bases][0]:null;
-   result.avgSeconds=Number(result.durationSampleCount)>0?Number(result.durationTotalSeconds)/Number(result.durationSampleCount):null;
-   if(verify&&(original.platforms!==rows.length||result.durationBasis!==original.durationBasis||!(result.avgSeconds==null&&original.avgSeconds==null||Number.isFinite(result.avgSeconds)&&Number.isFinite(Number(original.avgSeconds))&&Math.abs(result.avgSeconds-Number(original.avgSeconds))<=Math.max(1,Math.abs(result.avgSeconds))*Number.EPSILON*4)))throw Error('unreconciled derived total');
-   for(const k of ['classificationAvailable','classificationPartial','classificationComparable','reasonAvailable','comparisonComparable','comparisonBasis'])if(Object.hasOwn(original,k))result[k]=original[k];
-   if(Object.hasOwn(original,'classificationPartial'))result.classificationPartial=Number(result.unclassifiedCount)>0;
-   // Completeness/comparability may stay conservative; never upgrade an unverified source.
-   if(result.classificationComparable===true&&rows.some(r=>r.classificationComparable===false||r.classificationAvailable===false))throw Error('classification unavailable');
-   return result;
-  }
-  function rememberLoadedBase(){
-   if(!S.localSnapshot||S.loading||S.noteSaving||S.error||S.prepared||S.applied?.teams.length||view()!=='auto'||S.applied.query.daily||S.applied.historical||S.applied.platforms.length||S.applied.rowCountry)return;
-   const d=S.data;
-   if(d.version!==2||d.view!=='auto'||!d.windows||d.windows.version!==2||d.prepared&&(d.prepared.status!=='ready'||d.prepared.calculationComplete!==true)||d.complete===false||d.partial===true||d.error)return;
-   try{
-    const q=S.applied.query,w=d.windows;if(w.creationStartAt!==q.startAt||w.creationEndAt!==q.endAt||w.successStartAt!==q.successStartAt||w.successEndAt!==q.successEndAt||w.successBasis!==q.successBasis)throw Error('window mismatch');
-    const real=S.applied.catalog.filter(p=>String(p.source||p.system||'').toLowerCase()!=='withdraw');
-    if(real.some(p=>!p.id))throw Error('unknown native physical identity');
-    const scopeKeys=new Set(S.applied.catalog.map(nativeKey)),physical=new Set(real.map(nativePhysical));
-    // Validate this query's exact groups and every physical peer, including other countries.
-    nativeIndex(catalog().filter(p=>scopeKeys.has(nativeKey(p))||physical.has(nativePhysical(p))));
-    const index=nativeIndex(S.applied.catalog),seen=new Set();for(const row of d.rows){const key=nativeFor(row,index);if(seen.has(key))throw Error('duplicate native');seen.add(key);}
-    const durationData=projectionDuration(d,index);scopeTotals(durationData.rows,durationData.totals,true,singleObservedDay(d,q));
-    const prior=completePreviousRows(d,index)??d.rows.filter(r=>r.previous).map(r=>r.previous);if(d.previousTotals!=null)scopeTotals(prior,durationData.previousTotals,true,singleObservedDay(d,q,true));else if(prior.length)throw Error('missing prior totals');
-    const serialized=JSON.stringify(d);if(serialized.length*2>8*1024*1024)throw Error('snapshot too large');
-    loadedBase={data:JSON.parse(serialized),applied:clone(S.applied),stamp:nativeStamp(),index};
-   }catch{loadedBase=null;}
-  }
-  function secondaryNotRequested(data,q){
-   const s=data.secondary;
-   return q.includeSecondary===false&&data.windows?.includeSecondary===false&&s&&typeof s==='object'&&!Array.isArray(s)
-    &&Object.keys(s).every(k=>['basis','startAt','endAt','createdIntersection','complete','state','rows'].includes(k))
-    &&s.basis===q.successBasis&&s.startAt===q.successStartAt&&s.endAt===q.successEndAt&&s.createdIntersection===false
-    &&s.complete===false&&s.state==='not_requested'&&Array.isArray(s.rows)&&s.rows.length===0;
-  }
-  function projectLoadedTeam(){
-   const base=loadedBase;if(!base||!L.catalogReady||S.noteSaving||view()!=='auto'||S.daily||base.stamp!==nativeStamp()||root.hensemRoleAccess?.canView===false)return false;
-   try{
-    const q=query(),old=base.applied.query;if(base.applied.successWindowExplicit!==!!(L.successFrom&&L.successTo))return false;
-    if((q.includeSecondary!==false)!==(old.includeSecondary!==false)||['startAt','endAt','successStartAt','successEndAt','successBasis','windowVersion','view','daily'].some(k=>q[k]!==old[k])||displayCountry()!==base.applied.country||S.historical||S.platforms.length||S.rowCountry)return false;
-    const chosen=nativeIndex(scopeCatalog());if([...chosen.keys()].some(k=>!base.index.has(k)))return false;
-    const keep=row=>chosen.has(nativeFor(row,base.index)),d=clone(base.data),durationData=projectionDuration(d,base.index),rows=d.rows.filter(keep),calculationRows=durationData.rows.filter(keep),matched=rows.filter(r=>r.previous),prior=d.previousRows?d.previousRows.filter(keep):matched.map(r=>r.previous);
-    const knownTop=new Set(['version','view','source','startDate','endDate','previousStartDate','previousEndDate','total','offset','limit','rows','totals','previousTotals','previousRows','previousRowsContract','teamDurationExact','comparison','platformCoverage','canWriteNotes','platforms','notes','windows','secondary','creationAvailability','prepared','wgCoverage','yashCoverage','newarCoverage','arCoverage','duoliCoverage','npgCoverage','country','rawCountry','scopeTargets','scopeKey','operatingCoverage']);
-    if(Object.keys(d).some(k=>!knownTop.has(k)))throw Error('unknown response contract');
-    d.rows=rows;if(d.previousRows)d.previousRows=prior;d.total=rows.length;d.offset=0;d.limit=500;d.totals=scopeTotals(calculationRows,durationData.totals,false,singleObservedDay(base.data,old));d.previousTotals=durationData.previousTotals==null?null:prior.length?scopeTotals(prior,durationData.previousTotals,false,singleObservedDay(base.data,old,true)):null;
-    if(d.teamDurationExact){d.teamDurationExact.current.rows=d.teamDurationExact.current.rows.filter(keep).map((r,i)=>({...r,index:i}));d.teamDurationExact.current.total=d.totals.durationTotalSeconds==null?null:String(d.totals.durationTotalSeconds);d.teamDurationExact.previous.total=d.previousTotals?.durationTotalSeconds==null?null:String(d.previousTotals.durationTotalSeconds);}
-    const requiredNative=[...chosen].filter(([,p])=>String(p.source||p.system||'').toLowerCase()!=='withdraw').map(([key])=>key);
-    if(d.secondary&&!secondaryNotRequested(d,q)){if(!Array.isArray(d.secondary.rows)||d.secondary.createdIntersection!==false)throw Error('unknown secondary');d.secondary.rows=nativeMetadata(d.secondary.rows,base.index,'secondary');const keys=d.secondary.rows.map(r=>nativeFor(r,base.index));if(requiredNative.some(k=>!keys.includes(k)))throw Error('incomplete native secondary');d.secondary.rows=d.secondary.rows.filter(keep);}
-    if(d.creationAvailability){if(!Array.isArray(d.creationAvailability))throw Error('unknown availability');d.creationAvailability=nativeMetadata(d.creationAvailability,base.index,'availability');const keys=d.creationAvailability.map(r=>nativeFor(r,base.index));if(requiredNative.some(k=>!keys.includes(k)))throw Error('incomplete native availability');d.creationAvailability=d.creationAvailability.filter(keep);}
-    if(d.operatingCoverage){const c=d.operatingCoverage;if(c.version!==1||c.basis!=='user_confirmed_lifecycle_and_original_daily_coverage'||!Array.isArray(c.items))throw Error('unknown operating coverage');const ids=new Set([...chosen.values()].map(p=>p.id));c.items=c.items.filter(item=>ids.has(item.targetId));}
-    if(d.notes){if(!Array.isArray(d.notes))throw Error('unknown notes');d.notes=d.notes.filter(keep);}
-    // Platform options are directory-derived. Never retain another team's prior-only names.
-    d.platforms=[...new Set([...chosen.values()].map(requestPlatform))];
-    if(d.platformCoverage){const c=d.platformCoverage;if(c.basis!=='registered_game66_selected_scope'||!Array.isArray(c.platforms))throw Error('unknown registered coverage');c.platforms=c.platforms.filter(keep);c.expectedCount=c.platforms.length;c.recordedCount=c.platforms.filter(r=>r.state==='recorded').length;c.missingCount=c.platforms.filter(r=>r.state==='no_selected_period_record').length;if(c.recordedCount+c.missingCount!==c.expectedCount)throw Error('unknown coverage state');}
-    for(const name of ['wgCoverage','yashCoverage','newarCoverage','arCoverage','duoliCoverage','npgCoverage'])if(d[name]){
-     const c=d[name],headers=new Set(['source','timeBasis','operatorBasis','successBasis','operatorSuccessBasis','classificationAvailable','classificationBasis','automaticWithdrawalEnabled','reasonAvailable','sourceNotesAvailable','operatorExcludesExplicitAutomatic','complete','currentComplete','previousComplete','expected','coverageBasis','latestCollectedAt','days']);if(!Array.isArray(c.days)||Object.keys(c).some(k=>!headers.has(k)))throw Error('unknown source coverage');c.days=c.days.filter(keep);
-     if(!c.days.length){delete d[name];continue;}
-     const current=c.days.filter(x=>x.date>=d.startDate&&x.date<=d.endDate),previous=c.days.filter(x=>x.date>=d.previousStartDate&&x.date<=d.previousEndDate);
-     // Preserve false/unknown completeness. A subset cannot manufacture proof of continuity.
-     if(c.currentComplete===true)c.currentComplete=current.length>0&&current.every(x=>x.complete===true);
-     if(c.previousComplete===true)c.previousComplete=previous.length>0&&previous.every(x=>x.complete===true);
-     if(c.complete===true)c.complete=c.days.every(x=>x.complete===true);
-     if(Object.hasOwn(c,'latestCollectedAt'))c.latestCollectedAt=current.map(x=>x.latestCollectedAt).filter(Boolean).sort().at(-1)||null;
-    }
-    d.comparison={...d.comparison,matchedRows:matched.length,totalRows:rows.length,complete:d.comparison?.complete===true&&rows.length>0&&rows.every(r=>r.previous&&r.previous.coveredDays===r.coveredDays)};
-    const applied={query:q,scopeKey:selectionKey(),country:displayCountry(),teams:activeTeams().slice(),catalog:scopeCatalog().map(p=>({...p})),platforms:[],rowCountry:'',historical:false,successWindowExplicit:base.applied.successWindowExplicit===true,accessKey:accessKey(),nativeStamp:nativeStamp()};
-    Object.assign(d,{country:applied.country,rawCountry:q.country,scopeTargets:q.scopeTargets||null,scopeKey:applied.scopeKey});
-    S.applied=applied;S.data=d;S.dataKey=JSON.stringify([applied.scopeKey,q]);S.localSnapshot=true;S.serverPaging=false;S.dirty=false;S.page=1;S.secondaryPage=1;L.dirty=false;return true;
-   }catch{return false;}
-  }
   const singleDay=()=>resultDates().from===resultDates().to;
   const platformKey=name=>String(name||'').toUpperCase().replace(/^(DHANI|VEER|SHREE|MAAN)[.]/,'$1');
   const noteMatches=(note,row)=>(note.sourceCountry||(!S.data?.scopeTargets?S.data?.rawCountry:rawTarget(note)))===rawTarget(row)&&platformKey(note.platform)===platformKey(row.platform);
@@ -829,7 +677,7 @@
   root.withdrawReasonQueryKey=event=>{if(!queryEnter(event))return;event.preventDefault();return root.withdrawReasonSearch()};
   root.withdrawLoad=load;root.autoWithdrawLoad=load;
   root.withdrawHistorical=value=>{if(!['current','historical'].includes(value)||value==='historical'&&!baseScopeCatalog().some(historicalRow))return;S.historical=value==='historical';S.platforms=[];S.rowCountry='';S.search='';S.error='';invalidate();render()};
-  function selectionChanged(reuseTeam=false){S.historical=false;L.multi=L.multi||{};L.multi.platform=[];L.platform='all';L.multi.source=[];L.source='all';L.multi.provider=[];L.provider='';L.dirty=true;S.platforms=[];S.rowCountry='';S.search='';invalidate(reuseTeam);if(reuseTeam&&!projectLoadedTeam())loadedBase=null;render()}
+  function selectionChanged(teamChanged=false){S.historical=false;L.multi=L.multi||{};L.multi.platform=[];L.platform='all';L.multi.source=[];L.source='all';L.multi.provider=[];L.provider='';L.dirty=true;S.platforms=[];S.rowCountry='';S.search='';if(teamChanged){ctx.onDraft?.();clearResult();}else invalidate();render()}
   root.withdrawTeam=team=>{if(['__team_pending__','__team_conflict__','归属待核对'].includes(team))return;if(team!=='all'&&!catalog().some(p=>p.team===team))return;L.multi=L.multi||{};L.multi.team=team==='all'?[]:[team];L.team=team;const countries=[...new Set(catalog().filter(p=>team==='all'||p.team===team).map(p=>p.country).filter(countrySelectable))];if(!countrySelectable(L.country))L.countryTouched=true;L.country=countrySelectable(L.country)?(countries.includes(displayCountry())?displayCountry():countries[0]||''):'';selectionChanged(true)};
   root.withdrawCountry=c=>{if(!countrySelectable(c))return;const selected=identity({country:c}),legacy=isPanghuCountry(c)||['香港','红膏蟹'].includes(c);if(!catalog().some(p=>p.country===selected.country&&(!activeTeams().length||activeTeams().includes(p.team)||legacy)))return;L.country=selected.country;if(legacy){L.multi=L.multi||{};L.multi.team=[selected.team];L.team=selected.team}selectionChanged()};
   root.withdrawMetricTimeSet=(key,value)=>{if(!['from','to','successFrom','successTo','successBasis'].includes(key))return;metricWindows();if(key==='successBasis'){if(!['success','source_updated'].includes(value))return;}else{value=String(value);if(value.length===16)value+=':00';if(!validClock(value)&&!(['successFrom','successTo'].includes(key)&&value===''))return;}L[key]=value;invalidate();render();};
@@ -877,7 +725,7 @@
   root.withdrawNoteDate=date=>{if(!resultAllowed()||!S.note||S.noteSaving||!/^\d{4}-\d{2}-\d{2}$/.test(date)||date<resultDates().from||date>resultDates().to)return;if(S.noteDraft!==S.note.original){S.noteError='当前输入未保存，请先保存或取消后再更换日期。';render();return}setNote(S.note,date)};
   root.withdrawNoteSample=()=>{S.noteSample=true;render()};
   root.withdrawNoteClose=()=>{if(S.noteSaving)return;S.note=null;S.noteSample=false;S.noteError='';render()};
-  root.withdrawNoteSave=async()=>{if(!resultAllowed()||!S.note||S.noteSaving||!S.data?.canWriteNotes)return;loadedBase=null;const target=S.note;S.noteSaving=true;S.noteError='';render();try{const saved=await request({action:'withdrawNote',date:target.date,country:target.storageCountry||target.country,platform:target.storagePlatform,reason:S.noteDraft,expectedVersion:target.expectedVersion});if(!resultAllowed()||S.note!==target)return;loadedBase=null;S.data.notes=[...(S.data.notes||[]).filter(n=>!(n.date===saved.date&&n.country===saved.country&&n.platform===saved.platform)),{...saved,sourceCountry:target.country}];S.noteSaving=false;S.note=null;render()}catch(e){if(!resultAllowed()||S.note!==target)return;S.noteSaving=false;S.noteError=e.message||'备注保存失败，输入已保留';render()}};
+  root.withdrawNoteSave=async()=>{if(!resultAllowed()||!S.note||S.noteSaving||!S.data?.canWriteNotes)return;const target=S.note;S.noteSaving=true;S.noteError='';render();try{const saved=await request({action:'withdrawNote',date:target.date,country:target.storageCountry||target.country,platform:target.storagePlatform,reason:S.noteDraft,expectedVersion:target.expectedVersion});if(!resultAllowed()||S.note!==target)return;S.data.notes=[...(S.data.notes||[]).filter(n=>!(n.date===saved.date&&n.country===saved.country&&n.platform===saved.platform)),{...saved,sourceCountry:target.country}];S.noteSaving=false;S.note=null;render()}catch(e){if(!resultAllowed()||S.note!==target)return;S.noteSaving=false;S.noteError=e.message||'备注保存失败，输入已保留';render()}};
   const preferenceKeys=['view','metricView','platforms','rowCountry','account','sort','asc','daily','historical','page','size','open','search','reasonSize'];
   function preferences(value){
    const result={};
