@@ -42,10 +42,26 @@ const workorderResult={rows:[],byProvider:[],byDirection:{charge:{submittedCount
 function setupHandler(h,{pending,error=false}={}){h.setHandler(q=>q.action==='catalog'?{platforms:[P]}:q.action==='providerOptions'?{providers:['Synthetic provider']}:q.action==='rates'?{rows:[],total:0}:q.action==='workorders'?pending?pending.promise:error?Promise.reject(Error('工单超时')):workorderResult:manyProviderAggregate(q));}
 async function failedProvider(){const h=await ready({ancillaryHandler:true});setupHandler(h,{error:true});h.c.setPage('providers');await settle();await h.c.liveQuery();await settle();assert(h.L.results.length);assert.equal(h.L.workordersError,'工单超时');return h;}
 test('failed workorder retry requests only workorders and retains orders, comparison, filters and table controls',async()=>{const h=await failedProvider(),results=h.L.results,comparison=h.L.comparisonResults,scope=h.L.queryScope;h.L.localPage=3;h.L.localSize=50;h.L.providerExpanded={'synthetic':true};h.L.tablePages={providers:3};h.L.providerSort='successAmount';h.L.providerSortAsc=true;const multi=JSON.stringify(h.L.multi);const pending=deferred();setupHandler(h,{pending});const start=h.calls.length,serial=h.L.serial;assert.match(h.html(),/liveProviderWorkordersRetry/);assert.match(h.html(),/只重试工单/);const retry=h.c.liveProviderWorkordersRetry();await h.c.liveProviderWorkordersRetry();assert.equal(h.L.workordersLoading,true);assert.equal(h.L.results,results);assert.equal(h.L.comparisonResults,comparison);assert.deepEqual(h.calls.slice(start).map(q=>q.action),['workorders']);pending.resolve(workorderResult);await retry;assert.equal(h.L.serial,serial);assert.equal(h.L.queryScope,scope);assert.equal(h.L.results,results);assert.equal(h.L.comparisonResults,comparison);assert.equal(h.L.localPage,3);assert.equal(h.L.localSize,50);assert.equal(h.L.tablePages.providers,3);assert.equal(h.L.providerSort,'successAmount');assert.equal(h.L.providerSortAsc,true);assert.equal(JSON.stringify(h.L.multi),multi);assert.equal(h.L.providerExpanded.synthetic,true);assert.equal(h.L.workordersError,'');assert.deepEqual(h.calls.slice(start).map(q=>q.action),['workorders']);});
-test('same-scope provider tab round trip restores results/filter/pagination/scroll without rereading orders or workorders',async()=>{const h=await failedProvider();setupHandler(h);await h.c.liveProviderWorkordersRetry();h.L.localPage=2;h.L.localSize=20;h.L.tablePages={providers:2};h.L.providerExpanded={'kept':true};h.c.scrollX=14;h.c.scrollY=650;const results=h.L.results,workorders=h.L.workorders,filters=JSON.stringify(h.L.multi);h.c.setPage('orders');await settle();const n=h.calls.length;h.c.setPage('providers');await settle();assert.equal(h.calls.length,n);assert.equal(h.L.results,results);assert.equal(h.L.workorders,workorders);assert.equal(JSON.stringify(h.L.multi),filters);assert.equal(h.L.localPage,2);assert.equal(h.L.tablePages.providers,2);assert.equal(h.L.providerExpanded.kept,true);assert.equal(h.c.scrollX,14);assert.equal(h.c.scrollY,650);});
+test('returning to a queried provider tab rereads both periods and workorders while keeping filters and scroll',async()=>{
+ const h=await failedProvider();setupHandler(h);await h.c.liveProviderWorkordersRetry();
+ h.L.localPage=2;h.L.localSize=50;h.L.tablePages={providers:2};h.L.providerExpanded={kept:true};h.c.scrollX=14;h.c.scrollY=650;
+ const orders=h.L.results,filters=JSON.stringify(h.L.multi);
+ h.c.setPage('orders');await settle();const before=h.calls.length;h.c.setPage('providers');await settle();
+ const reads=h.calls.slice(before);assert.equal(reads.filter(q=>q.action==='aggregate').length,2);assert.equal(reads.filter(q=>q.action==='workorders').length,1);
+ assert.notEqual(h.L.results,orders);assert.equal(h.L.workorders.byDirection.charge.submittedCount,12);assert.equal(JSON.stringify(h.L.multi),filters);
+ assert.equal(h.L.localSize,50);assert.equal(h.L.localPage,1);assert.equal(h.L.tablePages.providers,undefined);assert.equal(h.L.providerExpanded.kept,undefined);
+ assert.equal(h.c.scrollX,14);assert.equal(h.c.scrollY,650);
+});
 test('retry preserves nested table scroll at each repaint and never restores scroll to another destination',async()=>{const h=await failedProvider();const pane={id:'provider-scroll',tagName:'DIV',className:'df-provider-table-scroll',scrollLeft:360,scrollTop:42};h.nodes.get('page').querySelectorAll=()=>[pane];h.c.scrollX=0;h.c.scrollY=530;const pending=deferred();setupHandler(h,{pending});const retry=h.c.liveProviderWorkordersRetry();pane.scrollLeft=0;pane.scrollTop=0;h.c.scrollY=0;pending.resolve(workorderResult);await retry;assert.equal(pane.scrollLeft,360);assert.equal(pane.scrollTop,42);assert.equal(h.c.scrollY,530);
  const late=deferred();h.L.workordersError='再试';setupHandler(h,{pending:late});const old=h.c.liveProviderWorkordersRetry();h.c.setPage('orders');h.c.scrollY=19;const before=h.scrolled.length;late.resolve(workorderResult);await old;assert.equal(h.c.state.page,'orders');assert.equal(h.c.scrollY,19);assert.equal(h.scrolled.length,before);});
-test('switching away from an inflight attachment preserves successful orders and resumes only attachment on return',async()=>{const h=await failedProvider(),rows=h.L.results;const pending=deferred();setupHandler(h,{pending});const old=h.c.liveProviderWorkordersRetry();h.c.setPage('orders');h.c.setPage('providers');await settle();assert.equal(h.L.results,rows);assert.match(h.L.workordersError,/已暂停/);assert.equal(h.L.workordersLoading,false);const n=h.calls.length;setupHandler(h);await h.c.liveProviderWorkordersRetry();assert.deepEqual(h.calls.slice(n).map(q=>q.action),['workorders']);pending.resolve({...workorderResult,total:999999});await old;assert.equal(h.L.workorders.total,0);assert.equal(h.L.results,rows);});
+test('returning during an old attachment retry reads both periods and ignores its late reply',async()=>{
+ const h=await failedProvider(),rows=h.L.results,pending=deferred();setupHandler(h,{pending});
+ const old=h.c.liveProviderWorkordersRetry();h.c.setPage('orders');const before=h.calls.length;
+ setupHandler(h);h.c.setPage('providers');await settle();
+ const reads=h.calls.slice(before);assert.equal(reads.filter(q=>q.action==='aggregate').length,2);assert.equal(reads.filter(q=>q.action==='workorders').length,1);
+ assert.notEqual(h.L.results,rows);assert.equal(h.L.workordersError,'');assert.equal(h.L.workordersLoading,false);const current=h.L.workorders;
+ pending.resolve({...workorderResult,total:999999});await old;assert.equal(h.L.workorders,current);assert.equal(current.total,0);
+});
 test('changed filters or scope and a still loading main query cannot invoke attachment retry',async()=>{const h=await failedProvider(),n=h.calls.length;h.L.dirty=true;await h.c.liveProviderWorkordersRetry();h.L.dirty=false;h.L.from='2026-09-01T00:00:00';await h.c.liveProviderWorkordersRetry();h.L.from='2026-09-22T00:00:00';h.L.loading=true;await h.c.liveProviderWorkordersRetry();assert.equal(h.calls.length,n);});
 
 for(const previousPage of ['collection','latency','provider_daily'])test('opening providers from '+previousPage+' waits for manual query before loading workorders',async()=>{
@@ -55,16 +71,15 @@ for(const previousPage of ['collection','latency','provider_daily'])test('openin
  if(previousPage==='latency'){assert.equal(h.L.comparisonStatus,'idle');assert.equal(h.L.comparisonResults.length,0);}
  h.c.setPage('providers');await settle();assert.equal(h.calls.length,before,'navigation waits');await h.c.liveQuery(false);await settle();
  const requests=h.calls.slice(before),aggregates=requests.filter(q=>q.action==='aggregate');
- if(previousPage==='latency'){
-  assert.deepEqual(aggregates,[{action:'aggregate',view:'providers',platformId:P.id,startAt:'2026-09-20T18:30:00.000Z',endAt:'2026-09-21T18:30:00.000Z',direction:'charge',status:'all',currency:'INR',offset:0,limit:20}],'providers needs only its previously unused comparison, never a second current read');
- }else assert.equal(aggregates.length,0,'navigation must retain completed current and comparison queries');
+ assert.equal(aggregates.length,2);assert(aggregates.every(q=>q.platformId===P.id&&q.direction==='charge'));
+ assert.deepEqual(aggregates.map(q=>q.startAt),[orders[0].startAt,'2026-09-20T18:30:00.000Z']);
  assert.equal(requests.filter(q=>q.action==='workorders').length,1,'the workorder attachment has never been queried for this scope');
- assert.equal(h.L.results.length,1);const current=h.L.results[0];assert.equal(current._aggregateCacheHit,true);assert.equal(current.platform.id,orders[0].platform.id);assert.equal(current.startAt,orders[0].startAt);assert.equal(current.endAt,orders[0].endAt);assert.equal(current.total,orders[0].total);assert.equal(JSON.stringify(current.summary),JSON.stringify(orders[0].summary));assert.equal(JSON.stringify(current.groups),JSON.stringify(orders[0].groups));assert.equal(JSON.stringify(orders[0]),originalOrderData,'the cached source result is not mutated');
+ assert.equal(h.L.results.length,1);const current=h.L.results[0];assert.notEqual(current,orders[0]);assert(!current._aggregateCacheHit);assert.equal(current.platform.id,orders[0].platform.id);assert.equal(current.startAt,orders[0].startAt);assert.equal(current.endAt,orders[0].endAt);assert.equal(current.total,orders[0].total);assert.equal(JSON.stringify(current.summary),JSON.stringify(orders[0].summary));assert.equal(JSON.stringify(current.groups),JSON.stringify(orders[0].groups));assert.equal(JSON.stringify(orders[0]),originalOrderData,'the cached source result is not mutated');
  assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.comparisonResults.length,1);assert.equal(h.L.comparisonResults[0].startAt,'2026-09-20T18:30:00.000Z');assert.equal(h.L.comparisonResults[0].endAt,'2026-09-21T18:30:00.000Z');assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
  assert.equal(h.L.workordersLoading,false);assert.equal(h.L.workordersError,'');
 });
 
-test('restoring a provider tab with an uninitialized attachment waits for manual retry',async()=>{
+test('restoring a provider tab reads an uninitialized attachment after fresh main results',async()=>{
  const h=harness({page:'collection',ancillaryHandler:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='providerOptions'?{providers:['Synthetic provider']}:q.action==='rates'?{rows:[],total:0}:q.action==='workorders'?workorderResult:manyProviderAggregate(q)});await settle();setupHandler(h);h.c.setPage('providers');await settle();await h.c.liveQuery();await settle();
  assert.equal(h.L.results[0].groups.provider.length,130,'the second page must be valid before testing that restoration preserves it');
  // A saved tab may predate loading the ancillary workorder report. It must not
@@ -72,9 +87,8 @@ test('restoring a provider tab with an uninitialized attachment waits for manual
  Object.assign(h.L,{workorders:null,workordersScope:'',workordersError:'',workordersLoading:false});
  const orders=h.L.results;h.L.localPage=2;h.L.providerExpanded={kept:true};
  h.c.setPage('collection');await settle();const before=h.calls.length;
- h.c.setPage('providers');await settle();assert.equal(h.calls.length,before);await h.c.liveProviderWorkordersRetry();await settle();
- assert.deepEqual(h.calls.slice(before).map(q=>q.action),['workorders']);
- assert.equal(h.L.results,orders);assert.equal(h.L.localPage,2);assert.equal(h.L.providerExpanded.kept,true);
+ h.c.setPage('providers');await settle();const returned=h.calls.slice(before);assert.equal(returned.filter(q=>q.action==='aggregate').length,2);assert.equal(returned.filter(q=>q.action==='workorders').length,1);
+ assert.notEqual(h.L.results,orders);assert.equal(h.L.localPage,1);assert.equal(h.L.providerExpanded.kept,undefined);
  assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
 });
 
@@ -84,21 +98,20 @@ for(const staleKind of ['direction','date'])test('opening providers rejects a su
  h.L.workorders={rows:[],byProvider:[{provider:'Synthetic provider',direction:staleDirection,submittedCount:999999}],byDirection:{[staleDirection]:{submittedCount:999999}},total:1};
  h.L.workordersScope=JSON.stringify([h.L.country,staleFrom,h.L.to,staleDirection,[P.id],[]]);
  const orders=h.L.results,before=h.calls.length;h.c.setPage('providers');await settle();assert.equal(h.calls.length,before);assert.equal(h.L.workorders,null);await h.c.liveQuery(false);await settle();
- const requests=h.calls.slice(before);assert.equal(requests.filter(q=>q.action==='aggregate').length,0);
+ const requests=h.calls.slice(before);assert.equal(requests.filter(q=>q.action==='aggregate').length,2);
  assert.equal(requests.filter(q=>q.action==='workorders').length,1);
  assert.equal(requests.find(q=>q.action==='workorders').direction,'charge');
  assert.equal(h.L.results[0].total,orders[0].total);assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
  assert(!h.html().includes('999,999'));
 });
 
-test('restoring a provider tab invalidates stale workorders and waits for manual retry',async()=>{
+test('restoring a provider tab replaces stale workorders with a new scoped attachment',async()=>{
  const h=harness({page:'collection',ancillaryHandler:true});await settle();setupHandler(h);h.c.setPage('providers');await settle();await h.c.liveQuery();await settle();
  h.L.workordersScope=JSON.stringify([h.L.country,'2026-09-01T00:00:00',h.L.to,'withdraw',[P.id],[]]);
  h.L.workorders={...workorderResult,byDirection:{withdraw:{submittedCount:999999}}};
  const orders=h.L.results;h.c.setPage('collection');await settle();const before=h.calls.length;
- h.c.setPage('providers');await settle();assert.equal(h.calls.length,before);await h.c.liveProviderWorkordersRetry();await settle();
- assert.deepEqual(h.calls.slice(before).map(q=>q.action),['workorders']);
- assert.equal(h.L.results,orders);assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
+ h.c.setPage('providers');await settle();const returned=h.calls.slice(before);assert.equal(returned.filter(q=>q.action==='aggregate').length,2);assert.equal(returned.filter(q=>q.action==='workorders').length,1);
+ assert.notEqual(h.L.results,orders);assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);assert(!h.html().includes('999,999'));
 });
 
 async function partiallyFailedProvider(){

@@ -19,5 +19,19 @@ test('unknown list response contracts do not become provisional current statisti
 test('mismatched summary metadata retains legal list current-only and exposes the retry state',async()=>{const h=setup(),run=h.module.load(true);await settle();const snapshot=h.module.state().currentOnly.current;h.wait.resolve(response(h.calls[1],d=>d.endDate='2026-10-18'));await run;assert.equal(h.module.state().analysis,null);assert.equal(h.module.state().currentOnly.current,snapshot);assert.match(h.html(),/统计响应范围不一致/);});
 test('a newer committed query cannot be replaced by an older summary response',async()=>{const h=setup(),old=h.module.load(true);await settle();const next=deferred();h.root.workorderOperationsSet('from','2026-10-18');h.root.workorderOperationsSet('to','2026-10-18');h.respond(q=>q.operation==='summary'?next.promise:response(q,d=>d.current.ticketCount=30));const fresh=h.module.load(true);await settle();h.wait.resolve(response(h.calls[1]));await old;assert.equal(h.module.state().analysis,null);assert.equal(h.module.state().currentOnly.current.ticketCount,30);assert.match(h.html(),/2026-10-18 至 2026-10-18/);next.resolve(response(h.calls[3],d=>d.current.ticketCount=30));await fresh;assert.equal(h.module.state().currentOnly,null);assert.equal(h.module.state().analysis.current.ticketCount,30);});
 
-test('draft changes while the list itself is pending cannot admit an older current-only snapshot',async()=>{const h=setup(),list=deferred();h.respond(q=>q.operation==='summary'?h.wait.promise:list.promise);const run=h.module.load(true);await settle();h.root.workorderOperationsSet('provider','Synthetic changed while waiting');list.resolve(response(h.calls[0]));await settle();assert.equal(h.module.state().currentOnly,null);assert.doesNotMatch(h.html(),/data-workorder-current-only/);h.wait.reject(Error('timeout'));await run;});
+test('draft changes while the list itself is pending cannot admit an older current-only snapshot',async()=>{const h=setup(),list=deferred();h.respond(q=>q.operation==='summary'?h.wait.promise:list.promise);const run=h.module.load(true);await settle();h.root.workorderOperationsSet('provider','Synthetic changed while waiting');list.resolve(response(h.calls[0]));await settle();assert.equal(h.module.state().currentOnly,null);assert.doesNotMatch(h.html(),/data-workorder-current-only/);await run;assert.equal(h.calls.filter(q=>q.operation==='summary').length,0);});
 test('input-only missing date clears the result region without replacing the focused filter form',async()=>{const h=setup(),run=h.module.load(true);await settle();const result={innerHTML:'data-workorder-current-only'},button={disabled:true};h.root.document={querySelector:selector=>selector==='.wo-operations-results'?result:button};h.root.workorderOperationsSet('from','',false);assert.equal(h.module.state().currentOnly,null);assert.doesNotMatch(result.innerHTML,/data-workorder-current-only/);assert.equal(button.disabled,false);h.wait.resolve(response(h.calls[1]));await run;assert.equal(h.module.state().analysis,null);});
+
+test('identical pending list queries share a read and a switched actor cannot receive its rows',async()=>{
+ const h=setup(),pending=deferred();
+ h.respond(()=>pending.promise);
+ const first=h.module.load(true),duplicate=h.module.load(true);
+ await settle();
+ assert.equal(h.calls.length,1);
+ h.root.hensemDataScope={mode:'all',identity:'another-actor'};
+ pending.resolve(response(h.calls[0]));
+ await Promise.all([first,duplicate]);
+ assert.equal(h.module.state().result,null);
+ assert.equal(h.module.state().analysis,null);
+ assert.equal(h.calls.length,1);
+});

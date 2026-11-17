@@ -26,7 +26,7 @@
   function prefixStatus(values){const prefixes=values.filter(prefixResult);if(!prefixes.length)return '';const labels=prefixes.map(result=>{const cutoff=result.pandaCoverage.dataCutoff;let clock=cutoff;try{clock=new Intl.DateTimeFormat('sv-SE',{timeZone:result.platform.timezone,dateStyle:'short',timeStyle:'medium',hourCycle:'h23'}).format(Date.parse(cutoff));}catch{}return (result.platform.name||'熊猫')+' '+clock;});return '<small class="matrix-custom-status" data-panda-prefix-custom>已核验至 '+E(labels.join('；'))+'（不含）；超出范围显示 —。</small>';}
   const blank=()=>({min:'',max:'',hourMin:'0',hourMax:'24',hourApplied:null,editing:null,applied:null,results:new Map(),targets:[],failures:[],loading:false,error:'',scope:''});let S=blank();
   const signature=()=>JSON.stringify([L.serial,L.queryScope,L.queryNow,L.country,L.currency,L.from,L.to,L.direction,L.status,(L.queryPlatforms||[]).map(p=>[p.id,p.currency])]);
-  function sync(){const key=signature();if(S.scope!==key){generation++;S={...blank(),min:S.min,max:S.max,scope:key}}return key}
+  function sync(){const key=signature();if(S.scope!==key){generation++;S={...blank(),min:S.min,max:S.max,hourMin:S.hourMin,hourMax:S.hourMax,scope:key}}return key}
   function cancel(){generation++;if(S.loading){S.loading=false;S.error='区间读取已暂停，请重新查询区间。'}}
   function capture(){sync();cancel();return {...S,editing:null,results:new Map(S.results),targets:S.targets.slice(),failures:S.failures.slice()}}
   function restore(saved){generation++;S=saved?{...saved,loading:false,scope:signature(),results:new Map(saved.results),targets:saved.targets.slice(),failures:saved.failures.slice()}:{...blank(),scope:signature()}}
@@ -111,7 +111,7 @@
    const cells=Array.from({length:24},(_,hour)=>{const {data:r,complete}=metric(direction,hour);return '<div class="matrix-cell"><b>'+C(r.all_count)+'笔</b><span>'+N(r.all_amount).replace(/\.00$/,'')+'</span><span>'+(observedRate(r.success_count,r.all_count,complete))+'</span></div>'});
    const {data:r,complete}=metric(direction);return [first,...cells,'<div class="matrix-row-total">'+[['全部笔数',C(r.all_count)+' 笔'],['全部金额',N(r.all_amount)],['成功笔数',C(r.success_count)+' 笔'],['成功金额',N(r.success_amount)],['成功率',observedRate(r.success_count,r.all_count,complete)]].map(([label,value])=>'<span><small>'+label+'</small><b>'+value+'</b></span>').join('')+'</div>'];
   }
-  return {controls,row,dialog,pageControls,summary,footerDetail,customResults,detailRows,cancel,capture,restore};
+  return {controls,row,dialog,pageControls,summary,footerDetail,customResults,detailRows,cancel,capture,restore,captureControls:()=>({min:S.min,max:S.max,hourMin:S.hourMin,hourMax:S.hourMax}),restoreControls:value=>{restore(null);if(value)for(const key of ['min','max','hourMin','hourMax'])if(typeof value[key]==='string')S[key]=value[key];}};
  }
  root.HensemMatrixCustomRange={create};
 })(typeof window==='object'?window:globalThis);

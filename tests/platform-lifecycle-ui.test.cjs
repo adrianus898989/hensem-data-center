@@ -48,8 +48,8 @@ for(const code of ['ADMIN_LIVE_CANCELLED','ADMIN_LIVE_PERMISSION_DENIED'])test('
  assert.equal(h.L.results.length,code==='ADMIN_LIVE_CANCELLED'?1:0);const before=paymentRequests(h).length;await h.c.liveRetryFailed(true);await settle();assert.equal(paymentRequests(h).length,before);
  if(code==='ADMIN_LIVE_PERMISSION_DENIED')assert.match(h.L.error,/权限/);else assert(paymentRequests(h).every(q=>q.platformId===A.id));
 });
-test('completed mixed-active view is retained and an old page response cannot overwrite a new date selection',async()=>{
- const h=await setup();await h.c.liveQuery();await settle();assert(h.L.retainedContent,'one operating result satisfies the retained-view denominator');
+test('completed mixed-active view contains only available results and an old page response cannot overwrite a new date selection',async()=>{
+ const h=await setup();await h.c.liveQuery();await settle();assert.equal(h.L.results.length,1,'only the operating platform contributed a result');
  const held=deferred();let oldRequest;h.setHandler(q=>{if(q.action==='aggregatePrepared'){if(!oldRequest){oldRequest=q;return held.promise;}return response(q,[M,A]);}return q.action==='rates'?{rows:[],total:0}:{};});
  dates(h,'2026-10-03');const old=h.c.liveQuery(true);await settle();assert(oldRequest);h.c.setPage('time');dates(h,'2026-10-06');await h.c.liveQuery();await settle();
  const serial=h.L.serial,snapshot=JSON.stringify(h.L.results);held.resolve(response(oldRequest,[M,A]));await old;await settle();

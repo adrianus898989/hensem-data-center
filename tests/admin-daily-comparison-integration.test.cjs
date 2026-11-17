@@ -60,10 +60,10 @@ test('filter changes cancel the module and prevent exporting stale comparison da
  await h.c.liveQuery();h.c.liveExport();assert.equal(h.blobs.length,1);assert.equal(h.probe.calls.exports,1);assert.match(await h.blobs[0].text(),/"'=unsafe"/,'CSV formulas remain escaped');
 });
 
-test('completed and paused daily tabs restore locally without restarting queries',async()=>{
+test('completed and paused daily tabs reread their selected scope on entry',async()=>{
  const h=await setup();await h.c.liveQuery();setDay(h,'2026-09-19');await h.c.liveQuery();const ready=h.probe.current;
- h.c.setPage('overview');const reads=h.calls.length;h.c.setPage('daily_comparison');await settle();assert.equal(h.L.from,'2026-09-19T00:00:00');assert.deepEqual(h.probe.current,ready);assert.equal(h.calls.length,reads);assert.equal(h.probe.calls.load,2);assert.match(h.html(),/QUERIED_DAILY_DATA/);
- h.probe.current={status:'loading',marker:'PARTIAL_DAILY_DATA'};h.c.setPage('overview');h.c.setPage('daily_comparison');await settle();assert.equal(h.probe.current.status,'paused');assert.equal(h.probe.calls.load,2);h.c.liveExport();assert.equal(h.blobs.length,0);
+ h.c.setPage('overview');const reads=h.calls.length;h.c.setPage('daily_comparison');await settle();assert.equal(h.L.from,'2026-09-19T00:00:00');assert.deepEqual(h.probe.current,ready);assert.equal(h.calls.length,reads);assert.equal(h.probe.calls.load,3);assert.match(h.html(),/QUERIED_DAILY_DATA/);
+ h.probe.current={status:'loading',marker:'PARTIAL_DAILY_DATA'};h.c.setPage('overview');h.c.setPage('daily_comparison');await settle();assert.equal(h.probe.current.status,'ready');assert.equal(h.probe.calls.load,4);assert.doesNotMatch(h.html(),/PARTIAL_DAILY_DATA/);
 });
 
 test('closing and reopening daily comparison discards saved results and restores default single day',async()=>{
@@ -85,13 +85,13 @@ test('real daily module reads bounded native provider days and renders without t
  const h=realHarness(q=>nativeResponse(q));await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);await h.c.liveQuery();await settle();
  const queries=h.calls.filter(q=>q.action==='aggregatePrepared').flatMap(q=>q.requests);assert.equal(queries.length,2,'main and comparison only; trend is lazy');assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);assert(queries.every(q=>q.view==='providers'&&q.direction==='all'&&q.platformId===P.id));assert(queries.every(q=>Date.parse(q.endAt)-Date.parse(q.startAt)===86400000));assert.equal(queries[0].startAt,'2026-09-21T18:30:00.000Z');
  assert.match(h.html(),/平台每日明细/);assert.match(h.html(),/Synthetic platform/);assert.match(h.html(),/50\.00%/);assert.doesNotMatch(h.html(),/每日对比暂不可用/);
- const readCount=h.calls.length;h.c.setPage('overview');h.c.setPage('daily_comparison');await settle();assert.equal(h.calls.length,readCount);assert.match(h.html(),/平台每日明细/);
+ const readCount=h.calls.length;h.c.setPage('overview');h.c.setPage('daily_comparison');await settle();assert(h.calls.length>readCount);assert.match(h.html(),/平台每日明细/);
 });
 
 test('real module navigation cancellation blocks queued days and old response repaint',async()=>{
  const pending=deferred(),h=realHarness(q=>pending.promise.then(()=>nativeResponse(q)));await settle();const query=h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregatePrepared').flatMap(q=>q.requests).length,2,'only main and comparison begin');
  h.c.setPage('overview');const html=h.html();pending.resolve();await query;await settle();assert.equal(h.html(),html);assert.equal(h.calls.filter(q=>q.action==='aggregatePrepared').flatMap(q=>q.requests).length,2,'cancelled queue never dispatches trend dates');
- h.c.setPage('daily_comparison');await settle();assert.match(h.html(),/查询已暂停/);assert.equal(h.calls.filter(q=>q.action==='aggregatePrepared').flatMap(q=>q.requests).length,2);h.c.liveExport();assert.equal(h.blobs.length,0);
+ h.c.setPage('daily_comparison');await settle();assert.match(h.html(),/平台每日明细/);assert.equal(h.calls.filter(q=>q.action==='aggregatePrepared').flatMap(q=>q.requests).length,4);h.c.liveExport();assert.equal(h.blobs.length,1);
 });
 
 test('real comparison export uses the active query and is blocked after date changes',async()=>{

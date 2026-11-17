@@ -46,8 +46,8 @@ test('production host reads main results first and fetches an unseen exact provi
  h.c.liveProvider('');await h.c.liveQuery();assert.equal(count(),12);assert.equal(h.L.results.length,18);assert.equal(h.L.comparisonResults.length,18);
  h.c.liveProvider('TukPay');await h.c.liveQuery();assert.equal(count(),24);assert.equal(h.L.results.length,18);assert.equal(h.L.comparisonResults.length,18);
  assert(h.L.results.every(r=>r.summary[0].all_amount==='0.000000000000000000019'&&r.summary[0].success_amount===null));
- h.c.liveProvider('');await h.c.liveQuery();assert.equal(count(),24);
- h.c.liveProvider('TukPay');await h.c.liveQuery();assert.equal(count(),24);
+ h.c.liveProvider('');await h.c.liveQuery();assert.equal(count(),36);
+ h.c.liveProvider('TukPay');await h.c.liveQuery();assert.equal(count(),48);
  assert(h.L.results.every(r=>r._preparedPublication.sourceComplete===false));
  assert.equal(h.calls.filter(p=>p.action==='aggregate').length,0);
 });

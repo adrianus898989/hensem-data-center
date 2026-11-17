@@ -11,14 +11,14 @@ async function ready(page='overview'){
  h.setHandler(q=>q.action==='aggregatePrepared'?response(q):q.action==='rates'?{rows:[],total:0}:q.action==='providerOptions'?{providers:[]}:{});return h;
 }
 
-for(const page of ['overview','success_analysis','providers','provider_payout','merchants','collection','payout','time','amount','matrix','provider_daily','latency','risk','teamops','teamcountries','teamplatforms'])test(page+': repeating an exact query reuses a validated publication and explicit refresh reads again',async()=>{
+for(const page of ['overview','success_analysis','providers','provider_payout','merchants','collection','payout','time','amount','matrix','provider_daily','latency','risk','teamops','teamcountries','teamplatforms'])test(page+': repeating an exact query rereads the current publication and explicit refresh reads again',async()=>{
  const h=await ready(page);await h.c.liveQuery();await settle();const reads=h.calls.filter(q=>q.action==='aggregatePrepared').length;assert(reads>0);const publication=JSON.stringify(h.L.results[0]._preparedPublication);
- await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregatePrepared').length,reads);assert.equal(JSON.stringify(h.L.results[0]._preparedPublication),publication);assert.equal(h.L.results.length,1);
+ await h.c.liveQuery();await settle();assert(h.calls.filter(q=>q.action==='aggregatePrepared').length>reads);assert(!h.calls.filter(q=>q.action==='aggregatePrepared').some(q=>q.forceRefresh));assert.equal(JSON.stringify(h.L.results[0]._preparedPublication),publication);assert.equal(h.L.results.length,1);
  await h.c.liveRefresh();await settle();assert(h.calls.filter(q=>q.action==='aggregatePrepared').length>reads);assert(h.calls.some(q=>q.action==='aggregatePrepared'&&q.forceRefresh));
 });
-test('query cancellation preserves complete exact results but changed clocks cannot reuse them',async()=>{
+test('querying after a filter edit rereads both restored and changed clocks',async()=>{
  const h=await ready('time');await h.c.liveQuery();await settle();const n=h.calls.filter(q=>q.action==='aggregatePrepared').length;
- h.c.liveMetricTimeSet('to','2026-09-22T04:00:00');h.c.liveMetricTimeSet('to','2026-09-22T05:59:59');await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregatePrepared').length,n);
+ h.c.liveMetricTimeSet('to','2026-09-22T04:00:00');h.c.liveMetricTimeSet('to','2026-09-22T05:59:59');await h.c.liveQuery();await settle();assert(h.calls.filter(q=>q.action==='aggregatePrepared').length>n);
  h.c.liveMetricTimeSet('successFrom','2026-09-19T06:00:00');await h.c.liveQuery();await settle();assert(h.calls.filter(q=>q.action==='aggregatePrepared').length>n);assert(h.calls.filter(q=>q.action==='aggregatePrepared').slice(n).some(q=>q.requests.some(x=>x.successStartAt==='2026-09-19T00:30:00.000Z')));
 });
 test('denied prepared reads invalidate earlier completed exact results',async()=>{
@@ -35,9 +35,9 @@ test('provider/time/latency reads discard unused amount bands, while amount/matr
  const profiles={charge:{edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]},withdraw:{edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]}};
  for(const page of ['providers','provider_payout','overview','time','latency','amount','matrix']){const h=await ready(page);h.L.amountBandProfiles=profiles;await h.c.liveQuery();await settle();const requests=h.calls.filter(q=>q.action==='aggregatePrepared').flatMap(q=>q.requests);assert(requests.length>0);for(const q of requests){if(q.view==='providers'||['time','latency'].includes(page))assert.equal(Object.hasOwn(q,'amountBands'),false,'unused ranges must not fragment this prepared query');else assert.deepEqual(JSON.parse(JSON.stringify(q.amountBands)),{charge:profiles.charge.edges,withdraw:profiles.withdraw.edges});}}
 });
-test('authorized shared pages reuse the exact completed publication while preserving page-owned reads',async()=>{
+test('authorized shared pages independently reread the same formal publication',async()=>{
  const h=await ready('teamops'),filters=Object.fromEntries(['from','to','successFrom','successTo','successBasis','direction','status'].map(key=>[key,h.L[key]]));
  await h.c.liveQuery();await settle();const reads=h.calls.filter(q=>q.action==='aggregatePrepared').length,receipt=JSON.stringify(h.L.results[0]._preparedPublication);
- h.c.setPage('teamcountries');Object.assign(h.L,filters);await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregatePrepared').length,reads);assert.equal(JSON.stringify(h.L.results[0]._preparedPublication),receipt);
+ h.c.setPage('teamcountries');Object.assign(h.L,filters);await h.c.liveQuery();await settle();assert(h.calls.filter(q=>q.action==='aggregatePrepared').length>reads);assert(!h.calls.filter(q=>q.action==='aggregatePrepared').some(q=>q.forceRefresh));assert.equal(JSON.stringify(h.L.results[0]._preparedPublication),receipt);
  await h.c.liveRefresh();await settle();assert(h.calls.filter(q=>q.action==='aggregatePrepared').length>reads);
 });

@@ -157,6 +157,41 @@ function rowsFromValues(values: unknown[][], sourceSheet: string, collectedAt: s
   return rows;
 }
 
+async function readResultRows(settings: Settings, runtime: Runtime, headers: Record<string,string>, collectedAt: string) {
+  // The current workbook has A/B as its two row identities. Read those to the
+  // original limit alongside the compact matrix so new or separated rows are visible.
+  // Only the final, single Google response is used to build or archive a mirror.
+  for (const end of [16_384, MAX_ROWS + 1]) {
+    const checkExtent = end <= MAX_ROWS;
+    const params = new URLSearchParams({ valueRenderOption: "FORMATTED_VALUE", majorDimension: "ROWS", prettyPrint: "false" });
+    for (const range of [`${checkExtent ? "C" : "A"}1:N${end}`, `AB1:AB${end}`, `AS1:AS${end}`]) params.append("ranges", SHEET_TAB + "!" + range);
+    if (checkExtent) params.append("ranges", `${SHEET_TAB}!A1:B${MAX_ROWS + 1}`);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(settings.sourceId)}/values:batchGet?${params}`;
+    const batch = await requestJson(runtime, url, { method: "GET", headers }, MAX_RESPONSE_BYTES);
+    if (!Array.isArray(batch?.valueRanges) || batch.valueRanges.length !== (checkExtent ? 4 : 3) ||
+        batch.valueRanges.some((range: any) => !range || (range.values != null && !Array.isArray(range.values)))) throw new SyncError("source_columns_incomplete", 502);
+    let values = batch.valueRanges[0]?.values;
+    if (!Array.isArray(values) || values.length > MAX_ROWS) throw new SyncError("source_row_limit_reached", 413);
+    if (checkExtent) {
+      const ids = batch.valueRanges[3]?.values;
+      if (!Array.isArray(ids) || !Array.isArray(ids[0]) || !Array.isArray(values[0])) throw new SyncError("source_columns_incomplete", 502);
+      const currentLayout = ["盘口", "订单号"].every((header, i) => String(ids[0][i] ?? "").trim() === header);
+      if (!currentLayout || ids.length > end) continue;
+      // Google omits trailing empty rows/cells separately for each range. Preserve
+      // physical row positions and pad the two identity columns before adding C:N.
+      const body = values;
+      values = Array.from({ length: Math.max(ids.length, body.length) }, (_, i) => [
+        ids[i]?.[0] ?? "", ids[i]?.[1] ?? "", ...(body[i] || []),
+      ]);
+    }
+    const derived = values.map((_: unknown, index: number) => [batch.valueRanges[1]?.values?.[index]?.[0], batch.valueRanges[2]?.values?.[index]?.[0]]);
+    const rows = rowsFromValues(values, settings.sourceId, collectedAt, derived);
+    if (!rows.length) throw new SyncError("source_rows_empty", 502);
+    return { table: "admin_deposit_issue_rows", rows, source: settings.sourceId, tabs: [SHEET_TAB] };
+  }
+  throw new SyncError("source_columns_incomplete", 502);
+}
+
 // Platform tabs have some historical header spelling differences. Resolve only
 // known columns. UPI and KYC-UPI are explicitly authorized; member identifiers,
 // phone numbers and bank-account columns remain excluded.
@@ -305,20 +340,7 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
         }
       }
       const [resultMirror, entryMirror] = await Promise.all([
-        mirror("result", async () => {
-          // Keep the result columns in one bounded snapshot. AV:BC (including
-          // member IDs) remains outside the authorized projection.
-          const ranges = [`${SHEET_TAB}!A1:N${MAX_ROWS + 1}`, `${SHEET_TAB}!AB1:AB${MAX_ROWS + 1}`, `${SHEET_TAB}!AS1:AS${MAX_ROWS + 1}`];
-          const params = new URLSearchParams({ valueRenderOption: "FORMATTED_VALUE", majorDimension: "ROWS" });
-          for (const range of ranges) params.append("ranges", range);
-          const sourceUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(settings.sourceId)}/values:batchGet?${params}`;
-          const batch = await requestJson(runtime, sourceUrl, { method: "GET", headers: googleHeaders }, MAX_RESPONSE_BYTES);
-          if (!Array.isArray(batch?.valueRanges) || batch.valueRanges.length !== 3) throw new SyncError("source_columns_incomplete", 502);
-          const source = batch.valueRanges[0];
-          if (!Array.isArray(source?.values) || source.values.length > MAX_ROWS) throw new SyncError("source_row_limit_reached", 413);
-          const derived = source.values.map((_: unknown, index: number) => [batch.valueRanges[1]?.values?.[index]?.[0], batch.valueRanges[2]?.values?.[index]?.[0]]);
-          return { table: "admin_deposit_issue_rows", rows: rowsFromValues(source.values, settings.sourceId, collectedAt, derived), source: settings.sourceId, tabs: [SHEET_TAB] };
-        }, "result_read"),
+        mirror("result", () => readResultRows(settings, runtime, googleHeaders, collectedAt), "result_read"),
         mirror("entries", async onStage => {
           const entries = await readEntrySheets(settings, runtime, googleHeaders, collectedAt, onStage);
           return { table: "admin_deposit_followup_rows", rows: entries.rows, source: settings.entrySourceId, tabs: entries.tabs };

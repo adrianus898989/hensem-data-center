@@ -53,8 +53,8 @@ test('all-pending analysis does not display zero totals or an empty completed ta
  assert.match(h.html(),/已读 0 \/ 2/);assert.doesNotMatch(h.html(),/kpi-value|<table|当前筛选范围没有已入库记录/);
  h.listeners.get('pagehide')();await run;
 });
-test('new prepared facts replace the retained prior query while a peer remains pending',async()=>{
- const h=await setup('time');h.setPrepared(request=>ready(request,99,99,'Old completed provider'));await h.c.liveQuery();await settle();assert(h.L.retainedContent);
+test('new prepared facts replace the prior query without showing old facts while a peer remains pending',async()=>{
+ const h=await setup('time');h.setPrepared(request=>ready(request,99,99,'Old completed provider'));await h.c.liveQuery();await settle();assert.equal(h.L.results.length,2);assert.equal(h.L.results[0].summary[0].all_count,99);
  h.c.liveMetricTimeSet('from','2026-10-16T00:00:00');h.c.liveMetricTimeSet('to','2026-10-16T23:59:59');
  h.setPrepared(request=>request.platformId===platforms[0].id?ready(request,7,7,'New provider'):queued(request));const run=h.c.liveQuery();await settle();
  assert.equal(h.L.results.length,1);assert.match(h.html(),/2026-10-16/);assert.match(h.html(),/700\.00/);assert.doesNotMatch(h.html(),/live-retained-result|9,900\.00/);

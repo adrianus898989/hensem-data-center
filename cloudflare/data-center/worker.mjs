@@ -17,6 +17,7 @@ const SECURITY_HEADERS = {
   'Strict-Transport-Security': 'max-age=31536000',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
+  'CDN-Cache-Control': 'no-store',
 };
 
 function withinSite(path) {
@@ -46,16 +47,12 @@ export async function servePublicStatic(request, fetchPublic = fetch) {
     return reply('Not found', 404);
   }
   const target = new URL(incoming.pathname, UPSTREAM);
-  const immutable = incoming.pathname.startsWith(`${BASE}/_next/static/`)
-    && /[-.][a-f0-9]{8,}\.(?:js|css|woff2?|png|svg)$/.test(incoming.pathname);
   let upstream;
   try {
     upstream = await fetchPublic(target.href, {
       method: request.method,
-      headers: { Accept: '*/*', 'Cache-Control': immutable ? 'max-age=31536000' : 'no-cache' },
+      headers: { Accept: '*/*', 'Cache-Control': 'no-store' },
       redirect: 'manual',
-      // Cache successful hash assets in the browser, not before inspecting the
-      // upstream response: a missing asset may return an HTML/error response.
       cache: 'no-store',
     });
   } catch {
@@ -73,9 +70,8 @@ export async function servePublicStatic(request, fetchPublic = fetch) {
     return reply(null, upstream.status, { Location: next.pathname });
   }
   // Do not relay cookies, reporting destinations or redirects from the upstream.
-  const isHtml = /(?:text\/html|application\/xhtml\+xml)/i.test(upstream.headers.get('Content-Type') || '');
   const headers = new Headers({
-    'Cache-Control': upstream.ok && immutable && !isHtml ? 'public, max-age=31536000, immutable' : 'no-store',
+    'Cache-Control': 'no-store',
     ...SECURITY_HEADERS,
   });
   for (const name of ['Content-Type', 'ETag', 'Last-Modified']) {
@@ -425,7 +421,7 @@ export async function serve(request, env = {}, fetchRemote = fetch) {
     : await servePublicStatic(request, fetchRemote);
   const headers = new Headers(response.headers);
   // Do not let a browser or intermediary reuse a protected response after its
-  // address is removed. Public upstream hash caching is separate from access.
+  // address is removed. This applies to scripts and styles as well as HTML.
   headers.set('Cache-Control', 'private, no-store');
   return new Response(response.body, { status: response.status, headers });
 }

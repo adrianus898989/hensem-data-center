@@ -56,6 +56,15 @@ test('storage unavailability retains the latest actual other-tab activity withou
  h.advance(20*MIN);h.window.dispatchEvent({type:'focus'});assert.equal(h.loggedOut(),0);
  assert.equal(h.idle.readLastActivity(),START+45*MIN);h.advance(DAY-20*MIN);assert.equal(h.loggedOut(),1);h.stop();
 });
+test('when storage remains readable but rejects writes the timer follows the latest trusted input',()=>{
+ const h=fixture();h.advance(23*HOUR);
+ h.window.localStorage.setItem=()=>{throw Error('synthetic storage quota')};
+ h.window.dispatchEvent({type:'keydown',isTrusted:true});
+ assert.equal(h.idle.readLastActivity(),h.now());
+ h.advance(HOUR);h.window.dispatchEvent({type:'focus'});assert.equal(h.loggedOut(),0);
+ h.advance(23*HOUR-1);assert.equal(h.loggedOut(),0);
+ h.advance(1);assert.equal(h.loggedOut(),1);h.stop();
+});
 test('activity bridge rejects other windows, old channels, forged events, background commands and invalid timestamps',()=>{
  const h=fixture(),valid={source:h.source,origin:'null',isTrusted:true,data:{type:h.shell.OWNER_PREVIEW_SHELL_MESSAGE,channel:'channel',command:'user-activity',occurredAt:h.now()}};
  assert.equal(h.shell.ownerPreviewActivityTime(valid,h.source,'channel',h.now()),h.now());

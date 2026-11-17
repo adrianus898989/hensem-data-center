@@ -22,8 +22,8 @@ for(const page of ['risk','latency'])test(page+': formal renderer never requests
  assert.equal(h.calls.filter(q=>q.action==='rates').length,page==='risk'?1:0,'only the existing risk fee consumer reads rates');
  assert.match(h.html(),page==='risk'?/三方风险矩阵/:/data-duration-page="latency"/);
  const html=h.html();h.L.comparisonResults=[completeAggregate(native,999,888)];h.L.comparisonStatus='ready';h.c.render();await settle();assert.equal(h.html(),html,'formal content has no previous-period consumer');
- const count=prepared(h).length;await h.c.liveQuery();await settle();assert.equal(prepared(h).length,count,'repeat query reuses exact current facts');
- await h.c.liveRefresh();await settle();assert.equal(main(h).length,2);assert.equal(previous(h).length,0,'refresh still does not launch the unused wave');
+ const count=prepared(h).length;await h.c.liveQuery();await settle();assert.equal(prepared(h).length,count+1,'repeat query rereads current facts');
+ await h.c.liveRefresh();await settle();assert.equal(main(h).length,3);assert.equal(previous(h).length,0,'refresh still does not launch the unused wave');
 });
 for(const page of ['overview','providers','provider_payout','merchants','collection','payout','time','amount','matrix','provider_daily','teamops','teamcountries','teamplatforms'])test(page+': an actual comparison consumer still reads current and previous periods',async()=>{
  const h=await setup(page);await h.c.liveQuery();await settle();assert.equal(main(h).length,1);assert.equal(previous(h).length,1);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.comparisonResults.length,1);

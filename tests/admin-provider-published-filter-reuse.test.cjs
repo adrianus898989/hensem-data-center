@@ -34,6 +34,7 @@ async function fixture(options={}){
  if(options.today){h.setNow('2026-09-23T04:37:00Z');Object.assign(h.L,{from:'2026-09-23T00:00:00',to:'2026-09-23T23:59:59'});}
  return h;
 }
+const providerReadActions=['providerSnapshot','intakeCoverage','rates','workorders'];
 function assertSelected(h,count=1){
  assert.equal(h.L.results.length,count);assert.equal(h.L.comparisonResults.length,count);
  for(const r of [...h.L.results,...h.L.comparisonResults]){assert.equal(r.total,5);assert.equal(r.summary[0].all_count,5);assert.equal(r.summary[0].all_amount,'1000.25');assert.equal(r.summary[0].success_amount,'600.15');assert.deepEqual(copy(r.groups.provider.map(g=>g.provider)),['3TPayINR']);}
@@ -46,37 +47,42 @@ function exportAppliedTable(h){
  ]}];
 }
 
-test('18-platform base projects 3TPay locally; only one filtered workorder read is added, then repeat is network-free',async()=>{
- const h=await fixture({platforms:platforms18()});await h.c.liveQuery();const base=h.L.providerPublished.bundle,baseText=JSON.stringify(base),before=h.calls.length;
+test('18-platform provider filter and repeat each reread one publication and its scoped attachments',async()=>{
+ const h=await fixture({platforms:platforms18()});await h.c.liveQuery();const base=h.L.providerPublished.bundle,baseText=JSON.stringify(base);
  assert.equal(h.L.results.length,18);assert(h.L.results.every(r=>r.total===10));
- h.c.liveProvider('3TPay');await h.c.liveQuery();assertSelected(h,18);
- assert.deepEqual(h.calls.slice(before).map(q=>q.action),['workorders']);assert.deepEqual(requests(h,'workorders').at(-1).providers,['3TPay']);assert.equal(requests(h,'providerSnapshot').length,1);
- assert.equal(h.L.providerPublished.bundle,base);assert.equal(JSON.stringify(base),baseText,'projection cannot mutate the reusable all-provider base');assert.equal(h.L.providerPublished.projectionComplete,true);noSourceReads(h);
- const after=h.calls.length;await h.c.liveQuery();assert.equal(h.calls.length,after);assertSelected(h,18);
- h.c.liveProvider('');await h.c.liveQuery();assert.equal(h.calls.length,after,'the complete all-provider workorder attachment is also reusable');assert(h.L.results.every(r=>r.total===10));
+ for(const provider of ['3TPay','3TPay','']){
+  h.c.liveProvider(provider);const n=h.calls.length;await h.c.liveQuery();
+  assert.deepEqual(h.calls.slice(n).map(q=>q.action),providerReadActions);
+  assert.notEqual(h.L.providerPublished.bundle,base);assert.equal(JSON.stringify(base),baseText);
+  if(provider){assertSelected(h,18);assert.deepEqual(requests(h,'workorders').at(-1).providers,[provider]);}
+  else assert(h.L.results.every(r=>r.total===10));
+  assert.equal(h.L.providerPublished.projectionComplete,true);noSourceReads(h);
+ }
 });
 
-test('provider control changes retain the applied table and make export unavailable until Query',async()=>{
+test('provider draft changes issue no query, hide the prior table and suspend export',async()=>{
  const h=await fixture();await h.c.liveQuery();const base=h.L.providerPublished.bundle,view=h.L.providerPublished.view,before=h.calls.length;
- h.c.liveSet('provider','3TPay');await settle();assert.equal(h.calls.length,before);assert.equal(h.L.providerPublished.bundle,base);assert.equal(h.L.providerPublished.view,view);assert.equal(h.L.results[0].total,10);assert.equal(h.L.dirty,true);assert.match(h.html(),/筛选已修改/);
+ h.c.liveSet('provider','3TPay');await settle();assert.equal(h.calls.length,before);assert.equal(h.L.providerPublished.bundle,base);assert.equal(h.L.providerPublished.view,view);assert.equal(h.L.results[0].total,10);assert.equal(h.L.dirty,true);assert.match(h.html(),/筛选条件已修改/);assert.doesNotMatch(h.html(),/provider-summary-kpis/);
  exportAppliedTable(h);await h.c.liveExport();assert.equal(h.blobs.length,0);assert.equal(h.calls.length,before);
  await h.c.liveQuery();assertSelected(h);assert.equal(h.L.dirty,false);noSourceReads(h);
 });
 
-test('historical publication keeps its original five-minute TTL across provider changes; workorders retain their own 30-second TTL',async()=>{
- const h=await fixture();await h.c.liveQuery();const firstRead=h.L.providerPublished.readAt;
- h.c.liveProvider('3TPay');await h.c.liveQuery();const work=requests(h,'workorders').length;
- h.setNow('2026-09-23T12:00:29Z');await h.c.liveQuery();assert.equal(requests(h,'workorders').length,work);assert.equal(requests(h,'providerSnapshot').length,1);
- h.setNow('2026-09-23T12:00:30Z');await h.c.liveQuery();assert.equal(requests(h,'workorders').length,work+1);assert.equal(requests(h,'providerSnapshot').length,1);
- h.setNow('2026-09-23T12:04:59Z');await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,1);assert.equal(h.L.providerPublished.readAt,firstRead);
- h.setNow('2026-09-23T12:05:00Z');await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,2);assertSelected(h);noSourceReads(h);
+test('historical publication and attachments remain server-backed on both sides of the old time windows',async()=>{
+ const h=await fixture();await h.c.liveQuery();h.c.liveProvider('3TPay');
+ for(const clock of ['12:00:00','12:00:29','12:00:30','12:04:59','12:05:00']){
+  h.setNow('2026-09-23T'+clock+'Z');const n=h.calls.length;await h.c.liveQuery();
+  assert.deepEqual(h.calls.slice(n).map(q=>q.action),providerReadActions);assertSelected(h);noSourceReads(h);
+ }
 });
 
-test('v2 publication rechecks at 30 seconds; earlier artifact nextDueAt does not evict the still-valid local result',async()=>{
+test('the scheduled freshness time never suppresses an explicit read of the current v2 publication',async()=>{
  for(const dueEarly of [false,true]){
-  const h=await fixture({today:true,handler:q=>{if(q.action==='providerSnapshot'&&dueEarly){const b=providerEnvelope(q,[platform],true);b.nextDueAt='2026-09-23T04:37:10.000000Z';return b;}}});await h.c.liveQuery();h.c.liveProvider('3TPay');await h.c.liveQuery();const base=h.L.providerPublished.bundle;
-  h.setNow(dueEarly?'2026-09-23T04:37:09Z':'2026-09-23T04:37:29Z');await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,1);assert.equal(h.L.providerPublished.bundle,base);
-  h.setNow('2026-09-23T04:37:10Z');await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,1);h.setNow('2026-09-23T04:37:30Z');await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,2);assertSelected(h);assert.equal(h.L.providerPublished.appliedWindow.intraday,true);noSourceReads(h);
+  const h=await fixture({today:true,handler:q=>{if(q.action==='providerSnapshot'&&dueEarly){const b=providerEnvelope(q,[platform],true);b.nextDueAt='2026-09-23T04:37:10.000000Z';return b;}}});await h.c.liveQuery();h.c.liveProvider('3TPay');
+  for(const clock of ['04:37:09','04:37:10','04:37:30']){
+   h.setNow('2026-09-23T'+clock+'Z');const n=h.calls.length;await h.c.liveQuery();
+   assert.deepEqual(h.calls.slice(n).map(q=>q.action),providerReadActions);assertSelected(h);
+   assert.equal(h.L.providerPublished.appliedWindow.intraday,true);noSourceReads(h);
+  }
  }
 });
 
@@ -92,7 +98,7 @@ test('actor, role version and native platform remapping cannot reuse another pub
   if(change==='role')h.c.hensemRoleAccess={...h.c.hensemRoleAccess,version:2};
   if(change==='native'){ps[0].sourceName='SYNTHETIC_REMAPPED';h.L.catalog[0].sourceName=ps[0].sourceName;}
   h.c.render();assert.equal(h.L.providerPublished,null,change);assert.equal(h.L.results.length,0,change);const before=h.calls.length;
-  await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,2,change);assert.notEqual(h.L.providerPublished.bundle,base,change);assert.deepEqual(h.calls.slice(before).map(q=>q.action),['providerSnapshot','intakeCoverage','rates','workorders'],change);assertSelected(h);noSourceReads(h);
+  await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,3,change);assert.notEqual(h.L.providerPublished.bundle,base,change);assert.deepEqual(h.calls.slice(before).map(q=>q.action),['providerSnapshot','intakeCoverage','rates','workorders'],change);assertSelected(h);noSourceReads(h);
  }
 });
 
@@ -120,7 +126,7 @@ test('liveProvider cancels a pending filtered workorder: late success or denial 
   h.c.liveProvider('3TPay');const oldRead=h.c.liveQuery();await settle();assert.equal(h.L.providerPublished.loading,true);
   h.c.liveProvider('WPay');await h.c.liveQuery();const applied=h.L.providerPublished,work=h.L.workorders;assert.deepEqual(copy(applied.appliedProviders),['WPay']);
   if(late==='success')pending.resolve({...emptyWorkorders(),total:999});else pending.reject(Object.assign(Error('cancelled old denial'),{code:'ADMIN_LIVE_SESSION_DENIED'}));await oldRead;
-  assert.equal(h.L.providerPublished,applied);assert.equal(h.L.workorders,work);assert.equal(h.L.workorders.total,0);assert.equal(requests(h,'providerSnapshot').length,1);assert(h.L.results[0].groups.provider.every(r=>r.provider==='WPay'));noSourceReads(h);
+  assert.equal(h.L.providerPublished,applied);assert.equal(h.L.workorders,work);assert.equal(h.L.workorders.total,0);assert.equal(requests(h,'providerSnapshot').length,3);assert(h.L.results[0].groups.provider.every(r=>r.provider==='WPay'));noSourceReads(h);
  }
 });
 
@@ -133,24 +139,24 @@ test('filtered export verifies the applied base generation and exports the selec
 
 test('unpublished multi-provider distinct unions do not trigger live fanout or become a complete export',async()=>{
  const ps=platforms18(),h=await fixture({platforms:ps,handler:q=>{if(q.action==='providerSnapshot'){const b=providerEnvelope(q,ps);for(const entry of b.platforms){for(const period of ['current','previous']){const r=entry[period].orders;r.groups.provider.push({...r.groups.provider[0],provider:'OtherPay'});r.total=15;r.summary=[{...r.summary[0],all_count:15,all_amount:'4001.00',success_count:9,created_success_count:9,success_amount:'2400.60',pending_count:3,pending_amount:'800.20',failed_count:3,failed_amount:'800.20'}];}const s=entry.current.submission;s.metrics.push(...s.metrics.filter(m=>m.provider==='WPay').map(m=>({...m,provider:'OtherPay'})));s.coverage.orderCount=15;}return b;}}});await h.c.liveQuery();const before=requests(h,'providerSnapshot').length;h.L.multi.provider=['3TPay','WPay'];h.L.provider='';h.L.dirty=true;
- await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,before);assert(h.L.results.every(r=>r.total===10));assert.equal(h.L.providerPublished.projectionComplete,false);assert.match(h.html(),/去重合计尚未发布/);noSourceReads(h);
- exportAppliedTable(h);const n=h.calls.length;await h.c.liveExport();assert.equal(h.blobs.length,0);assert.equal(h.calls.length,n);await h.c.liveQuery();assert.equal(h.calls.length,n);assert.equal(h.L.providerPublished.projectionComplete,false);
+ await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,before+1);assert(h.L.results.every(r=>r.total===10));assert.equal(h.L.providerPublished.projectionComplete,false);assert.match(h.html(),/去重合计尚未发布/);noSourceReads(h);
+ exportAppliedTable(h);const n=h.calls.length;await h.c.liveExport();assert.equal(h.blobs.length,0);assert.equal(h.calls.length,n);await h.c.liveQuery();assert.deepEqual(h.calls.slice(n).map(q=>q.action),providerReadActions);assert.equal(h.L.providerPublished.projectionComplete,false);
 });
 
 test('selecting every published provider dimension reuses its stored distinct union without source reads',async()=>{
  const h=await fixture();await h.c.liveQuery();h.L.multi.provider=['3TPay','WPay'];h.L.provider='';h.L.dirty=true;const before=requests(h,'providerSnapshot').length;
- await h.c.liveQuery();assert.equal(h.L.providerPublished.projectionComplete,true);assert.equal(h.L.results[0].total,10);assert.equal(requests(h,'providerSnapshot').length,before);noSourceReads(h);exportAppliedTable(h);await h.c.liveExport();assert.equal(h.blobs.length,1);
+ await h.c.liveQuery();assert.equal(h.L.providerPublished.projectionComplete,true);assert.equal(h.L.results[0].total,10);assert.equal(requests(h,'providerSnapshot').length,before+1);noSourceReads(h);exportAppliedTable(h);await h.c.liveExport();assert.equal(h.blobs.length,1);
 });
 
 test('incomplete published provider metrics stay unknown on repeat and cannot trigger supplemental computation or export',async()=>{
  const h=await fixture({handler:q=>{if(q.action==='providerSnapshot'){const b=providerEnvelope(q);b.platforms[0].current.submission.coverage.calculationComplete=false;b.platforms[0].current.submission.coverage.coverageUnknownDays=1;return b;}}});
  await h.c.liveQuery();h.c.liveProvider('3TPay');await h.c.liveQuery();assertSelected(h);assert.equal(h.L.providerPublished.projectionComplete,false);assert.equal(Object.hasOwn(h.L.providerPublished,'attachments'),false,'published state no longer retains a second attachment cache');noSourceReads(h);
- exportAppliedTable(h);const n=h.calls.length;await h.c.liveExport();assert.equal(h.blobs.length,0);assert.equal(h.calls.length,n);await h.c.liveQuery();assert.equal(h.calls.length,n);assert.equal(h.L.providerPublished.projectionComplete,false);noSourceReads(h);
+ exportAppliedTable(h);const n=h.calls.length;await h.c.liveExport();assert.equal(h.blobs.length,0);assert.equal(h.calls.length,n);await h.c.liveQuery();assert.deepEqual(h.calls.slice(n).map(q=>q.action),providerReadActions);assert.equal(h.L.providerPublished.projectionComplete,false);noSourceReads(h);
 });
 
 test('failed filtered workorder reads are retried and cannot become reusable complete attachments',async()=>{
  let failed=true;const h=await fixture({handler:q=>{if(q.action==='workorders'&&q.providers?.length&&failed)throw Error('synthetic unavailable');}});await h.c.liveQuery();h.c.liveProvider('3TPay');await h.c.liveQuery();assertSelected(h);assert.equal(h.L.workorders,null);assert.match(h.L.workordersError,/unavailable/);
- exportAppliedTable(h);await h.c.liveExport();assert.equal(h.blobs.length,0);const before=h.calls.length;failed=false;await h.c.liveQuery();assert.deepEqual(h.calls.slice(before).map(q=>q.action),['workorders']);assert.equal(h.L.workorders.total,0);const complete=h.calls.length;await h.c.liveQuery();assert.equal(h.calls.length,complete);noSourceReads(h);
+ exportAppliedTable(h);await h.c.liveExport();assert.equal(h.blobs.length,0);const before=h.calls.length;failed=false;await h.c.liveQuery();assert.deepEqual(h.calls.slice(before).map(q=>q.action),providerReadActions);assert.equal(h.L.workorders.total,0);const complete=h.calls.length;await h.c.liveQuery();assert.deepEqual(h.calls.slice(complete).map(q=>q.action),providerReadActions);noSourceReads(h);
 });
 
 test('changing provider while filtered export authorization is pending prevents the old file download',async()=>{

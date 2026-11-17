@@ -15,12 +15,12 @@ function fixture(){
  return {context,page,requests,host,table,focuses,body:()=>drawerBody,html:()=>drawerHtml,fullPaints:()=>fullPaints,active:()=>active,resolve:data=>resolve(data||response),reject:error=>reject(error)};
 }
 function unchanged(h){assert.equal(h.fullPaints(),0,'detail actions must not replace the platform table');assert.equal(h.context.scrollX,12);assert.equal(h.context.scrollY,710);assert.equal(h.table.scrollLeft,670);assert.equal(h.table.scrollTop,135);assert(h.focuses.every(options=>options?.preventScroll===true));}
-test('opening, asynchronous loading, switching tabs, cached reopening and closing preserve both background scroll axes',async()=>{
+test('opening, asynchronous loading, switching tabs, fresh reopening and closing preserve both background scroll axes',async()=>{
  const h=fixture();assert.match(h.page.render(),/id="withdraw-reason-overlay"/);
  h.context.withdrawReasons(0);unchanged(h);assert.match(h.html(),/正在读取/);h.resolve();await settle();unchanged(h);assert.match(h.html(),/规则/);
  h.context.withdrawReasonKind('categories');unchanged(h);h.resolve();await settle();unchanged(h);
  h.context.withdrawReasonClose();unchanged(h);assert.equal(h.html(),'');assert.equal(h.active(),'trigger');
- const reads=h.requests.length;h.context.withdrawReasons(0);await settle();unchanged(h);assert.equal(h.requests.length,reads,'cached reopening also avoids a background paint');assert.match(h.html(),/规则/);
+ const reads=h.requests.length;h.context.withdrawReasons(0);await settle();unchanged(h);assert.equal(h.requests.length,reads+1,'fresh reopening also avoids a background paint');h.resolve();await settle();unchanged(h);assert.match(h.html(),/规则/);
 });
 test('source-original dialogs retain the drawer scroll position as well as the platform table',async()=>{
  const h=fixture();h.context.withdrawReasons(0);h.resolve();await settle();h.body().scrollTop=408;h.body().scrollLeft=84;

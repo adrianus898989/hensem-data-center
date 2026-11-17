@@ -50,7 +50,7 @@ function harness(group=storageGroup()) {
   const rawDispatch=window.dispatchEvent.bind(window);
   window.dispatchEvent=event=>{events.push(event);return rawDispatch(event);};
   const box={exports:{}};
-  const fetch=async(url,init={})=>{const call={url:String(url),method:String(init.method||'GET').toUpperCase(),headers:new Headers(init.headers),body:init.body,signal:init.signal};calls.push(call);return implementation(call);};
+  const fetch=async(url,init={})=>{const call={url:String(url),method:String(init.method||'GET').toUpperCase(),headers:new Headers(init.headers),body:init.body,signal:init.signal,cache:init.cache};calls.push(call);return implementation(call);};
   const context={module:box,exports:box.exports,require:name=>{assert.equal(name,'./dashboardDataScope');return scopeHelpers;},window,localStorage:window.localStorage,navigator:{locks:group.locks},
     document:{visibilityState:'visible'},fetch,Date:FakeDate,URL,URLSearchParams,Headers,Request,Response,
     AbortController,AbortSignal,DOMException,Event,EventTarget,CustomEvent:CustomEventShim,
@@ -81,6 +81,57 @@ const tests=[];
 function test(name,fn){tests.push([name,fn]);}
 const dataURL='https://supabase.offline.invalid/rest/v1/offline_table';
 
+test('storage write failure retains a new or renewed session and a later removal in another tab wins',async()=>{
+  const h=harness(),other=harness(h.group);
+  const old=session('old'),next=session('rotated');
+  h.api.saveDashboardSession(old);
+  h.window.localStorage.setItem=()=>{throw Error('synthetic storage quota');};
+  h.api.saveDashboardSession(next);
+  assert.equal(h.saved().access_token,old.access_token);
+  assert.equal(h.api.readSavedDashboardSession().access_token,next.access_token);
+  h.setFetch(()=>json([]));
+  await h.api.dashboardAuthenticatedFetch(dataURL,{},next);
+  assert.equal(h.dataCalls()[0].headers.get('authorization'),'Bearer '+next.access_token);
+  other.api.saveDashboardSession(null);
+  assert.equal(h.api.readSavedDashboardSession(),null);
+  h.api.saveDashboardSession(next);
+  assert.equal(h.saved(),null);
+  assert.equal(h.api.readSavedDashboardSession().access_token,next.access_token);
+});
+test('a failed session removal cannot revive old credentials, and another tab can sign in afterwards',()=>{
+  const h=harness(),other=harness(h.group),old=session('old'),next=session('other',3600,B);
+  h.api.saveDashboardSession(old);
+  h.window.localStorage.removeItem=()=>{throw Error('synthetic storage error');};
+  h.api.saveDashboardSession(null);
+  assert.equal(h.saved().access_token,old.access_token);
+  assert.equal(h.api.readSavedDashboardSession(),null);
+  other.api.saveDashboardSession(next);
+  assert.equal(h.api.readSavedDashboardSession().user.id,B);
+});
+
+test('a shared read completed after an account change or logout cannot return the old account response',async()=>{
+  for(const [replacement,code] of [[session('other',3600,B),'session_changed'],[null,'session_logged_out']]){
+    const h=harness(),old=session(),gate=deferred();h.api.saveDashboardSession(old);
+    h.setFetch(()=>gate.promise);
+    const result=h.api.dashboardAuthenticatedFetch(dataURL,{},old);
+    await tick();assert.equal(h.dataCalls().length,1);
+    h.api.saveDashboardSession(replacement);gate.resolve(json([]));
+    await assert.rejects(result,error=>error.code===code);
+    assert.equal(h.refreshCalls().length,0);
+  }
+});
+test('cancelled shared reads preserve cancellation across transport and never start an unnecessary refresh',async()=>{
+  const h=harness(),old=session('old',5),before=new AbortController();h.api.saveDashboardSession(old);
+  before.abort();
+  await assert.rejects(h.api.dashboardAuthenticatedFetch(dataURL,{signal:before.signal},old),error=>error.name==='AbortError');
+  assert.equal(h.calls.length,0);
+  const fresh=session('fresh'),during=new AbortController(),gate=deferred();
+  h.api.saveDashboardSession(fresh);h.setFetch(()=>gate.promise);
+  const result=h.api.dashboardAuthenticatedFetch(dataURL,{signal:during.signal},fresh);
+  await tick();during.abort();gate.resolve(json({message:'stale'},401));
+  await assert.rejects(result,error=>error.name==='AbortError');
+  assert.equal(h.dataCalls().length,1);assert.equal(h.refreshCalls().length,0);
+});
 test('near-expiry concurrent requests share one refresh and use the same new token',async()=>{
   const h=harness(),old=session('old',5),next=session('fresh');h.api.saveDashboardSession(old);
   const gate=deferred();h.setFetch(call=>gatewayAction(call)==='refresh'?gate.promise:json([]));
@@ -106,8 +157,9 @@ test('GET 401 refreshes once and retries once with updated authorization',async(
   const h=harness(),old=session(),next=session('fresh');h.api.saveDashboardSession(old);
   h.setFetch(call=>gatewayAction(call)==='refresh'?json(next):
     call.headers.get('authorization')==='Bearer '+old.access_token?json({message:'expired'},401):json([]));
-  assert.equal((await h.api.dashboardAuthenticatedFetch(dataURL,{},old)).status,200);
+  assert.equal((await h.api.dashboardAuthenticatedFetch(dataURL,{cache:'force-cache'},old)).status,200);
   assert.equal(h.refreshCalls().length,1);assert.equal(h.dataCalls().length,2);
+  assert.ok(h.calls.every(call=>call.cache==='no-store'));
 });
 test('concurrent GET 401 responses share one refresh, including a late old-token response',async()=>{
   const h=harness(),old=session(),next=session('fresh'),gate=deferred(),late=deferred();h.api.saveDashboardSession(old);

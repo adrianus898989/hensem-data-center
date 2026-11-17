@@ -287,10 +287,3 @@ export function formatSnapshotTime(value: string): string {
     second: "2-digit"
   });
 }
-
-export function jsonResponseHeaders(cacheSeconds = 60): HeadersInit {
-  return {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": `public, max-age=${cacheSeconds}, stale-while-revalidate=${cacheSeconds * 5}`
-  };
-}

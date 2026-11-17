@@ -24,6 +24,6 @@ for(const page of ['auto_withdraw','withdraw_operators']){
  test(page+' restored old implicit secondary state cannot expose a fabricated user window',async()=>{
   const f=fixture(page),run=f.page.load();f.pending.shift().resolve(ready(4));await run;
   const saved=f.page.capture();saved.metricView='secondary';f.page.restore(saved);
-  assert.equal(f.page.canExport(),false);f.page.render();assert.equal(f.page.state.metricView,'created');assert.equal(f.page.canExport(),true);
+  assert.equal(f.page.canExport(),false);f.page.render();assert.equal(f.page.state.metricView,'created');assert.equal(f.page.canExport(),false);const fresh=f.page.load();f.pending.shift().resolve(ready(5));await fresh;assert.equal(f.page.canExport(),true);
  });
 }

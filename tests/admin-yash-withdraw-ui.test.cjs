@@ -46,20 +46,20 @@ test('partial classification compares observed shares while preserving unknown c
  assert.match(row[8],/7.14%.*昨日 6.67%.*\+0\.48 pp/);assert.match(row[9],/21.43%.*昨日 10.00%.*\+11\.43 pp/);for(const i of [8,9])assert.match(row[i],/按已入库数据计算；两期完整性尚未核验/);assert.match(html,/未分处理方式 100 笔/);const cards=html.split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/<label>自动出款<\/label><strong>10<\/strong>/);assert.doesNotMatch(cards,/\+2 笔|\+18 笔/);
 });
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no});return {promise,resolve,reject}};
-test('same-query refresh is deduplicated, disables query controls and preserves the previous result on failure',async()=>{
+test('same-query refresh is deduplicated, disables query controls and clears previously displayed figures on request and failure',async()=>{
  const data={startDate:'2026-10-08',endDate:'2026-10-08',rows:[yash({platform:'RETAINED-SYNTHETIC'})],total:1,totals:yash()},pending=deferred();let refreshing=false;
  const f=fixture({},false,()=>refreshing?pending.promise:data);await f.page.load();assert.equal(f.requests.length,1);
  refreshing=true;const first=f.page.load();assert.equal(f.requests.length,2);let joinedCompleted=false;const joined=Promise.all([f.page.load(),f.root.withdrawQueryForm()]).then(()=>{joinedCompleted=true});for(let i=0;i<4;i++)await Promise.resolve();assert.equal(joinedCompleted,false,'duplicate query callers wait for the original pending read');assert.equal(f.requests.length,2,'repeated query actions do not create another server read');
- let html=f.render();assert.match(html,/disabled aria-disabled="true" onclick="withdrawQueryForm\(this.form\)">正在读取/);assert.match(html,/disabled aria-disabled="true" onclick="withdrawLoad\(\)">刷新备注/);assert.match(html,/RETAINED-SYNTHETIC/);assert.match(html,/同一筛选的上次成功结果仍显示，尚未刷新/);
- pending.reject(Error('57014 synthetic statement timeout <script>'));await Promise.all([first,joined]);assert.equal(joinedCompleted,true,'every deduplicated caller settles after the actual read');html=f.render();assert.equal(f.page.state.loading,false);assert.match(html,/刷新失败，同一筛选的上次成功结果已保留/);assert.match(html,/RETAINED-SYNTHETIC/);assert.match(html,/57014 synthetic statement timeout &lt;script&gt;/);assert.doesNotMatch(html,/<script>/);assert.match(html,/onclick="withdrawLoad\(\)">重试/);assert.doesNotMatch(html,/disabled aria-disabled="true" onclick="withdrawQueryForm/);
+ let html=f.render();assert.match(html,/disabled aria-disabled="true" onclick="withdrawQueryForm\(this.form\)">正在读取/);assert.equal(f.page.state.data,null);assert.doesNotMatch(html,/RETAINED-SYNTHETIC|上次成功结果/);
+ pending.reject(Error('57014 synthetic statement timeout <script>'));await Promise.all([first,joined]);assert.equal(joinedCompleted,true,'every deduplicated caller settles after the actual read');html=f.render();assert.equal(f.page.state.loading,false);assert.equal(f.page.state.data,null);assert.doesNotMatch(html,/RETAINED-SYNTHETIC|上次成功结果/);assert.match(html,/57014 synthetic statement timeout &lt;script&gt;/);assert.doesNotMatch(html,/<script>/);assert.match(html,/onclick="withdrawLoad\(\)">重试/);assert.doesNotMatch(html,/disabled aria-disabled="true" onclick="withdrawQueryForm/);
  refreshing=false;await f.root.withdrawLoad();assert.equal(f.requests.length,3);assert.equal(f.page.state.error,'');assert.doesNotMatch(f.render(),/刷新失败/);
 });
 test('editing dates keeps the applied result before a new request and a failure cannot relabel it as the new day',async()=>{
  const data={startDate:'2026-10-08',endDate:'2026-10-08',rows:[yash({platform:'OLD-DAY-SYNTHETIC'})],total:1,totals:yash()},pending=deferred();let changed=false;
  const f=fixture({},false,()=>changed?pending.promise:data);await f.page.load();assert.match(f.render(),/OLD-DAY-SYNTHETIC/);
  f.root.withdrawDate('from','2026-10-09');f.root.withdrawDate('to','2026-10-09');assert.match(f.render(),/OLD-DAY-SYNTHETIC/);assert.match(f.render(),/筛选条件已修改/);assert.equal(f.page.state.data.startDate,'2026-10-08');assert.equal(f.page.state.applied.query.startAt,'2026-10-08T00:00:00.000Z');
- changed=true;const next=f.page.load();assert.equal(f.page.state.data.startDate,'2026-10-08');assert.match(f.render(),/OLD-DAY-SYNTHETIC|上次成功结果/);assert.equal(f.requests.at(-1).startAt,'2026-10-09T00:00:00.000Z');
- pending.reject(Error('synthetic request timeout'));await next;const html=f.render();assert.match(html,/synthetic request timeout/);assert.match(html,/OLD-DAY-SYNTHETIC/);assert.match(html,/查询失败，上次成功结果已保留/);assert.doesNotMatch(html,/自动出款日报/);assert.equal(f.page.state.applied.query.startAt,'2026-10-08T00:00:00.000Z');assert.equal(f.page.state.data.startDate,'2026-10-08');
+ changed=true;const next=f.page.load();assert.equal(f.page.state.data,null);assert.doesNotMatch(f.render(),/OLD-DAY-SYNTHETIC|上次成功结果/);assert.equal(f.requests.at(-1).startAt,'2026-10-09T00:00:00.000Z');
+ pending.reject(Error('synthetic request timeout'));await next;const html=f.render();assert.match(html,/synthetic request timeout/);assert.doesNotMatch(html,/OLD-DAY-SYNTHETIC|上次成功结果|自动出款日报/);assert.equal(f.page.state.applied,null);assert.equal(f.page.state.data,null);
 });
 test('unavailable YASH reasons are explained beside a working daily entry without issuing a reason request',()=>{
  const f=fixture();f.render();const actions=f.stats().rows[0].at(-1);
@@ -115,7 +115,7 @@ const currentYash=(extra={})=>yash({source:'KB',total:648,success:641,rejected:5
 const currentYashData=(extra={})=>({version:2,view:'auto',startDate:'2026-10-08',endDate:'2026-10-08',rows:[currentYash()],total:1,totals:currentYash(),...extra});
 const retiredYash=(extra={})=>currentYash({classificationBasis:'confirmed_manual_only',automaticWithdrawalEnabled:false,autoCount:0,manualCount:648,...extra});
 test('YASH explicit automatic-review counts render without changing independent source notes',async()=>{
- const f=fixture({},false,()=>currentYashData());await f.page.load();f.render();let r=f.stats().rows[0];assert.deepEqual(r.slice(6,8),['3','645']);assert.match(r[8],/0.46%/);assert.match(r.at(-1),/风控备注.*驳回订单备注/);assert.equal(f.requests.length,1);const saved=f.page.capture();f.page.restore(saved);f.render();assert.deepEqual(f.stats().rows[0].slice(6,8),['3','645']);assert.equal(f.requests.length,1);assert.equal(f.page.state.data.rows[0].classificationBasis,'confirmed_latest_operator_auto_review');
+ const f=fixture({},false,()=>currentYashData());await f.page.load();f.render();let r=f.stats().rows[0];assert.deepEqual(r.slice(6,8),['3','645']);assert.match(r[8],/0.46%/);assert.match(r.at(-1),/风控备注.*驳回订单备注/);assert.equal(f.requests.length,1);const saved=f.page.capture();f.page.restore(saved);assert.equal(f.page.state.data,null);await f.page.load();f.render();assert.deepEqual(f.stats().rows[0].slice(6,8),['3','645']);assert.equal(f.requests.length,2);assert.equal(f.page.state.data.rows[0].classificationBasis,'confirmed_latest_operator_auto_review');
 });
 test('retired YASH server results cannot become current or retry automatically',async()=>{
  for(const extra of [{rows:[retiredYash()]},{yashCoverage:{classificationBasis:'confirmed_manual_only',days:[]}},{rows:[currentYash({previous:retiredYash()})]},{previousRows:[retiredYash()]}]){
@@ -123,11 +123,11 @@ test('retired YASH server results cannot become current or retry automatically',
  }
 });
 test('retired YASH snapshots clear while filters and other-source policies remain',()=>{
- const old=fixture({rows:[retiredYash()],totals:retiredYash()});const saved=old.page.capture();old.page.restore(saved);assert.match(old.render(),/统计口径已更新，请重新查询/);assert.equal(old.page.state.data,null);assert.equal(old.requests.length,0);assert.equal(old.L.country,'印度');
+ const old=fixture({rows:[retiredYash()],totals:retiredYash()});const saved=old.page.capture();old.page.restore(saved);assert.doesNotMatch(old.render(),/648|confirmed_manual_only/);assert.equal(old.page.state.data,null);assert.equal(old.requests.length,0);assert.equal(old.L.country,'印度');
  const other=fixture({rows:[retiredYash({platform:'OTHER-KB'})],totals:retiredYash({platform:'OTHER-KB'})});assert.doesNotMatch(other.render(),/统计口径已更新/);assert.deepEqual(other.stats().rows[0].slice(6,8),['0','648']);
 });
-test('failed stale refresh preserves newer result and retry uses existing request path',async()=>{
- let stale=false;const f=fixture({},false,()=>currentYashData(stale?{rows:[retiredYash()]}:{}));await f.page.load();stale=true;await f.page.load();assert.deepEqual(f.page.state.data.rows.map(r=>[r.autoCount,r.manualCount]),[[3,645]]);assert.match(f.render(),/上次成功结果已保留.*统计口径已更新/);stale=false;await f.root.withdrawLoad();assert.equal(f.requests.length,3);assert.equal(f.page.state.error,'');
+test('retired refresh clears figures and retry reads the authoritative source',async()=>{
+ let stale=false;const f=fixture({},false,()=>currentYashData(stale?{rows:[retiredYash()]}:{}));await f.page.load();stale=true;await f.page.load();assert.equal(f.page.state.data,null);assert.match(f.render(),/统计口径已更新/);stale=false;await f.root.withdrawLoad();assert.equal(f.requests.length,3);assert.equal(f.page.state.error,'');
 });
 test('late retired results cannot overwrite a newer day',async()=>{
  const first=deferred(),second=deferred();let reads=0;const f=fixture({},false,()=>++reads===1?first.promise:second.promise);f.page.state.data=null;const a=f.page.load();f.root.withdrawDate('from','2026-10-09');f.root.withdrawDate('to','2026-10-09');const b=f.page.load();second.resolve(currentYashData({startDate:'2026-10-09',endDate:'2026-10-09',rows:[currentYash({dataDate:'2026-10-09'})]}));await b;first.resolve(currentYashData({rows:[retiredYash()]}));await a;assert.equal(f.page.state.data.startDate,'2026-10-09');assert.equal(f.page.state.data.rows[0].autoCount,3);assert.equal(f.page.state.error,'');assert.equal(f.requests.length,2);

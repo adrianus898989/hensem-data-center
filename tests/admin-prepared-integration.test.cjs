@@ -16,9 +16,9 @@ for(const page of ['overview','success_analysis','providers','provider_payout','
  assert.equal(h.L.results.length,1);assert.equal(h.L.results[0].summary[0].all_count,123);assert.equal(h.L.results[0]._preparedPublication.sourceComplete,false);
  assert.equal((h.nodes.get('liveFilters').innerHTML.match(/type="datetime-local"/g)||[]).length,4);
 });
-test('editing a clock preserves the last rendered result and sends nothing until Query; restoring a tab retains all four fields',async()=>{
+test('editing the draft clock sends no read and hides old figures; tab restore retains all four filters',async()=>{
  const h=await ready('time');await h.c.liveQuery();await settle();const old=h.html(),n=h.calls.length;
- h.c.liveMetricTimeSet('successFrom','2026-09-19T06:00:00');assert.equal(h.calls.length,n);assert(h.html().includes(old));assert.match(h.html(),/inert aria-label="上次查询结果"/);assert.equal(h.L.from,'2026-09-22T00:00:00');
+ h.c.liveMetricTimeSet('successFrom','2026-09-19T06:00:00');assert.equal(h.calls.length,n);assert(!h.html().includes(old));assert.doesNotMatch(h.html(),/inert aria-label="上次查询结果"/);assert.equal(h.L.from,'2026-09-22T00:00:00');
  h.c.setPage('amount');h.c.setPage('time');assert.equal(h.L.successFrom,'2026-09-19T06:00:00');assert.equal(h.L.successBasis,'source_updated');
  await h.c.liveQuery();await settle();assert(h.calls.slice(n).some(q=>q.action==='aggregatePrepared'&&q.requests.some(x=>x.successStartAt==='2026-09-19T00:30:00.000Z')));
 });
@@ -31,7 +31,7 @@ test('navigation aborts prepared transport and a late publication cannot replace
  const run=h.c.liveQuery();await settle();assert(signal);h.c.setPage('amount');assert.equal(signal.aborted,true);wait.resolve(response(request));await run;await settle();assert.equal(h.L.results.length,0);assert.equal(h.c.state.page,'amount');
 });
 test('a changed native authorization catalog cannot reveal retained result markup',async()=>{
- const h=await ready('time');await h.c.liveQuery();await settle();assert(h.L.retainedContent);h.c.liveMetricTimeSet('to','2026-09-22T04:00:00');h.L.catalog=[];h.c.render();assert.doesNotMatch(h.html(),/inert aria-label="上次查询结果"/);
+ const h=await ready('time');await h.c.liveQuery();await settle();assert.equal(h.L.results.length,1);h.c.liveMetricTimeSet('to','2026-09-22T04:00:00');h.L.catalog=[];h.c.render();assert.doesNotMatch(h.html(),/inert aria-label="上次查询结果"/);
 });
 
 test('expired v2 statistics keep their real timestamp and explicit refresh is distinct from Query',async()=>{
@@ -39,11 +39,18 @@ test('expired v2 statistics keep their real timestamp and explicit refresh is di
  await h.c.liveQuery();await settle();assert.equal(h.L.results.length,1);assert.equal(h.L.results[0]._preparedPublication.computedAt,'2026-09-23T11:59:00Z');assert(h.calls.filter(q=>q.action==='aggregatePrepared').every(q=>q.publicationVersion===2&&!q.forceRefresh));assert.match(h.nodes.get('liveFilters').innerHTML,/更新于.*更新中/);
  const n=h.calls.length;await h.c.liveRefresh();await settle();assert(h.calls.slice(n).some(q=>q.action==='aggregatePrepared'&&q.forceRefresh===true));assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);
 });
-test('loading and transient failure retain inert previous-scope content; semantic drift and access denial clear it',async()=>{
- const h=await ready('time');await h.c.liveQuery();await settle();assert(h.L.retainedContent);const old=h.L.retainedContent.html,wait=deferred();h.setHandler(q=>q.action==='aggregatePrepared'?wait.promise:{});
- h.c.liveMetricTimeSet('from','2026-09-21T00:00:00');const run=h.c.liveQuery();await settle();assert.match(h.html(),/正在读取所选范围/);assert(h.html().includes(old));assert.match(h.html(),/2026-09-22T00:00:00/);wait.reject(Error('network temporary'));await run;await settle();assert.match(h.html(),/本次读取未完成/);assert(h.html().includes(old));
- h.setHandler(q=>q.action==='aggregatePrepared'?response(q,'stale'):{});await h.c.liveQuery();await settle();assert.equal(h.L.retainedContent,null);assert.doesNotMatch(h.html(),/live-retained-result/);
- h.setHandler(q=>q.action==='aggregatePrepared'?response(q):{});await h.c.liveQuery();await settle();assert(h.L.retainedContent);h.setHandler(q=>{if(q.action==='aggregatePrepared')throw Object.assign(Error('denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'});return {};});await h.c.liveRefresh();await settle();assert.equal(h.L.retainedContent,null);assert.equal(h.L.results.length,0);assert.doesNotMatch(h.html(),/live-retained-result/);
+test('loading, transport failure, semantic drift and permission denial cannot show the previous query results',async()=>{
+ const h=await ready('time');await h.c.liveQuery();await settle();assert.equal(h.L.results[0].total,123);
+ const wait=deferred();h.setHandler(q=>q.action==='aggregatePrepared'?wait.promise:{});
+ h.c.liveMetricTimeSet('from','2026-09-21T00:00:00');const run=h.c.liveQuery();await settle();
+ assert.equal(h.L.results.length,0);assert.doesNotMatch(h.html(),/live-retained-result/);
+ wait.reject(Error('network temporary'));await run;await settle();assert.equal(h.L.results.length,0);
+ assert(h.L.queryFailures.length);assert.doesNotMatch(h.html(),/live-retained-result/);
+ h.setHandler(q=>q.action==='aggregatePrepared'?response(q,'stale'):{});await h.c.liveQuery();await settle();
+ assert.equal(h.L.results.length,0);assert.doesNotMatch(h.html(),/live-retained-result/);
+ h.setHandler(q=>q.action==='aggregatePrepared'?response(q):{});await h.c.liveQuery();await settle();assert.equal(h.L.results.length,1);
+ h.setHandler(q=>{if(q.action==='aggregatePrepared')throw Object.assign(Error('denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'});return {};});await h.c.liveRefresh();await settle();
+ assert.equal(h.L.results.length,0);assert.doesNotMatch(h.html(),/live-retained-result/);
 });
 
 test('an expired artifact before its scheduled refresh has a planned label without changing freshness or validation',async()=>{

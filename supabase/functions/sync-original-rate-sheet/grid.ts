@@ -6,7 +6,9 @@ type Workbook = OriginalWorkbook;
 export type GoogleRead = (url: string) => Promise<Native>;
 const MAX_SCAN_CELLS = 250_000, MAX_ROWS = 10_000, MAX_COLUMNS = 512, MAX_SHEETS = 64;
 const METADATA_FIELDS = "properties(title,defaultFormat,spreadsheetTheme),sheets(properties(sheetId,title,index,hidden,sheetType,gridProperties),merges)";
-const GRID_FIELDS = "sheets(properties(sheetId,title,index,hidden,sheetType,gridProperties),merges,data(startRow,startColumn,rowData(values(formattedValue,effectiveValue,effectiveFormat,textFormatRuns)),rowMetadata(pixelSize,hiddenByUser,hiddenByFilter),columnMetadata(pixelSize,hiddenByUser,hiddenByFilter)))";
+const TEXT_FORMAT = "fontFamily,fontSize,bold,italic,strikethrough,underline,foregroundColor,foregroundColorStyle";
+const DISPLAY_FORMAT = "backgroundColor,backgroundColorStyle,horizontalAlignment,verticalAlignment,wrapStrategy,padding,textRotation,borders,textFormat(" + TEXT_FORMAT + ")";
+const GRID_FIELDS = "sheets(properties(sheetId,title,index,hidden,sheetType,gridProperties),merges,data(startRow,startColumn,rowData(values(formattedValue,effectiveValue(numberValue,boolValue),effectiveFormat(" + DISPLAY_FORMAT + "),textFormatRuns(startIndex,format(" + TEXT_FORMAT + ")))),rowMetadata(pixelSize,hiddenByUser,hiddenByFilter),columnMetadata(pixelSize,hiddenByUser,hiddenByFilter)))";
 export class OriginalGridReadError extends Error {
   constructor(readonly code: string, readonly status = 503, message = "原表读取暂时不可用。") { super(message); }
 }
@@ -118,6 +120,7 @@ function sourceMerges(native: Native, sheet: OriginalRateSheetMeta): OriginalGri
 
 function googleUrl(spreadsheetId: string, suffix = "", params: Record<string, string> = {}): string {
   const url = new URL("https://sheets.googleapis.com/v4/spreadsheets/" + encodeURIComponent(spreadsheetId) + suffix);
+  url.searchParams.set("prettyPrint", "false");
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
   return url.toString();
 }

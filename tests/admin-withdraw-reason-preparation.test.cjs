@@ -13,7 +13,7 @@ test('only explicit preparation polls serially and stores the eventual original 
  const h=load();h.open();h.reply(0,preparing());await settle();assert.equal(h.calls.length,1);assert.equal(h.api.state.reasonData,null);assert.equal(h.api.state.reasonBusy,true);
  h.open();assert.equal(h.calls.length,1);await h.tick(1500);assert.equal(h.calls.length,2);assert.equal(h.calls[0].options.signal,h.calls[1].options.signal);
  h.reply(1,response('prepared'));await settle();assert.equal(h.api.state.reasonData.rows[0].reason,'prepared');assert.equal(h.api.state.reasonData.coverage.complete,false);assert.equal(h.timers.size,0);
- h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,2);
+ h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,3);assert.equal(h.api.state.reasonData,null);
 });
 test('close and date/platform/navigation changes cancel polling and cannot install a late old result',async()=>{
  for(const stop of [h=>h.ctx.withdrawReasonClose(),h=>h.ctx.withdrawReasonDate('2026-10-10'),h=>h.ctx.withdrawReasons(1),h=>h.api.pause(),h=>h.api.restore(null),h=>h.events.get('pagehide')?.()]){
@@ -61,7 +61,7 @@ test('last-complete never populates the exact reason cache or the complete local
  const h=load();h.open();h.reply(0,lastComplete());await settle();
  h.ctx.withdrawReasonSize(50);assert.equal(h.calls.length,2);assert.equal(h.calls[1].q.limit,50);h.reply(1,lastComplete());await settle();
  h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,3);h.reply(2,response('current'));await settle();
- h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,3);assert.equal(h.api.state.reasonData.rows[0].reason,'current');assert.doesNotMatch(h.html(),/data-withdraw-reason-publication/);
+ h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,4);assert.equal(h.api.state.reasonData,null);h.reply(3,response('new'));await settle();assert.equal(h.api.state.reasonData.rows[0].reason,'new');assert.doesNotMatch(h.html(),/data-withdraw-reason-publication/);
 });
 test('invalid last-complete envelopes fail closed without caching, polling or replacing source uncertainty',async()=>{
  const invalid=[
@@ -90,6 +90,6 @@ test('a preparation can finish with a last-complete result, stop polling and ret
 });
 test('restored invalid publication cannot render ordinary complete counts',async()=>{
  const h=load();h.open();h.reply(0,lastComplete());await settle();const saved=h.api.capture();
- saved.reasonData={...saved.reasonData,publication:{...saved.reasonData.publication,computedAt:'invalid'}};h.api.restore(saved);h.ctx.withdrawReasonOriginalClose();
- assert.match(h.html(),/旧结果信息无效/);assert.doesNotMatch(h.html(),/withdraw-reason-summary|data-withdraw-reason-publication/);
+ assert.equal(saved.reasonData,undefined);saved.reasonData={...lastComplete(),publication:{computedAt:'invalid'}};h.api.restore(saved);h.ctx.withdrawReasonOriginalClose();
+ assert.equal(h.api.state.reasonData,null);assert.doesNotMatch(h.html(),/withdraw-reason-summary|data-withdraw-reason-publication/);
 });

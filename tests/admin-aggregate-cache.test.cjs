@@ -11,19 +11,19 @@ async function ready(){const h=harness();await settle();h.c.hensemDataScope={mod
 function request(extra={}){return {action:'aggregate',view:'providers',platformId:P.id,startAt:'2026-09-21T18:30:00.000Z',endAt:'2026-09-22T00:30:00.000Z',direction:'all',status:'all',currency:'INR',offset:0,limit:20,...extra};}
 const read=(h,q=request(),cache=true)=>h.c.__cacheTest.readAggregate(q,h.L.serial,cache);
 
-test('merchant repeat query reuses both periods; dedicated refresh bypasses cache and keeps read time truthful',async()=>{
+test('merchant repeat query rereads both periods; dedicated refresh bypasses cache and keeps read time truthful',async()=>{
  const h=await ready();await h.c.liveQuery();await settle();assert.equal(queries(h).length,2);assert(queries(h).every(q=>q.view==='providers'));const original=h.L.results[0]._aggregateReadAt,allCalls=h.calls.length;
- h.setNow('2026-09-23T12:01:00Z');await h.c.liveQuery();await settle();assert.equal(queries(h).length,2);assert.equal(h.calls.length,allCalls,'same merchant query starts no extra RPC');assert.equal(h.L.results[0]._aggregateReadAt,original);assert.equal(h.L.results[0]._aggregateCacheHit,true);assert.match(h.nodes.get('liveFilters').innerHTML,/onclick="liveRefresh\(\)"/);assert.match(h.nodes.get('liveFilters').innerHTML,/数据读取[^]*缓存/);
- await h.c.liveRefresh();await settle();assert.equal(queries(h).length,4);assert.equal(h.L.results[0]._aggregateCacheHit,false);assert(h.L.results[0]._aggregateReadAt>original);
+ h.setNow('2026-09-23T12:01:00Z');await h.c.liveQuery();await settle();assert.equal(queries(h).length,4);assert(h.calls.length>allCalls);assert(h.L.results[0]._aggregateReadAt>original);assert.equal(h.L.results[0]._aggregateCacheHit,false);assert.match(h.nodes.get('liveFilters').innerHTML,/onclick="liveRefresh\(\)"/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/数据读取[^<]*缓存/);
+ await h.c.liveRefresh();await settle();assert.equal(queries(h).length,6);assert.equal(h.L.results[0]._aggregateCacheHit,false);assert(h.L.results[0]._aggregateReadAt>original);
 });
-test('overview normal query reuses complete reads, displays original read time, and refresh bypasses cache',async()=>{
+test('overview normal query rereads complete values and displays its new read time, and refresh bypasses cache',async()=>{
  const h=await ready();h.c.setPage('overview');await settle();await h.c.liveQuery();await settle();const before=queries(h).length,readAt=h.L.results[0]._aggregateReadAt;
- assert(before>0);h.setNow('2026-09-23T12:00:20Z');await h.c.liveQuery();await settle();assert.equal(queries(h).length,before);assert.equal(h.L.results[0]._aggregateReadAt,readAt);assert.equal(h.L.results[0]._aggregateCacheHit,true);assert.match(h.nodes.get('liveFilters').innerHTML,/onclick="liveRefresh\(\)"/);assert.match(h.nodes.get('liveFilters').innerHTML,/数据读取[^]*缓存/);
+ assert(before>0);h.setNow('2026-09-23T12:00:20Z');await h.c.liveQuery();await settle();assert.equal(queries(h).length,before*2);assert(h.L.results[0]._aggregateReadAt>readAt);assert.equal(h.L.results[0]._aggregateCacheHit,false);assert.match(h.nodes.get('liveFilters').innerHTML,/onclick="liveRefresh\(\)"/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/数据读取[^<]*缓存/);
  await h.c.liveRefresh();await settle();assert(queries(h).length>before);assert.equal(h.L.results[0]._aggregateCacheHit,false);assert(h.L.results[0]._aggregateReadAt>readAt);
 });
-test('live overview cache retains its exact as-of boundary, then advances on expiry or explicit refresh',async()=>{
+test('live overview advances its as-of boundary on every explicit source read',async()=>{
  const h=await ready();h.c.setPage('overview');await settle();h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';h.L.dirty=true;await h.c.liveQuery();await settle();const before=queries(h).length,asOf=h.L.queryNow,end=h.L.results[0].endAt;
- h.setNow('2026-09-23T12:00:20Z');await h.c.liveQuery();await settle();assert.equal(queries(h).length,before);assert.equal(h.L.queryNow,asOf);assert.equal(h.L.results[0].endAt,end);
+ h.setNow('2026-09-23T12:00:20Z');await h.c.liveQuery();await settle();assert.equal(queries(h).length,before*2);assert(h.L.queryNow>asOf);assert(Date.parse(h.L.results[0].endAt)>Date.parse(end));
  h.setNow('2026-09-23T12:00:30Z');await h.c.liveQuery();await settle();assert(queries(h).length>before);assert(h.L.queryNow>asOf);assert(Date.parse(h.L.results[0].endAt)>Date.parse(end));const advanced=h.L.queryNow;
  h.setNow('2026-09-23T12:00:35Z');await h.c.liveQuery(true);await settle();assert(h.L.queryNow>advanced);assert.equal(h.L.results[0]._aggregateCacheHit,false);
 });

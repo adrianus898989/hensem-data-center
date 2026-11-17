@@ -15,15 +15,15 @@ test('entering providers and changing filters never reads intake until manual qu
  assert.deepEqual(intakeCalls(h).filter(q=>q.operation==='rows').map(q=>[q.startAt,q.endAt]),[['2026-09-22','2026-09-22'],['2026-09-21','2026-09-21']]);assert.equal(intakeCalls(h).filter(q=>['orderCatalog','catalog'].includes(q.operation)).length,1);
  assert(intakeCalls(h).every(q=>!('provider' in q)&&!('providers' in q)&&!('memberId' in q)&&!('status' in q)));assert.match(h.html(),/<label>平台<\/label><strong>1 \/ 1<\/strong>/);
 });
-test('completed tab restores matching coverage without any new intake request',async()=>{
+test('completed tab rereads both scoped coverage periods on reentry',async()=>{
  const h=await setup();await h.c.liveQuery();await settle();const current=h.L.providerIntake,previous=h.L.providerComparisonIntake,readCount=intakeCalls(h).length;
- h.c.setPage('amount');await settle();h.c.setPage('providers');await settle();assert.equal(h.L.providerIntake,current);assert.equal(h.L.providerComparisonIntake,previous);assert.equal(intakeCalls(h).length,readCount);assert.equal(h.L.dirty,false);assert.match(h.html(),/<label>平台<\/label><strong>1 \/ 1<\/strong>/);
+ h.c.setPage('amount');await settle();h.c.setPage('providers');await settle();assert.notEqual(h.L.providerIntake,current);assert.notEqual(h.L.providerComparisonIntake,previous);assert.equal(intakeCalls(h).length,readCount*2);assert.equal(h.L.dirty,false);assert.match(h.html(),/<label>平台<\/label><strong>1 \/ 1<\/strong>/);
 });
-test('switching away during intake cancels later work and restores a paused notice, without automatic retry',async()=>{
+test('switching away during intake cancels the old owner and reentry reads fresh coverage',async()=>{
  const pending=deferred();let held=false;const h=await setup(q=>{if(q.action==='intakeCoverage'&&q.operation==='rows'&&!held){held=true;return pending.promise;}return respond(q);});
  const query=h.c.liveQuery();await settle();assert.equal(h.L.providerIntake.status,'loading');const first=intakeCalls(h).find(q=>q.operation==='rows');
- h.c.setPage('amount');h.c.setPage('providers');await settle();assert.equal(h.L.providerIntake.status,'error');assert.match(h.L.providerIntake.error,/已暂停/);const before=intakeCalls(h).length;
- pending.resolve(intakeRows(first));await query;await settle();assert.equal(intakeCalls(h).length,before);assert.equal(h.L.providerIntake.status,'error');assert.equal(h.L.providerComparisonIntake.status,'error','registered previous intake is paused with its query owner');assert.match(h.L.providerComparisonIntake.error,/已暂停/);h.c.providerSummaryPlatformCoverage();assert.match(h.drawers.at(-1).html,/采集核对已暂停/);assert.equal(intakeCalls(h).length,before);
+ h.c.setPage('amount');h.c.setPage('providers');await settle();assert.equal(h.L.providerIntake.status,'loading');assert.equal(h.L.providerIntake.response,undefined);
+ pending.resolve(intakeRows(first));await query;await settle();const before=intakeCalls(h).length;assert.equal(h.L.providerIntake.status,'ready');assert.equal(h.L.providerComparisonIntake.status,'ready');h.c.providerSummaryPlatformCoverage();assert.doesNotMatch(h.drawers.at(-1).html,/采集核对已暂停/);assert.equal(intakeCalls(h).length,before);
 });
 test('filter change during source query never commits evidence under a different selected range',async()=>{
  const pending=deferred();let held=false;const h=await setup(q=>{if(q.action==='intakeCoverage'&&q.operation==='rows'&&!held){held=true;return pending.promise;}return respond(q);});

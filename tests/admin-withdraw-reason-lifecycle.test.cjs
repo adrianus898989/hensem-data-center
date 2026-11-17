@@ -55,8 +55,8 @@ test('current authority denial clears successful caches; obsolete denial cannot 
  const h=fixture();h.open();h.reply();await settle();const denied=h.ctx.withdrawReasonRetry();h.calls[1].reject(Object.assign(Error('role_permission_denied'),{code:'42501'}));await denied;assert.equal(h.api.state.reasonData,null);assert.equal(h.api.state.data,null);
  const other=fixture();other.open();const retry=other.ctx.withdrawReasonRetry();other.reply(1);await retry;other.calls[0].reject(Object.assign(Error('role_permission_denied'),{code:'42501'}));await settle();assert.equal(other.api.state.reasonData.rows[0].reason,'current');
 });
-test('successful exact cache preserves source uncertainty, expires, and never stores failures or partial results as complete snapshots',async()=>{
- const h=fixture();h.open();h.reply();await settle();h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,1);assert.equal(h.api.state.reasonData.coverage.complete,false);h.ctx.withdrawReasonClose();h.advance(60000);h.open();assert.equal(h.calls.length,2);h.reply(1);await settle();
+test('reopening always rereads the reason, preserves source uncertainty and never serves the old result',async()=>{
+ const h=fixture();h.open();h.reply();await settle();h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,2);assert.equal(h.api.state.reasonData,null);h.reply(1,response('updated'));await settle();assert.equal(h.api.state.reasonData.rows[0].reason,'updated');assert.equal(h.api.state.reasonData.coverage.complete,false);h.ctx.withdrawReasonClose();h.advance(60000);h.open();assert.equal(h.calls.length,3);h.reply(2);await settle();
  for(const patch of [{error:'source failure'},{available:false},{partial:true},{complete:false}]){const x=fixture();x.open();x.reply(0,response('partial',patch));await settle();x.ctx.withdrawReasonClose();x.open();assert.equal(x.calls.length,2);}
 });
 test('cached reads are isolated by actor, native identity, page and both independent windows',async()=>{

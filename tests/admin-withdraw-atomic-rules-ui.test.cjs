@@ -33,11 +33,11 @@ test('source-only modes and rejection grouping retain their original presentatio
 test('atomic observation clears combination cache and resets a legacy selected key once',async()=>{
  const h=lifecycle();h.open();h.reply(0,legacy());await settle();h.ctx.withdrawBlockingDrill(0,'blockingVariants');assert.equal(h.calls[1].q.reasonKey,key('a'));
  h.reply(1,atomic({total:0,rows:[]}));await settle();assert.equal(h.calls.length,3);assert.equal(h.calls[2].q.kind,'blocking');assert.equal(h.calls[2].q.reasonKey,undefined);assert.equal(h.api.state.reasonData,null);
- h.reply(2,atomic());await settle();assert.equal(h.api.state.reasonData.total,3);h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,3);assert.equal(h.api.state.reasonData.reasonGrouping,'atomic_rules_v1');
+ h.reply(2,atomic());await settle();assert.equal(h.api.state.reasonData.total,3);h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,4);assert.equal(h.api.state.reasonData,null);h.reply(3,atomic());await settle();assert.equal(h.api.state.reasonData.reasonGrouping,'atomic_rules_v1');
 });
 test('atomic observation evicts cached variants and orders from the same full scope',async()=>{
  const h=lifecycle();h.open();h.reply(0,legacy());await settle();h.ctx.withdrawBlockingDrill(0,'blockingVariants');h.reply(1,legacy());await settle();h.ctx.withdrawBlockingView('blockingOrders');h.reply(2,legacy());await settle();
- h.ctx.withdrawReasonKind('blocking');assert.equal(h.calls.length,3);const refresh=h.ctx.withdrawReasonRetry();h.reply(3,atomic());await refresh;
+ h.ctx.withdrawReasonKind('blocking');assert.equal(h.calls.length,4);h.reply(3,atomic());await settle();
  h.ctx.withdrawBlockingDrill(0,'blockingVariants');assert.equal(h.calls.length,5);h.reply(4,atomic());await settle();h.ctx.withdrawBlockingView('blockingOrders');assert.equal(h.calls.length,6);h.reply(5,atomic());await settle();assert.equal(h.api.state.reasonData.reasonGrouping,'atomic_rules_v1');
 });
 test('known atomic scope refuses legacy last-complete without downgrade or cache admission',async()=>{
@@ -50,8 +50,8 @@ test('atomic last-complete keeps its true as-of and does not enter the ordinary 
 });
 test('restoring an old drawer cannot restore combination rows or its pagination snapshot',async()=>{
  const h=lifecycle();h.open();h.reply(0,legacy());await settle();const saved=h.api.capture();const refresh=h.ctx.withdrawReasonRetry();h.reply(1,atomic());await refresh;
- h.api.restore(saved);h.ctx.withdrawReasonOriginalClose();assert.match(h.html(),/旧组合或无效统计不再展示/);assert.doesNotMatch(h.html(),/withdraw-reason-summary/);
- h.ctx.withdrawReasonSize(50);assert.equal(h.calls.length,3);h.reply(2,atomic());await settle();assert.equal(h.api.state.reasonData.reasonGrouping,'atomic_rules_v1');
+ h.api.restore(saved);h.ctx.withdrawReasonOriginalClose();assert.equal(h.api.state.reasonData,null);assert.doesNotMatch(h.html(),/withdraw-reason-summary/);
+ h.ctx.withdrawReasonSize(50);assert.equal(h.calls.length,2);assert.equal(h.api.state.reasonData,null);
 });
 test('atomic scope does not reinterpret a different date or platform',async()=>{
  const h=lifecycle();h.open();h.reply(0,atomic());await settle();h.ctx.withdrawReasonDate('2026-10-10');h.reply(1,legacy());await settle();assert.equal(h.api.state.reasonError,'');assert.equal(h.api.state.reasonData.reasonGrouping,undefined);
@@ -73,7 +73,7 @@ test('the existing CSV exporter includes overlapping rule meaning and the unchan
  const h=teamFixture();await h.page.load();const baseline=clone(h.page.exportMeta());h.page.state.reason={country:'印度',platform:'M0',date:'2026-10-17',kind:'blocking'};h.page.state.reasonData=atomic();
  const src=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8'),start=src.indexOf(' function exportCurrentTable()'),end=src.indexOf('\n  let initialLoad=',start);assert(start>=0&&end>start);
  let csv='',clicked=0;const table=values=>({querySelectorAll:()=>values.map(row=>({cells:row.map(innerText=>({innerText}))}))});
- const context={withdrawPages:h.page,state:{page:'auto_withdraw'},L:{},document:{getElementById:()=>({querySelectorAll:()=>[table([['总提现笔数'],['5']]),table([['自动出款拦截分类','命中笔数'],['规则 A','2'],['规则 B','2'],['规则 C','1']])]}),createElement:()=>({click:()=>clicked++})},Blob:class{constructor(parts){csv=parts.join('');}},URL:{createObjectURL:()=> 'blob:synthetic',revokeObjectURL(){}},setTimeout:()=>0,toast(){},isDailyComparison:()=>false,statisticWindowsEnabled:()=>false,isSuccessAnalysis:()=>false,canExportCurrentPage:()=>true,isSupervisorPage:()=>false,isChannelStatus:()=>false,successBasisNote:()=>''};
+ const context={withdrawPages:h.page,state:{page:'auto_withdraw'},L:{},document:{getElementById:()=>({querySelectorAll:()=>[table([['总提现笔数'],['5']]),table([['自动出款拦截分类','命中笔数'],['规则 A','2'],['规则 B','2'],['规则 C','1']])]}),createElement:()=>({click:()=>clicked++})},Blob:class{constructor(parts){csv=parts.join('');}},URL:{createObjectURL:()=> 'blob:synthetic',revokeObjectURL(){}},setTimeout:()=>0,toast(){},isDailyComparison:()=>false,statisticWindowsEnabled:()=>false,isSuccessAnalysis:()=>false,canExportCurrentPage:()=>true,isSharedQueryPage:()=>false,isSupervisorPage:()=>false,isChannelStatus:()=>false,successBasisNote:()=>''};
  vm.runInNewContext(src.slice(start,end)+';exportCurrentTable();',context);assert.equal(clicked,1);assert.match(csv,/原因规则命中口径/);assert.match(csv,/原因占比分母","3"/);assert.match(csv,/命中笔数/);assert.match(csv,/不能相加作为人工总数/);assert.match(csv,/总提现笔数/);
  h.page.state.reasonData=legacy();assert.deepEqual(clone(h.page.exportMeta()),baseline);h.page.state.reason=null;assert.deepEqual(clone(h.page.exportMeta()),baseline);
 });
@@ -95,5 +95,5 @@ test('the original bounded preparation poll can finish as atomic without a new r
 test('semantic cutover spans main-window contexts without reusing data across those query scopes',async()=>{
  const h=lifecycle();h.open();h.reply(0,legacy());await settle();const saved=h.api.capture();h.ctx.withdrawReasonClose();const old=h.L.successTo;h.L.successTo='2026-10-12T23:59:59';
  h.open();assert.equal(h.calls.length,2,'full request context remains isolated');h.reply(1,atomic());await settle();h.L.successTo=old;h.api.restore(saved);h.ctx.withdrawReasonOriginalClose();
- assert.match(h.html(),/旧组合或无效统计不再展示/);h.ctx.withdrawReasonSize(50);assert.equal(h.calls.length,3);h.reply(2,atomic());await settle();assert.equal(h.api.state.reasonData.reasonGrouping,'atomic_rules_v1');
+ assert.doesNotMatch(h.html(),/withdraw-reason-summary/);h.ctx.withdrawReasonSize(50);assert.equal(h.calls.length,2);assert.equal(h.api.state.reasonData,null);
 });

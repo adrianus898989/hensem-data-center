@@ -42,8 +42,8 @@ test('navigation cancels both active order signals and prevents queued phases fr
  h.c.setPage('providers');const next=h.c.liveQuery();await settle();assert.equal(h.active(),2);await finish(h,next);assert.equal(h.L.results.length,3);
 });
 
-test('provider ordinary query reuses the exact complete aggregate windows; explicit refresh reactivates them',async()=>{
- const h=await setup(),first=h.c.liveQuery();await finish(h,first);const count=h.history.filter(q=>q.action==='aggregate').length;assert.equal(count,6);const repeat=h.c.liveQuery();await finish(h,repeat);assert.equal(h.history.filter(q=>q.action==='aggregate').length,count);assert(h.L.results.every(r=>r._aggregateCacheHit));assert.match(h.nodes.get('liveFilters').innerHTML,/onclick="liveRefresh\(\)"/);const refresh=h.c.liveRefresh();await finish(h,refresh);assert.equal(h.history.filter(q=>q.action==='aggregate').length,count+6);assert.equal(h.max(),3);
+test('provider ordinary query rereads the exact current and comparison windows; explicit refresh rereads them once',async()=>{
+ const h=await setup(),first=h.c.liveQuery();await finish(h,first);const count=h.history.filter(q=>q.action==='aggregate').length;assert.equal(count,6);const repeat=h.c.liveQuery();await finish(h,repeat);assert.equal(h.history.filter(q=>q.action==='aggregate').length,count*2);assert(h.L.results.every(r=>!r._aggregateCacheHit));assert.match(h.nodes.get('liveFilters').innerHTML,/onclick="liveRefresh\(\)"/);const refresh=h.c.liveRefresh();await finish(h,refresh);assert.equal(h.history.filter(q=>q.action==='aggregate').length,count*3);assert.equal(h.max(),3);
 });
 
 test('manual workorder, fee and exclusion retries cannot bypass the active page phase',async()=>{
@@ -93,7 +93,7 @@ test('slow exclusion cannot block paginated fees, workorders or comparison, and 
  const page=take('rates');page.d.resolve({total:501,rows:[{id:'synthetic-rate-last',provider:'Synthetic provider',collectFee:'4%',scopeType:'all'}]});await settle();
  assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.feeLookupRows.length,501);assert(h.waiting.some(e=>e.q.action==='workorders'));assert(h.waiting.some(e=>e.q.action==='aggregate'));await advanceAction(h,'workorders');assert(h.L.workorders);
  for(let n=0;n<3;n++)await advanceAction(h,'aggregate');assert.equal(h.L.comparisonStatus,'ready');assert(h.waiting.some(e=>e.q.action==='intakeCoverage'));assert.equal(h.history.filter(q=>q.action==='submissionAnalysis').length,1,'first exclusion can still be pending after every main order, fee and workorder has returned');assert.equal(h.active(),2,'both intake consumers share one catalog transport');assert.match(h.html(),/剔除读取中 0\/3/);
- await finish(h,run);assert.equal(h.max(),3);const initial=h.history.length,repeated=h.c.liveQuery();await finish(h,repeated);assert(!h.history.slice(initial).some(q=>q.action==='rates'));assert(!h.history.slice(initial).some(q=>q.action==='aggregate'));assert.equal(h.max(),3);
+ await finish(h,run);assert.equal(h.max(),3);const initial=h.history.length,repeated=h.c.liveQuery();await finish(h,repeated);assert.equal(h.history.slice(initial).filter(q=>q.action==='rates').length,1);assert.equal(h.history.slice(initial).filter(q=>q.action==='aggregate').length,6);assert.equal(h.max(),3);
 });
 test('fee failure is terminal and does not stop workorders, comparison, reconciliation or the exclusion lane',async()=>{
  const h=await setup(),run=h.c.liveQuery();await settle();for(let n=0;n<3;n++)await advance(h);await advanceAction(h,'rates',Error('Synthetic fee read failure'));assert.equal(h.L.feeLookupLoading,false);assert.match(h.L.feeLookupError,/Synthetic fee read failure/);assert(h.waiting.some(e=>e.q.action==='workorders'));assert(h.waiting.some(e=>e.q.action==='aggregate'));
@@ -120,11 +120,11 @@ test('provider payout reads its existing fee phase immediately after current nat
 });
 
 
-test('same-scope normal query reuses exclusion and intake caches, while refresh, close-all and pagehide invalidate them',async()=>{
+test('normal and forced queries each reread exclusion and intake, including after close-all and pagehide',async()=>{
  const listeners={},h=await setup('providers',{beforeLive(c){c.addEventListener=(name,callback)=>(listeners[name]??=[]).push(callback)},reply(q){const value=reply(q);if(q.action==='submissionAnalysis')value.coverage={orderCount:65,missingMemberCount:0,unknownStatusCount:0,orderSequenceUncertainCount:0,sourceCompletenessVerified:false};return value}});
  await finish(h,h.c.liveQuery());const count=()=>({submission:h.history.filter(q=>q.action==='submissionAnalysis').length,intake:h.history.filter(q=>q.action==='intakeCoverage').length});const initial=count();assert.equal(initial.submission,3);assert(initial.intake>0);
- await finish(h,h.c.liveQuery());assert.deepEqual(count(),initial);
- await finish(h,h.c.liveQuery(true));assert.deepEqual(count(),{submission:6,intake:initial.intake*2});
+ await finish(h,h.c.liveQuery());assert.deepEqual(count(),{submission:6,intake:initial.intake*2});
+ await finish(h,h.c.liveQuery(true));assert.deepEqual(count(),{submission:9,intake:initial.intake*3});
  const beforeHide=count();for(const callback of listeners.pagehide||[])callback({persisted:false});await finish(h,h.c.liveQuery());assert.equal(count().intake,beforeHide.intake+initial.intake,'pagehide clears coverage catalog and fragments');
  const beforeClose=count();h.c.liveCloseAllPages();h.c.setPage('providers');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';await finish(h,h.c.liveQuery());assert.equal(count().intake,beforeClose.intake+initial.intake,'close-all clears coverage catalog and fragments');assert.equal(count().submission,beforeClose.submission+initial.submission,'close-all clears every saved exclusion scope');assert.equal(h.max(),3);
 });
@@ -144,8 +144,8 @@ test('selected-provider fees share one complete directory without sending unused
  await finish(h,run);
  assert.equal(h.history.filter(q=>q.action==='rates').length,1,'the later fee phase reuses the exact completed directory');
  for(const q of h.history.filter(q=>['aggregate','submissionAnalysis'].includes(q.action))){if(q.action==='aggregate')assert.equal(q.amountBands,undefined,'provider totals do not depend on chart bands');assert.deepEqual(Array.from(q.providers),['Synthetic provider']);}
- const before=h.history.filter(q=>['rates','aggregate'].includes(q.action)).length;await finish(h,h.c.liveQuery(false));assert.equal(h.history.filter(q=>['rates','aggregate'].includes(q.action)).length,before,'same scope reuses both the fee snapshot and aggregate windows');
- await finish(h,h.c.liveQuery(true));assert.equal(h.history.filter(q=>q.action==='rates').length,2,'force replaces the complete directory once, not once per consumer');assert.equal(h.max(),3);
+ const before=h.history.filter(q=>['rates','aggregate'].includes(q.action)).length;await finish(h,h.c.liveQuery(false));assert.equal(h.history.filter(q=>['rates','aggregate'].includes(q.action)).length,before*2,'each query reads one current fee directory and both aggregate windows');
+ await finish(h,h.c.liveQuery(true));assert.equal(h.history.filter(q=>q.action==='rates').length,3,'force replaces the complete directory once, not once per consumer');assert.equal(h.max(),3);
 });
 
 test('selected-provider limit pagination is aborted on a filter edit and cannot start stale orders',async()=>{
@@ -171,11 +171,11 @@ test('cancelled legacy band preparation cannot clear the replacement query loadi
  prior.d.resolve({rows:[{id:'late'}],total:1});await settle();assert.equal(h.L.loading,true);assert.equal(h.L.feeLookupRows,null);await finish(h,replacement);assert.equal(h.L.loading,false);assert(h.history.filter(q=>q.action==='aggregate').every(q=>q.providers?.[0]==='Synthetic next provider'));assert.equal(h.max(),3);
 });
 
-test('custom-range provider A to B to A reuses only its exact workorder JSON and exclusions, while force rereads',async()=>{
+test('custom-range provider A to B to A always reads its own exact workorders and exclusions',async()=>{
  const h=await setup('providers',{reply(q){const value=reply(q);if(q.action==='workorders')value.auditProvider=q.providers?.join('|');if(q.action==='submissionAnalysis')value.coverage={orderCount:65,missingMemberCount:0,unknownStatusCount:0,orderSequenceUncertainCount:0,sourceCompletenessVerified:false};return value}});
  h.c.liveProvider('Pay A');await finish(h,h.c.liveQuery());assert.equal(h.L.workorders.auditProvider,'Pay A');h.c.liveProvider('Pay B');await finish(h,h.c.liveQuery());assert.equal(h.L.workorders.auditProvider,'Pay B');
  const before=h.history.length;h.c.liveProvider('Pay A');await finish(h,h.c.liveQuery());const added=h.history.slice(before);
- assert.equal(added.filter(q=>q.action==='submissionAnalysis').length,0,'the same platform/time/provider union is not recomputed');
- assert.equal(added.filter(q=>q.action==='workorders').length,0,'only the identical earlier A response can be reused');assert.equal(h.L.workorders.auditProvider,'Pay A');assert.equal(h.history.filter(q=>q.action==='workorders').length,2);assert.equal(h.max(),3);
- await finish(h,h.c.liveQuery(true));assert.equal(h.history.filter(q=>q.action==='submissionAnalysis').length,9,'explicit refresh rereads the three native scopes');assert.equal(h.history.filter(q=>q.action==='workorders').length,3);assert.equal(h.L.workorders.auditProvider,'Pay A');
+ assert.equal(added.filter(q=>q.action==='submissionAnalysis').length,3,'all three native providers are queried for A');
+ assert.equal(added.filter(q=>q.action==='workorders').length,1,'one workorder transport covers only A');assert.equal(h.L.workorders.auditProvider,'Pay A');assert.equal(h.history.filter(q=>q.action==='workorders').length,3);assert(added.filter(q=>['submissionAnalysis','workorders'].includes(q.action)).every(q=>q.providers.length===1&&q.providers[0]==='Pay A'));assert.equal(h.max(),3);
+ await finish(h,h.c.liveQuery(true));assert.equal(h.history.filter(q=>q.action==='submissionAnalysis').length,12,'explicit refresh rereads the three native scopes');assert.equal(h.history.filter(q=>q.action==='workorders').length,4);assert.equal(h.L.workorders.auditProvider,'Pay A');
 });

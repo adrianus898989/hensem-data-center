@@ -10,12 +10,12 @@ test('opening every menu from a queried page never reads business data or resume
  const pages=h.c.pages.map(p=>p[0]),before=h.calls.length;
  for(const page of pages){h.c.setPage(page);h.c.liveCloseOtherPages();h.c.render();await settle();assert.equal(h.calls.length,before,page)}
 });
-test('amount, time, matrix and risk query only after the user submits, retaining completed results on return',async()=>{
+test('amount, time, matrix and risk query only after the user submits, reopening a previously queried page reads fresh results',async()=>{
  for(const page of ['amount','time','matrix','risk','providers','provider_payout']){
   const h=harness({page});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);assert.match(h.html(),/点击查询/);
   h.c.livePeriod('before');h.c.livePeriod('week');await h.c.liveLoad();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);
   await h.c.liveQuery();await settle();assert(h.L.results.length,page);const results=h.L.results,before=h.calls.length;
-  h.c.setPage('data_health');h.c.setPage(page);await settle();assert.equal(h.L.results,results);assert.equal(h.calls.length,before,page);
+  h.c.setPage('data_health');h.c.setPage(page);await settle();assert.notEqual(h.L.results,results);assert(h.L.results.length,page);assert(h.calls.length>before,page);
  }
 });
 test('platform order links prefill the chosen scope without querying, including a previously queried Orders tab',async()=>{

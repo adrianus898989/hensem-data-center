@@ -63,10 +63,10 @@ test('late selection failures after cancellation, changed identity/native/date/p
   const h=drawer.fixture(),idx=await openDrill(h);drift(h);h.calls[idx].reject(changed());await drawer.settle();assert.notEqual(h.api.state.reasonSelectionChanged,true);assert.doesNotMatch(h.html(),/原因分类已更新/);
  }
 });
-test('selection cache eviction keeps another platform and its source uncertainty',async()=>{
+test('a new selection rereads each platform and preserves source uncertainty',async()=>{
  const h=drawer.fixture();h.ctx.withdrawReasons(1);h.reply(0,atomic());await drawer.settle();h.ctx.withdrawReasonClose();
- const idx=await openDrill(h);h.calls[idx].reject(changed());await drawer.settle();const calls=h.calls.length;h.ctx.withdrawReasonClose();h.ctx.withdrawReasons(1);assert.equal(h.calls.length,calls);assert.equal(h.api.state.reasonData.coverage.complete,false);
- h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,calls+1,'same-platform old list was retired, not reused');
+ const idx=await openDrill(h);h.calls[idx].reject(changed());await drawer.settle();const calls=h.calls.length;h.ctx.withdrawReasonClose();h.ctx.withdrawReasons(1);assert.equal(h.calls.length,calls+1);assert.equal(h.api.state.reasonData,null);h.reply(calls,atomic());await drawer.settle();assert.equal(h.api.state.reasonData.coverage.complete,false);
+ h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,calls+2,'same-platform old list was retired, not reused');
 });
 test('current authority denial still clears all data instead of offering selection recovery',async()=>{
  const h=drawer.fixture(),idx=await openDrill(h);h.calls[idx].reject(Object.assign(Error('role_permission_denied'),{code:'42501'}));await drawer.settle();assert.equal(h.api.state.data,null);assert.equal(h.api.state.reasonSelectionChanged,false);

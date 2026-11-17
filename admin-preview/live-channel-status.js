@@ -21,6 +21,7 @@
  const identity=p=>JSON.stringify([p.id,p.source,p.country,p.scopeGroup??p.scope_group??'',p.sourceName??p.source_name??p.name??'',p.timezone||'',p.currency||'',supported(p),p.capabilities?.channelStatusSource||'']);
  function create(c){
   const L=c.L;let serial=0,S=initial(),freshnessTimer=null,autoTimer=null,activation=null,inflight=null,browseComposing=false;
+  const crossSuggestions=new Map();
   function crossInitial(){return {source:'',country:'',platformId:'',draft:'',query:null,dirty:false,status:'idle',attemptAt:0,collapsed:[]};}
   function browseInitial(){return {platformIds:[],scopeEmpty:true,draftPlatformIds:[],draftAll:false,platformSearch:'',providerSearch:'',providers:[],query:null,status:'idle',attemptAt:0,pickerOpen:false,providerPickerOpen:false,initialized:false,collapsed:[],view:null};}
   function initial(){return {mode:'grouped',browse:browseInitial(),cross:crossInitial(),singleView:null,version:4,source:'',country:'',platformId:'',search:'',page:1,size:20,tab:'charge',provider:'',filterStatus:'all',category:'',currency:'',channelQuery:'',merchantQuery:'',channelDraft:'',merchantDraft:'',includeAbsent:false,expanded:null,accessError:'',cache:{}};}
@@ -41,11 +42,13 @@
   const paint=()=>{if(active()&&!browseComposing)c.render();};
   function stopTimers(){if(freshnessTimer!==null)root.clearTimeout?.(freshnessTimer);if(autoTimer!==null)root.clearTimeout?.(autoTimer);freshnessTimer=autoTimer=null;activation=null;}
   function cancel(keepComposition=false){if(!keepComposition)browseComposing=false;stopTimers();serial++;inflight=null;if(S.cross.status==='loading')S.cross.status='paused';if(S.browse?.status==='loading')S.browse.status='paused';root.hensemLiveCancelRequests?.(['channelStatus']);for(const hit of Object.values(S.cache))if(hit.status==='loading')hit.status=hit.response?'ready':'paused';}
-  function clear(){cancel();S=initial();}
-  function revoke(error){cancel();S.cache={};S.accessError=error?.message||'当前角色未获查询权限';L.pageQueried=false;paint();}
+  function clear(){cancel();crossSuggestions.clear();S=initial();}
+  function revoke(error){cancel();crossSuggestions.clear();S.cache={};S.accessError=error?.message||'当前角色未获查询权限';L.pageQueried=false;paint();}
+  function clearUnauthorized(){cancel();crossSuggestions.clear();S.cache={};S.cross=crossInitial();S.browse=browseInitial();L.pageQueried=false;}
   const authFailure=error=>['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code);
   function reconcile(){
    const rows=directory(),valid=new Map(rows.map(p=>[p.id,identity(p)]));for(const [id,hit]of Object.entries(S.cache))if(valid.get(id)!==hit.key)delete S.cache[id];
+   for(const [id,hint] of crossSuggestions)if(valid.get(id)!==hint.key)crossSuggestions.delete(id);
    const previousScope=[S.source,S.country];
    const sourceList=systems();if(!sourceList.includes(S.source))S.source=sourceList[0]||'';
    const countryList=countries();if(!countrySelectable(S.country)){S.country='';S.countryRequired=true;}if(!countryList.includes(S.country)&&!S.countryRequired)S.country=countryList.includes(L.country)?L.country:countryList[0]||'';
@@ -55,20 +58,24 @@
    S.page=Math.min(Math.max(1,Number(S.page)||1),Math.max(1,Math.ceil(platforms().length/S.size)));if(inflight&&(['cross','grouped'].includes(inflight.mode)?inflight.targets.some(p=>valid.get(p.id)!==identity(p))||inflight.mode==='grouped'&&inflight.key!==browseKey():!selected()||inflight.key!==identity(selected())))cancel();
   }
   function capture(){const value=copy(S),hit=entry();return {...value,status:hit?.status||'idle',response:hit?.response||null,error:hit?.error||'',receivedAt:hit?.receivedAt||0};}
+  function captureControls(){
+   const {cache,accessError,...controls}=S;
+   return copy({...controls,browse:{...S.browse,status:'idle',attemptAt:0},cross:{...S.cross,status:'idle',attemptAt:0}});
+  }
   function restore(value){
-   cancel();S=[2,3,4].includes(value?.version)?copy(value):initial();
-   if(value?.version===1&&value.scope?.platforms?.length===1&&value.response){const p=value.scope.platforms[0];S.mode='single';S.source=system(p)||'';S.country=p.country||'';S.platformId=p.id;S.cache[p.id]={key:identity(p),status:value.status==='loading'?'paused':value.status,response:copy(value.response),receivedAt:value.receivedAt||0,lastSuccessAt:value.response.queriedAt,attemptAt:value.receivedAt||0,error:value.error||''};}
+   cancel();crossSuggestions.clear();S=[2,3,4].includes(value?.version)?copy({...value,cache:{},response:null}):initial();
+   if(value?.version===1&&value.scope?.platforms?.length===1&&value.response){const p=value.scope.platforms[0];S.mode='single';S.source=system(p)||'';S.country=p.country||'';S.platformId=p.id;}
    S.mode=['single','grouped','cross'].includes(S.mode)?S.mode:'single';S.cross={...crossInitial(),...(S.cross&&typeof S.cross==='object'&&!Array.isArray(S.cross)?S.cross:{})};for(const key of ['source','country','platformId','draft'])S.cross[key]=typeof S.cross[key]==='string'?S.cross[key].slice(0,200):'';S.cross.collapsed=Array.isArray(S.cross.collapsed)?S.cross.collapsed.filter(x=>typeof x==='string'):[];if(S.cross.status==='loading')S.cross.status='paused';
    S.browse={...browseInitial(),...(S.browse&&typeof S.browse==='object'&&!Array.isArray(S.browse)?S.browse:{})};for(const key of ['platformIds','draftPlatformIds','providers','collapsed'])S.browse[key]=Array.isArray(S.browse[key])?[...new Set(S.browse[key].filter(x=>typeof x==='string'&&x.length<=200))]:[];for(const key of ['platformSearch','providerSearch'])S.browse[key]=typeof S.browse[key]==='string'?S.browse[key].slice(0,200):'';S.browse.scopeEmpty=S.browse.scopeEmpty===true;S.browse.draftAll=S.browse.draftAll===true;S.browse.pickerOpen=false;S.browse.providerPickerOpen=false;S.browse.initialized=S.browse.initialized===true;S.browse.view=normalizeSingleView(S.browse.view);if(S.browse.status==='loading')S.browse.status='paused';
-   // Retire the all-platform default without discarding validated snapshots.
+   // Restore the previously selected platform only if it is still authorized.
    // A legacy multi-selection becomes one still-authorized platform, never all.
    if(value?.mode==='browse'){
     const rows=directory(),chosen=S.browse.platformIds.map(id=>rows.find(p=>p.id===id)).find(Boolean)||rows.find(p=>p.id===S.platformId);
     if(chosen){S.source=system(chosen);S.country=chosen.country;S.platformId=chosen.id;}
     S.mode='single';S.provider=S.browse.providers.length===1?S.browse.providers[0]:'';S.singleView=null;S.cross=crossInitial();
    }
-   S.version=4;
-   if(!S.cache||typeof S.cache!=='object'||Array.isArray(S.cache))S.cache={};for(const hit of Object.values(S.cache))if(hit.status==='loading')hit.status=hit.response?'ready':'paused';
+   S.version=4;S.cache={};S.browse.attemptAt=0;S.cross.attemptAt=0;
+   if(S.browse.query)S.browse.status='paused';if(S.cross.query)S.cross.status='paused';
    S.tab=['charge','withdraw'].includes(S.tab)?S.tab:'charge';S.includeAbsent=S.includeAbsent===true;S.size=[20,30,50,100,500].includes(S.size)?S.size:20;S.filterStatus=['all','on','off','unknown'].includes(S.filterStatus)?S.filterStatus:'all';S.provider=typeof S.provider==='string'?S.provider:'';S.category=typeof S.category==='string'?S.category:'';S.search=typeof S.search==='string'?S.search:'';for(const key of ['currency','channelQuery','merchantQuery','channelDraft','merchantDraft'])S[key]=typeof S[key]==='string'?S[key].slice(0,200):'';
    S.singleView=normalizeSingleView(S.singleView);
   }
@@ -85,17 +92,20 @@
    }
    return copy(response);
   }
-  async function load(automatic=false,force=false){
-   if(S.mode==='grouped')return loadBrowse(automatic,force);
-   if(S.mode==='cross')return loadCross(automatic,force);
+  async function load(automatic=false){
+   if(S.mode==='grouped')return loadBrowse(automatic);
+   if(S.mode==='cross')return loadCross(automatic);
    if(!active()||!allowed('query')||!visible()||!ready()||automatic&&S.accessError)return;S.accessError='';reconcile();const p=selected();if(!p)return;
    if(inflight&&inflight.key===identity(p))return inflight.promise;
-   const cached=entryFor(p);if(!force&&cached?.response&&!cached.error&&cached.status==='ready'&&Date.now()-(cached.attemptAt||0)<REFRESH_MS){L.pageQueried=true;L.dirty=false;paint();return;}
-   stopTimers();const token=++serial,platformKey=identity(p),previous=entryFor(p),hit={key:platformKey,status:supported(p)?'loading':'ready',response:previous?.response||null,receivedAt:previous?.receivedAt||0,lastSuccessAt:previous?.lastSuccessAt||null,attemptAt:Date.now(),error:''};S.cache[p.id]=hit;L.pageQueried=true;L.dirty=false;L.loading=false;
+   stopTimers();
+   const token=++serial,platformKey=identity(p);
+   S.cache={};
+   const hit={key:platformKey,status:supported(p)?'loading':'ready',response:null,receivedAt:0,lastSuccessAt:null,attemptAt:Date.now(),error:''};
+   S.cache[p.id]=hit;L.pageQueried=true;L.dirty=false;L.loading=false;
    if(!supported(p)){paint();return;}paint();
-   const work=Promise.resolve().then(async()=>{try{const response=await c.request({action:'channelStatus',platformIds:[p.id],direction:'all'});if(token!==serial)return;if(!allowed('view')||!allowed('query')){revoke();return;}if(!current()||!visible()||identity(selected())!==platformKey)return;hit.response=validate(response,p);hit.receivedAt=Date.now();hit.lastSuccessAt=response.queriedAt;hit.status='ready';}
+   const work=Promise.resolve().then(async()=>{try{if(token!==serial||!current()||!visible()||!allowed('query'))return;const response=await c.request({action:'channelStatus',platformIds:[p.id],direction:'all'});if(token!==serial)return;if(!allowed('view')||!allowed('query')){revoke();return;}if(!current()||!visible()||identity(selected())!==platformKey)return;hit.response=validate(response,p);hit.receivedAt=Date.now();hit.lastSuccessAt=response.queriedAt;hit.status='ready';}
     catch(error){if(token!==serial)return;if(authFailure(error)||!allowed('view')||!allowed('query')){revoke(error);return;}if(!current()||!visible()||identity(selected())!==platformKey)return;hit.status=hit.response?'ready':'error';hit.error=error?.message||'通道状态读取失败';}
-    finally{if(token===serial){inflight=null;paint();}}});inflight={key:platformKey,promise:work};return work;
+    finally{if(token===serial){inflight=null;if(hit.status==='loading')hit.status='paused';paint();}}});inflight={key:platformKey,promise:work};return work;
   }
   function activate(){
    if(S.mode==='grouped'){activateBrowse();return;}
@@ -233,7 +243,7 @@
    if(!allowed('query'))return html+'<div class="channel-empty">当前角色未获查询权限</div>';
    if(S.accessError)return html+'<div class="channel-update-error" role="alert">'+E(S.accessError)+' · 点击上方平台重新验证授权。</div>';
    if(!supported(p))return html+'<div class="channel-unavailable">未接入通道快照：'+E(p.name)+'</div>';
-   if(hit?.error)html+='<div class="channel-update-error" role="alert">更新失败：'+E(hit.error)+(hit.response?' · 保留上次成功读取的快照':'')+'</div>';
+   if(hit?.error)html+='<div class="channel-update-error" role="alert">更新失败：'+E(hit.error)+'</div>';
    if(hit?.status==='loading')html+='<div class="channel-update-status" role="status">'+(hit.response?'正在刷新，显示上次快照…':'正在读取最新通道快照…')+'</div>';
    if(!hit?.response)return html+'<div class="channel-empty">'+(hit?.status==='paused'?'读取已暂停，点击上方平台重新读取。':hit?.status==='loading'?'读取中…':hit?.error?(options.hideToolbar?'点击刷新快照重试。':'点击上方平台重试。'):'当前平台将自动读取；点击上方平台可重新读取。')+'</div>';
    if(L.dirty)return html+'<div class="channel-empty">范围已变化，点击上方平台重新读取。</div>';
@@ -245,7 +255,7 @@
    return html+'</section>'+(options.grouped&&part.length?'<div class="channel-group-scroll-hint"><span>首列固定 · 左右滚动查看全部字段</span><button type="button" onclick="liveChannelBrowseScroll(this)" aria-label="向右查看 '+E(p.name)+' 的更多通道字段">更多字段 →</button></div>':'')+'<p class="channel-scope-note">'+(system(p)==='AR'&&S.tab==='withdraw'?'只读展示源站提现配置 · 成功率统计为今日已提交笔数 / 近1小时成功笔数 · 字典待采集表示尚未收到源字典 · 源站写操作未接入':'只读展示源站配置 · 成功率按源站口径 · 低于 45% 标红')+' · — 表示源站未提供</p>';
   }
   function render(){
-   if(!active()){if(c.getPage()===PAGE){cancel();S.cache={};S.cross=crossInitial();S.browse=browseInitial();L.pageQueried=false;}else stopTimers();return '';}if(!ready())return '<div class="channel-empty">正在读取账号可见的平台目录…</div>';reconcile();if(!allowed('query')){cancel();S.cache={};S.cross=crossInitial();S.browse=browseInitial();L.pageQueried=false;}if(S.mode==='grouped')seedBrowseSelection();activate();scheduleFreshness();if(S.mode==='grouped')return renderBrowse();if(S.mode==='cross')return renderCross();
+   if(!active()){if(c.getPage()===PAGE)clearUnauthorized();else stopTimers();return '';}if(!ready())return '<div class="channel-empty">正在读取账号可见的平台目录…</div>';reconcile();if(!allowed('query'))clearUnauthorized();if(S.mode==='grouped')seedBrowseSelection();activate();scheduleFreshness();if(S.mode==='grouped')return renderBrowse();if(S.mode==='cross')return renderCross();
    const list=platforms(),pages=Math.max(1,Math.ceil(list.length/S.size)),from=(S.page-1)*S.size,items=list.slice(from,from+S.size);
    const sourceTabs='<div class="channel-source-tabs" role="tablist" aria-label="源系统">'+systems().map((value,i)=>'<button type="button" role="tab" aria-selected="'+(S.source===value)+'" class="'+(S.source===value?'active':'')+'" onclick="liveChannelSource('+i+')">'+systemLabel(value)+'</button>').join('')+'</div>';
    const countryTabs='<div class="channel-country-tabs" role="tablist" aria-label="国家和盘口">'+countries().map((value,i)=>'<button type="button" role="tab" aria-selected="'+(S.country===value)+'" class="'+(S.country===value?'active':'')+'" onclick="liveChannelCountry('+i+')">'+E(value)+'</button>').join('')+'</div>';
@@ -260,12 +270,13 @@
   const browseProviders=()=>[...new Set(browseTargets().flatMap(p=>providers(p)))].sort((a,b)=>a.localeCompare(b));
   function browseCategories(){const values=new Map();for(const p of browseTargets())for(const item of categories(p)){const old=values.get(item.id);if(old){old.names.add(item.name);old.sort=Math.min(old.sort,item.sort);}else values.set(item.id,{id:item.id,names:new Set([item.name]),sort:item.sort});}return [...values.values()].map(x=>({id:x.id,name:[...x.names].join(' / ')+' · 源 ID '+x.id,sort:x.sort})).sort((a,b)=>a.sort-b.sort||a.name.localeCompare(b.name));}
   const browseCurrencies=()=>[...new Set(browseTargets().flatMap(p=>currencies(p)))].sort((a,b)=>a.localeCompare(b));
-  async function loadBrowse(automatic=false,force=false){
+  async function loadBrowse(automatic=false){
    if(!active()||S.mode!=='grouped'||!ready()||!visible()||!allowed('query')||automatic&&S.accessError)return;
    reconcile();seedBrowseSelection();const targets=browseTargets(),key=browseKey();if(inflight?.mode==='grouped'&&inflight.key===key)return inflight.promise;
    cancel(true);const token=serial;S.accessError='';S.browse.query={key,ids:targets.map(p=>p.id)};S.browse.status='loading';S.browse.attemptAt=Date.now();L.dirty=false;L.pageQueried=true;L.loading=false;
-   const pending=targets.filter(p=>supported(p)&&(force||!entryFor(p)?.response||entryFor(p)?.error||Date.now()-(entryFor(p)?.attemptAt||0)>=REFRESH_MS));
-   for(const p of pending){const prior=entryFor(p);S.cache[p.id]={key:identity(p),status:'loading',response:prior?.response||null,receivedAt:prior?.receivedAt||0,lastSuccessAt:prior?.lastSuccessAt||null,attemptAt:0,error:''};}
+   const pending=targets.filter(supported);
+   S.cache={};
+   for(const p of pending)S.cache[p.id]={key:identity(p),status:'loading',response:null,receivedAt:0,lastSuccessAt:null,attemptAt:0,error:''};
    const valid=()=>token===serial&&browseCurrent()&&allowed('view')&&visible()&&!L.dirty&&S.browse.query?.key===key&&browseKey()===key&&targets.every(p=>directory().some(x=>identity(x)===identity(p)));
    const work=Promise.resolve().then(async()=>{try{
     for(let offset=0;offset<pending.length;offset+=20){if(!allowed('view')||!allowed('query')){revoke();return;}if(!valid())return;const batch=pending.slice(offset,offset+20);for(const p of batch)S.cache[p.id].attemptAt=Date.now();
@@ -325,7 +336,7 @@
   root.liveChannelBrowseQuery=(channel,merchant='')=>{if(!browseCurrent())return;S.channelQuery=String(channel??'').trim().slice(0,200);S.merchantQuery=allowed('detail')?String(merchant??'').trim().slice(0,200):'';S.channelDraft=S.channelQuery;S.merchantDraft=S.merchantQuery;S.expanded=null;paint();};
   root.liveChannelBrowseSubmit=form=>{const channel=form?.elements?.namedItem?.('channel'),merchant=form?.elements?.namedItem?.('merchant');if(channel)root.liveChannelBrowseQuery(channel.value,merchant?.value||'');};
   root.liveChannelBrowseClearFilters=()=>{if(!browseCurrent())return;resetLocalFilters();S.includeAbsent=false;paint();};
-  root.liveChannelBrowseRefresh=()=>{if(!active()||S.mode!=='grouped'||inflight)return;return loadBrowse(false,true);};
+  root.liveChannelBrowseRefresh=()=>{if(!active()||S.mode!=='grouped'||inflight)return;return loadBrowse(false);};
   root.liveChannelBrowseToggle=(id,index)=>{if(!browseCurrent()||!allowed('detail')||!Number.isSafeInteger(index))return;const p=browseTargets().find(x=>x.id===id),x=p&&allRows(p)[index];if(!x)return;const key=rowKey(x);S.expanded=S.expanded===key?null:key;paint();};
   const crossText=value=>String(value??'').trim().toLocaleLowerCase();
   const crossTargets=()=>directory().filter(p=>(!S.cross.source||system(p)===S.cross.source)&&(!S.cross.country||p.country===S.cross.country)&&(!S.cross.platformId||p.id===S.cross.platformId));
@@ -338,13 +349,14 @@
    if(!response||!Array.isArray(response.platforms)||response.platforms.length!==targets.length||!Array.isArray(response.snapshots)||new Set(response.platforms.map(p=>p?.id)).size!==targets.length||response.platforms.some(p=>!targets.some(t=>t.id===p?.id))||response.snapshots.some(s=>!targets.some(p=>p.id===s?.platformId)))throw Error('通道快照平台范围不匹配');
    return targets.map(p=>[p,validate({...response,platforms:response.platforms.filter(x=>x.id===p.id),snapshots:response.snapshots.filter(x=>x.platformId===p.id)},p)]);
   }
-  async function loadCross(automatic=false,force=false){
+  async function loadCross(automatic=false){
    if(!active()||!ready()||!visible()||!allowed('query')||automatic&&(S.accessError||S.cross.dirty))return;
    const name=crossText(S.cross.draft),targets=crossTargets();if(!name||S.cross.draft.trim().length>200||/[\u0000-\u001f\u007f]/.test(S.cross.draft)||!targets.length)return;
    const key=crossKey();if(inflight?.mode==='cross'&&inflight.key===key)return inflight.promise;
-   cancel();const token=serial;S.accessError='';S.cross.query={key,name,label:S.cross.draft.trim(),ids:targets.map(p=>p.id)};S.cross.dirty=false;S.cross.status='loading';S.cross.attemptAt=Date.now();L.dirty=false;L.pageQueried=true;L.loading=false;
-   const pending=targets.filter(p=>supported(p)&&(force||!entryFor(p)?.response||entryFor(p)?.error||Date.now()-(entryFor(p)?.attemptAt||0)>=REFRESH_MS));
-   for(const p of pending){const previous=entryFor(p);S.cache[p.id]={key:identity(p),status:'loading',response:previous?.response||null,receivedAt:previous?.receivedAt||0,lastSuccessAt:previous?.lastSuccessAt||null,attemptAt:0,error:''};}
+   cancel();crossSuggestions.clear();const token=serial;S.accessError='';S.cross.query={key,name,label:S.cross.draft.trim(),ids:targets.map(p=>p.id)};S.cross.dirty=false;S.cross.status='loading';S.cross.attemptAt=Date.now();L.dirty=false;L.pageQueried=true;L.loading=false;
+   const pending=targets.filter(supported);
+   S.cache={};
+   for(const p of pending)S.cache[p.id]={key:identity(p),status:'loading',response:null,receivedAt:0,lastSuccessAt:null,attemptAt:0,error:''};
    const valid=()=>token===serial&&S.mode==='cross'&&active()&&allowed('query')&&visible()&&ready()&&!L.dirty&&!S.cross.dirty&&S.cross.query?.key===key&&targets.every(p=>directory().some(x=>identity(x)===identity(p)));
    const work=Promise.resolve().then(async()=>{try{
     for(let offset=0;offset<pending.length;offset+=20){if(!allowed('view')||!allowed('query')){revoke();return;}if(!valid())return;const batch=pending.slice(offset,offset+20);for(const p of batch)S.cache[p.id].attemptAt=Date.now();
@@ -372,7 +384,8 @@
   }
   function rememberSingleView(){S.singleView=normalizeSingleView(Object.fromEntries(singleViewKeys.map(key=>[key,S[key]])));}
   function restoreSingleView(){if(S.singleView)Object.assign(S,S.singleView);S.singleView=null;}
-  function crossNames(){return [...new Set(directory().flatMap(p=>(entryFor(p)?.response?.snapshots||[]).flatMap(s=>s.channels.flatMap(r=>[r.provider,r.channel_name]).filter(x=>typeof x==='string'&&x.trim()))))].sort((a,b)=>a.localeCompare(b));}
+  function sourceNames(p){return [...new Set((entryFor(p)?.response?.snapshots||[]).flatMap(s=>s.channels.flatMap(r=>[r.provider,r.channel_name]).filter(x=>typeof x==='string'&&x.trim())))];}
+  function crossNames(){if(!allowed('view')||!allowed('query'))return [];return [...new Set(directory().flatMap(p=>{const hint=crossSuggestions.get(p.id);return hint?.key===identity(p)?hint.names:sourceNames(p);} ))].sort((a,b)=>a.localeCompare(b));}
   function crossState(row,snapshot){
    if(!middleSnapshot(snapshot))return '<span class="channel-state '+(!present(row)?'missing':row.enabled===true?'enabled':row.enabled===false?'disabled':'')+'" title="'+E(row.status_text||'')+'">'+E(status(row))+'</span>';
    const raw=E(row.status_text||'');if(!present(row))return '<span class="channel-state missing" title="'+raw+'">本次未出现</span>';
@@ -383,7 +396,7 @@
    const hit=entryFor(p),s=hit?.response?.snapshots.find(s=>s.direction===S.tab),rows=crossRows(p),open=!S.cross.collapsed.includes(p.id),time=s?.observedAt,warning=hit?.error||'',outdated=time&&crossStale(time,p),state=!supported(p)?'未接入':hit?.status==='loading'?'读取中':warning?'读取失败':!time?'尚未收到快照':s.complete!==true?'采集未完整':outdated?'超过 15 分钟未更新':'已更新';
    const rates=middleSnapshot(s)&&S.tab==='withdraw'?[]:['10m','30m','1h','24h'];
    const content=!supported(p)?'<div class="channel-empty">未接入通道快照</div>':!hit?.response?'<div class="channel-empty">'+(hit?.status==='loading'?'正在读取通道快照…':warning?'本批读取失败，请点击刷新重试':'尚未收到通道快照')+'</div>':!rows.length?'<div class="channel-empty">'+(time&&s.complete===true?'当前快照无匹配通道':'尚未收到完整快照，不能判定是否有匹配通道')+'</div>':'<div class="channel-scroll channel-cross-scroll" tabindex="0" aria-label="'+E(p.name)+'通道成功率，可横向滚动"><table class="channel-table channel-cross-table"><colgroup><col style="width:140px"><col style="width:130px"><col style="width:130px"><col style="width:190px">'+[1,2,3,4].map(()=>'<col style="width:110px">').join('')+'<col style="width:130px"></colgroup><thead><tr>'+['大类 / 通道 ID','支付供应商','前台显示名称','状态','近10分钟成功率','近30分钟成功率','近1小时成功率','近24小时成功率','最近出现'].map(h=>'<th scope="col">'+E(h)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(({row:r,s})=>'<tr class="'+(!present(r)?'channel-absent':'')+'"><th scope="row">'+E(r.category_name||r.category_id||'大类未提供')+'<small>'+E(r.channel_id)+'</small></th><td>'+E(r.provider||'—')+'</td><td>'+E(r.channel_name||'—')+'</td><td>'+crossState(r,s)+'</td>'+['10m','30m','1h','24h'].map(k=>'<td class="channel-rate-cell">'+(rates.length?percentage(sourceRate(r,s,k==='10m'&&middleSnapshot(s)?'15m':k)):'—')+'</td>').join('')+'<td>'+E(clock(rowObserved(r,s),p))+'</td></tr>').join('')+'</tbody></table></div>';
-   return '<article class="channel-cross-group" data-platform-id="'+E(p.id)+'"><header class="channel-cross-head"><button type="button" class="channel-cross-collapse" aria-expanded="'+open+'" onclick="liveChannelCrossCollapse('+index+')">'+(open?'▾':'▸')+' <strong>'+E(p.name)+'</strong><small>'+E(p.country)+' / '+systemLabel(system(p))+' · '+(time&&s?.complete===true?rows.filter(x=>present(x.row)).length+' 条匹配':'匹配待确认')+'</small></button><div class="channel-snapshot-times"><span>最新采集 '+E(clock(time,p))+' · '+E(p.timezone||'UTC')+'</span><span class="'+(outdated||warning||!time||s?.complete!==true?'channel-stale':'')+'">'+state+'</span></div></header>'+(open?(warning?'<div class="channel-update-error" role="alert">更新失败：'+E(warning)+(hit.response?' · 保留上次成功读取的快照':'')+'</div>':'')+content+(middleSnapshot(s)&&S.tab==='withdraw'?'<p class="channel-scope-note">源站此方向只提供笔数，未提供这些成功率。</p>':''):'')+'</article>';
+   return '<article class="channel-cross-group" data-platform-id="'+E(p.id)+'"><header class="channel-cross-head"><button type="button" class="channel-cross-collapse" aria-expanded="'+open+'" onclick="liveChannelCrossCollapse('+index+')">'+(open?'▾':'▸')+' <strong>'+E(p.name)+'</strong><small>'+E(p.country)+' / '+systemLabel(system(p))+' · '+(time&&s?.complete===true?rows.filter(x=>present(x.row)).length+' 条匹配':'匹配待确认')+'</small></button><div class="channel-snapshot-times"><span>最新采集 '+E(clock(time,p))+' · '+E(p.timezone||'UTC')+'</span><span class="'+(outdated||warning||!time||s?.complete!==true?'channel-stale':'')+'">'+state+'</span></div></header>'+(open?(warning?'<div class="channel-update-error" role="alert">更新失败：'+E(warning)+'</div>':'')+content+(middleSnapshot(s)&&S.tab==='withdraw'?'<p class="channel-scope-note">源站此方向只提供笔数，未提供这些成功率。</p>':''):'')+'</article>';
   }
   function crossResults(queried){
    const matching=queried.filter(p=>crossRows(p).length),remaining=queried.filter(p=>!matching.includes(p)),completeEmpty=remaining.filter(p=>{const hit=entryFor(p),snap=hit?.response?.snapshots.find(s=>s.direction===S.tab);return supported(p)&&!hit?.error&&hit?.status!=='loading'&&snap?.observedAt&&snap.complete===true&&!crossStale(snap.observedAt,p);}),unresolved=remaining.filter(p=>!completeEmpty.includes(p));
@@ -400,7 +413,13 @@
    if(!active()||!['single','grouped','cross'].includes(mode)||S.mode===mode)return;
    if(S.mode==='single')rememberSingleView();
    if(S.mode==='grouped')S.browse.view=normalizeSingleView(Object.fromEntries(singleViewKeys.map(key=>[key,S[key]])));
-   cancel();S.mode=mode;
+   cancel();crossSuggestions.clear();
+   if(mode==='cross'&&!S.cross.query&&allowed('query'))for(const p of directory()){
+    const names=sourceNames(p);if(names.length)crossSuggestions.set(p.id,{key:identity(p),names});
+   }
+   S.cache={};S.mode=mode;
+   if(mode==='grouped'&&S.browse.query)S.browse.status='paused';
+   if(mode==='cross'&&S.cross.query)S.cross.status='paused';
    if(mode==='single')restoreSingleView();
    if(mode==='grouped'){if(S.browse.view)Object.assign(S,S.browse.view);else if(S.singleView)Object.assign(S,S.singleView);reconcile();seedBrowseSelection();}
    L.dirty=false;paint();
@@ -410,12 +429,12 @@
   root.liveChannelCrossFilter=(key,value)=>{if(!active()||S.mode!=='cross'||!['source','country','platformId'].includes(key)||typeof value!=='string')return;if(key==='source'&&value&&!systems().includes(value)||key==='country'&&value&&!directory().some(p=>p.country===value)||key==='platformId'&&value&&!directory().some(p=>p.id===value&&(!S.cross.source||system(p)===S.cross.source)&&(!S.cross.country||p.country===S.cross.country)))return;cancel();S.cross[key]=value;if(key!=='platformId')S.cross.platformId='';S.cross.dirty=!!S.cross.query&&crossKey()!==S.cross.query.key;paint();};
   root.liveChannelCrossFromProvider=()=>{if(!current()||S.mode!=='single'||!S.provider||!providers().includes(S.provider))return;const name=S.provider;rememberSingleView();cancel();S.mode='cross';S.cross=crossInitial();S.cross.draft=name;return loadCross();};
   root.liveChannelCrossQuery=value=>{if(!active()||S.mode!=='cross')return;S.cross.draft=String(value??'').slice(0,200);return loadCross();};
-  root.liveChannelCrossRefresh=()=>{if(!active()||S.mode!=='cross'||S.cross.dirty||!S.cross.query||inflight)return;return loadCross(false,true);};
+  root.liveChannelCrossRefresh=()=>{if(!active()||S.mode!=='cross'||S.cross.dirty||!S.cross.query||inflight)return;return loadCross(false);};
   root.liveChannelCrossCollapse=index=>{if(!active()||S.mode!=='cross'||!Number.isSafeInteger(index))return;const p=crossPlatforms()[index];if(!p)return;S.cross.collapsed=S.cross.collapsed.includes(p.id)?S.cross.collapsed.filter(id=>id!==p.id):[...S.cross.collapsed,p.id];paint();};
   root.liveChannelCrossExpand=()=>{if(!active()||S.mode!=='cross')return;S.cross.collapsed=[];paint();};
   root.liveChannelCrossAbsent=value=>{if(!active()||S.mode!=='cross'||typeof value!=='boolean')return;S.includeAbsent=value;paint();};
   function choose(p){if(!active()||!p)return;if(inflight?.key===identity(p))return;const same=selected()?.id===p.id&&!!entryFor(p);cancel();S.platformId=p.id;if(!same)resetLocalFilters();L.dirty=false;L.pageQueried=!!entryFor(p)?.response;if(allowed('query')&&supported(p)&&visible())load(false);else paint();}
-  root.liveChannelRefresh=()=>{if(!active()||S.mode!=='single'||!allowed('query')||!visible()||!ready()||!supported(selected())||inflight)return;return load(false,true);};
+  root.liveChannelRefresh=()=>{if(!active()||S.mode!=='single'||!allowed('query')||!visible()||!ready()||!supported(selected())||inflight)return;return load(false);};
   root.liveChannelSource=index=>{if(!active()||!Number.isSafeInteger(index)||!systems()[index])return;cancel();S.source=systems()[index];S.country='';S.platformId='';S.search='';S.page=1;reconcile();choose(selected());};
   root.liveChannelCountry=index=>{if(!active()||!Number.isSafeInteger(index)||!countries()[index])return;cancel();S.country=countries()[index];S.countryRequired=false;S.platformId='';S.search='';S.page=1;reconcile();choose(selected());};
   root.liveChannelSelect=index=>{if(!active()||!Number.isSafeInteger(index))return;choose(platforms()[index]);};
@@ -447,7 +466,7 @@
    if(!detail){const hidden=new Set(['源通道名称','第三方商户 ID','备注','费率（源值）','费率口径','固定手续费','源更新时间','源站状态','源启用状态','通道可用状态','商户可用状态','源租户 ID','源租户名称','余额更新时间','三方商户昵称','三方商户号','三方通道编码','使用通道编码','固定通道编码','内置提现大类 ID','内置提现大类','网关地址','回调白名单 IP','最后修改人','源最后修改时间']);for(let i=4;i<result.length;i++)for(let j=0;j<result[3].length;j++)if(hidden.has(result[3][j]))result[i][j]='—';}return result;
   }
   root.document?.addEventListener?.('visibilitychange',()=>{if(!visible())cancel();else if(active())paint();});root.addEventListener?.('pagehide',clear);
-  return {load,cancel,clear,capture,restore,render,providers,canExport,exportRows};
+  return {load,cancel,clear,capture,captureControls,restore,render,providers,canExport,exportRows};
  }
  root.HensemLiveChannelStatus={create};
 })(window);

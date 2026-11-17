@@ -137,6 +137,9 @@ export function isDashboardAuthTerminalError(error: unknown): boolean {
 
 let sessionGeneration = 0;
 let memorySession: DashboardSession | null = null;
+// Some browsers allow a storage read after refusing a write. Only that exact
+// unmodified storage value may be shadowed by the tab's newer session or logout.
+let failedSessionWrite: { prior: string | null } | null = null;
 let observedStoredSession = false;
 let explicitlyLoggedOut = false;
 type SavedTokenSnapshot = { userId: string; accessToken: string; refreshToken: string };
@@ -372,7 +375,7 @@ async function dashboardNetworkFetch(
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; abort.abort(); }, options.timeoutMs ?? 15000);
     try {
-      const response = await fetch(input, { ...init, signal: abort.signal });
+      const response = await fetch(input, { ...init, cache: "no-store", signal: abort.signal });
       // Preserve the deadline until the complete response body arrives.
       const text = await response.text();
       init.signal?.throwIfAborted();
@@ -465,7 +468,7 @@ async function requestRefreshedSession(refreshToken: string): Promise<DashboardS
   const timer = setTimeout(() => abort.abort(), 15000);
   try {
     const response = await fetch(`${APPLICATION_GATEWAY}/api/dashboard-auth`, {
-      method: "POST", redirect: "error", credentials: "omit", signal: abort.signal,
+      method: "POST", redirect: "error", credentials: "omit", cache: "no-store", signal: abort.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "refresh", refresh_token: refreshToken }),
     });
@@ -617,19 +620,33 @@ export async function dashboardAuthenticatedFetch(
   const method = String(init?.method || "GET").toUpperCase();
   const canRetry = (method === "GET" || method === "HEAD") && options.retry401 !== false;
   const send = async (active: DashboardSession): Promise<Response> => {
+    init?.signal?.throwIfAborted();
     const current = currentSession(active);
     const headers = new Headers(init?.headers);
     headers.set("apikey", anonKey);
     headers.set("Authorization", `Bearer ${current.access_token}`);
+    let response: Response;
     try {
-      return await fetch(target.href, { ...init, method, headers, redirect: "error", credentials: "omit" });
+      response = await fetch(target.href, { ...init, method, headers, cache: "no-store", redirect: "error", credentials: "omit" });
     } catch {
+      init?.signal?.throwIfAborted();
       throw new DashboardHttpError("网络请求暂时失败，请稍后重试", 0, "network_error");
     }
+    try {
+      init?.signal?.throwIfAborted();
+      currentSession(current);
+    } catch (error) {
+      response.body?.cancel().catch(() => {});
+      throw error;
+    }
+    return response;
   };
+  init?.signal?.throwIfAborted();
   const active = await ensureDashboardSession(session);
   const first = await send(active);
   if (first.status !== 401 || !canRetry) return first;
+  first.body?.cancel().catch(() => {});
+  init?.signal?.throwIfAborted();
   const refreshed = await ensureDashboardSession(active, true);
   return send(refreshed); // Exactly one read-only replay; never refresh on 403.
 }
@@ -669,7 +686,7 @@ export function saveDashboardSession(session: DashboardSession | null) {
   if (session && !isSession(session)) throw new DashboardHttpError("登录状态不完整，请重新登录", 401, "refresh_invalid");
   if (session && freshSignIns.has(session)) currentFreshSignIn(session, readSavedDashboardSession());
   const previous = memorySession;
-  let previousText = previous ? JSON.stringify(previous) : null;
+  let previousText = failedSessionWrite ? failedSessionWrite.prior : previous ? JSON.stringify(previous) : null;
   if (typeof window !== "undefined") {
     try { previousText = window.localStorage.getItem(SESSION_KEY); } catch { /* Keep the memory-only comparison. */ }
   }
@@ -683,7 +700,9 @@ export function saveDashboardSession(session: DashboardSession | null) {
     freshSignIns.delete(session);
   }
   const text = next ? JSON.stringify(next) : null;
-  const changed = text !== previousText || (!session && Boolean(previous));
+  const previousEffectiveText = failedSessionWrite?.prior === previousText
+    ? (previous ? JSON.stringify(previous) : null) : previousText;
+  const changed = text !== previousEffectiveText || (!session && Boolean(previous));
   if (changed || !session) sessionGeneration += 1;
   memorySession = next;
   explicitlyLoggedOut = !next;
@@ -692,7 +711,8 @@ export function saveDashboardSession(session: DashboardSession | null) {
   try {
     if (!next) window.localStorage.removeItem(SESSION_KEY);
     else window.localStorage.setItem(SESSION_KEY, text!);
-  } catch { /* 本地记忆失败不影响本次会话 */ }
+    failedSessionWrite = null;
+  } catch { failedSessionWrite = { prior: previousText }; }
   if (changed) {
     try { window.dispatchEvent(new CustomEvent(DASHBOARD_SESSION_EVENT, { detail: { session: next } })); } catch { /* Event delivery must not discard tokens. */ }
   }
@@ -702,6 +722,8 @@ export function readSavedDashboardSession(): DashboardSession | null {
   if (typeof window === "undefined") return memorySession;
   try {
     const text = window.localStorage.getItem(SESSION_KEY);
+    if (failedSessionWrite?.prior === text) return memorySession;
+    failedSessionWrite = null;
     const parsed: unknown = text ? JSON.parse(text) : null;
     if (isSession(parsed)) {
       memorySession = parsed;

@@ -109,7 +109,7 @@ test('unknown success, unknown native currency and unsupported reference rules d
 });
 
 test('fee mode is retained by the merchant tab snapshot and cannot be changed through another page or an unauthorized callback',async()=>{
- const h=await setup();h.c.liveMerchantFeeMode('historical');h.c.setPage('time');h.L.feeEstimateMode='current';h.c.setPage('merchants');assert.equal(h.L.feeEstimateMode,'historical');assert.match(h.html(),/<option value="historical" selected>/);const calls=h.calls.length;
+ const h=await setup();h.c.liveMerchantFeeMode('historical');h.c.setPage('time');h.L.feeEstimateMode='current';h.c.setPage('merchants');assert.equal(h.L.feeEstimateMode,'historical');await settle();assert.match(h.html(),/<option value="historical" selected>/);const calls=h.calls.length;
  h.c.liveMerchantFeeMode('unsupported');assert.equal(h.L.feeEstimateMode,'historical');h.c.hensemRoleAllowed=()=>false;h.c.liveMerchantFeeMode('current');assert.equal(h.L.feeEstimateMode,'historical');h.c.hensemRoleAllowed=()=>true;h.c.state.page='overview';h.c.liveMerchantFeeMode('current');assert.equal(h.L.feeEstimateMode,'historical');assert.equal(h.calls.length,calls);
 });
 

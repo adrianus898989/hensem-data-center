@@ -10,7 +10,7 @@ test('production entry denies root, documents, assets and unsupported methods be
  const {serve}=await worker();
  for(const url of [site,site+'_next/static/chunks/app/page-abcdef123456.js',site+'index.html',site.replace('/hensem-data-center/','/')]){
   let calls=0;const r=await serve(request(url),env,async target=>{calls++;assert.equal(target,gate);return decision(false)});
-  assert.equal(r.status,403);assert.equal(await r.text(),'Access denied');assert.equal(r.headers.get('cache-control'),'no-store');assert.equal(calls,1);
+  assert.equal(r.status,403);assert.equal(await r.text(),'Access denied');assert.equal(r.headers.get('cache-control'),'no-store');assert.equal(r.headers.get('cdn-cache-control'),'no-store');assert.equal(calls,1);
  }
  const post=await serve(request(site,{method:'POST',body:'private'}),env,async target=>{assert.equal(target,gate);return decision(false)});
  assert.equal(post.status,403);assert.equal(await post.text(),'Access denied');
@@ -21,7 +21,7 @@ test('only trusted CF ingress IP crosses the gate; credentials, claimed account 
  const r=await serve(request(site+'?ip=198.51.100.7&account=synthetic-owner',{headers:{Authorization:'Bearer private',Cookie:'private=1','x-portal-proxy-key':'forged','x-portal-client-ip':'198.51.100.7','X-Forwarded-For':'198.51.100.7','X-Real-IP':'198.51.100.7'}}),env,async(url,options)=>{
   calls.push(url);if(url===gate){assert.deepEqual(options.headers,{'Content-Type':'application/json',apikey:'sb_publishable_0DFLEmUvGBp1GYQ7jNo4IA_O1PeA9zV','x-portal-proxy-key':key,'x-portal-client-ip':'203.0.113.7'});assert.equal(options.body,'{}');assert.equal(options.redirect,'manual');assert.equal(options.cache,'no-store');assert(options.signal);return decision(true)}
   assert.equal(url,'https://adrianus898989.github.io/hensem-data-center/');assert.deepEqual(Object.keys(options.headers).sort(),['Accept','Cache-Control']);return new Response('public page',{headers:{'Content-Type':'text/html'}});
- });assert.equal(r.status,200);assert.equal(await r.text(),'public page');assert.equal(r.headers.get('cache-control'),'private, no-store');assert.equal(calls.length,2);
+ });assert.equal(r.status,200);assert.equal(await r.text(),'public page');assert.equal(r.headers.get('cache-control'),'private, no-store');assert.equal(r.headers.get('cdn-cache-control'),'no-store');assert.equal(calls.length,2);
 });
 test('missing or malformed ingress/proxy configuration never falls back to forwarding headers or makes a network request',async()=>{
  const {serve}=await worker();

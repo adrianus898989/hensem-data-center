@@ -24,8 +24,8 @@ test('unresolved options do not block main-only ALL and first Tuk reads its exac
  const packets=h.calls.filter(q=>q.action==='aggregatePrepared');assert(packets.every(q=>q.providerReuseNames===undefined));assert(packets.every(q=>q.requests.every(r=>r.providerReuseNames===undefined)));
  const clocks=JSON.stringify(h.L.results.map(r=>r._preparedPublication));h.c.liveProvider('TukPay');await h.c.liveQuery();assert.equal(count(h),before+12);assert.equal(h.L.results.length,18);assert.equal(h.L.comparisonResults.length,18);
  assert.equal(h.L.results[0].groups.provider[0].all_amount,'9007199254740993.0000000000001');assert.equal(h.L.results[0].groups.provider[0].success_amount,null);assert(h.L.results.slice(1).every(r=>r.groups.provider.length===0&&r.total===0));assert.equal(JSON.stringify(h.L.results.map(r=>r._preparedPublication)),clocks);
- h.c.liveProvider('');await h.c.liveQuery();h.c.liveProvider('TukPay');await h.c.liveQuery();assert.equal(count(h),before+12);
- release({providers:['NewWinPay','TukPay']});await new Promise(r=>setTimeout(r,0));assert.equal(count(h),before+12);
+ h.c.liveProvider('');await h.c.liveQuery();assert.equal(count(h),before+24);h.c.liveProvider('TukPay');await h.c.liveQuery();assert.equal(count(h),before+36);
+ release({providers:['NewWinPay','TukPay']});await new Promise(r=>setTimeout(r,0));assert.equal(count(h),before+36);
 });
 test('an unapproved unknown name still calls the authoritative server rather than inventing a zero',async()=>{
  const h=await ready({handler:q=>q.action==='providerOptions'?{providers:[]}:q.action==='aggregatePrepared'?server(q):undefined});h.c.liveProvider('');await h.c.liveQuery();const before=count(h);

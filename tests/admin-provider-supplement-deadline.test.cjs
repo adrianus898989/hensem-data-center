@@ -78,8 +78,8 @@ for(const action of ['submissionAnalysis','rates','workorders','intakeCoverage']
  h.c.render();h.c.render();await settle();assert.equal(h.history.length,calls,'render cannot restart paused supplementary work');
  h.waiting.splice(0);const retry=h.c.liveQuery();await finish(h,retry);
  assert.equal(h.L.results.length,3);assert.equal(h.submission.capture().results.length,3);assert.equal(h.submission.capture().status,'ready');assert.equal(h.L.workordersLoading,false);assert.equal(h.controls.ready(),true);
- assert.equal(h.history.slice(calls).filter(q=>q.action==='aggregate'&&q.startAt===h.history[0].startAt).length,0,'explicit query reuses completed main facts');
- assert(!h.history.slice(calls).some(q=>q.action==='submissionAnalysis'&&q.platformId===platforms[0].id),'completed exclusion stays cached');
+ assert.equal(h.history.slice(calls).filter(q=>q.action==='aggregate'&&q.startAt===h.history[0].startAt).length,3,'explicit query reads each current platform once');
+ assert(h.history.slice(calls).some(q=>q.action==='submissionAnalysis'&&q.platformId===platforms[0].id),'completed exclusion is reread');
 });
 for(const action of ['submissionAnalysis','rates','workorders','intakeCoverage'])test(action+': a current permission denial clears main and supplementary facts and leaves no active owner',async()=>{
  const h=await supplementaryStage(action),calls=h.history.length;
@@ -98,7 +98,7 @@ test('an explicit same-scope query replaces only supplementary work while in-fli
  for(let n=0;n<3;n++)await advance(h);const old=h.waiting.splice(0),before=h.history.length;
  assert.equal(h.L.loading,false);assert(h.deadline());const repeated=h.c.liveQuery();await settle();await first;
  assert(old.every(e=>e.signal.aborted));assert(h.history.length>before,'the enabled Query click starts a new actual query owner');
- assert(!h.history.slice(before).some(q=>q.action==='aggregate'),'same-scope main rows come from the existing exact cache');
+ assert(h.history.slice(before).some(q=>q.action==='aggregate'),'same-scope main rows come from a new read');
  await finish(h,repeated);assert.equal(h.L.results.length,3);assert.equal(h.controls.ready(),true);assert.equal(h.max(),3);
 });
 test('a late host cancellation from an abort-ignoring old supplemental request cannot pause its replacement query',async()=>{
@@ -121,7 +121,7 @@ for(const action of ['submissionAnalysis','rates','workorders','intakeCoverage']
  assert.equal(JSON.stringify(h.L.results),mainFacts);assert.equal(h.L.results.length,3);assert.equal(h.L.loading,false);assert.equal(h.L.workordersLoading,false);assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.restoredPage,true);assert.equal(h.active(),0);assert.equal(h.deadline(),undefined);
  h.c.render();await settle();assert.equal(h.history.length,prior);assert.equal(prepared.length,priorPrepared);assert.doesNotMatch(h.html(),/live-read-phase|剔除读取中/);
  h.waiting.splice(0);await finish(h,h.c.liveQuery());assert.equal(h.L.results.length,3);assert.equal(h.controls.ready(),true);
- const currentStart=prepared[0].requests[0].startAt;assert(!prepared.slice(priorPrepared).some(q=>q.requests.some(request=>request.startAt===currentStart)),'normal explicit Query reuses ready current-window prepared heads');
+ const currentStart=prepared[0].requests[0].startAt;assert(prepared.slice(priorPrepared).some(q=>q.requests.some(request=>request.startAt===currentStart)),'normal explicit Query reuses ready current-window prepared heads');
 });
 test('prepared read owners keep new identity/native facts and exact completed heads after obsolete cancellation or denial',async()=>{
  const cachePrefix=fs.readFileSync(path.join(__dirname,'admin-aggregate-cache.test.cjs'),'utf8').split(/\ntest\(/)[0];

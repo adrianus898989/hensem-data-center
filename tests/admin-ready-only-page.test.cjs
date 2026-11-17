@@ -73,14 +73,14 @@ test('a created-day ready miss retries only that native through the ordinary rea
  assert.equal(h.L.results.length,19);
 });
 
-test('created-day exact heads can serve a repeated query beyond 30 seconds and expire on their original five-minute clock',async()=>{
+test('each created-day query rereads the exact head, including inside the former expiry window',async()=>{
  const h=await setup({count:1});
  h.setHandler(q=>q.action==='aggregatePrepared'?result(q):other(q));
  await h.c.liveQuery();
  const mainCount=()=>reads(h).filter(q=>q.requests[0].startAt===mainStart).length;
  assert.equal(mainCount(),1);h.setNow('2026-09-23T12:00:45Z');await h.c.liveQuery();
- assert.equal(mainCount(),1);assert.equal(h.L.results[0]._preparedPublication.computedAt,'2026-09-23T11:59:00Z');
- h.setNow('2026-09-23T12:05:00Z');await h.c.liveQuery();assert.equal(mainCount(),2);
+ assert.equal(mainCount(),2);assert.equal(h.L.results[0]._preparedPublication.computedAt,'2026-09-23T11:59:00Z');
+ h.setNow('2026-09-23T12:05:00Z');await h.c.liveQuery();assert.equal(mainCount(),3);
 });
 
 for(const count of [1,2,3])test('small created cohort of '+count+' stays a single ready lookup',async()=>{

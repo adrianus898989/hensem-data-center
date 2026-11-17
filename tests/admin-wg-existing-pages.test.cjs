@@ -119,10 +119,10 @@ test('provider fee totals cannot turn unknown WG success-time facts into zero co
  assert.equal(row.estimated_fee,null);assert.equal(row.fee_complete,false);const sum=api.feeSummary([{...row,success_count:null,currency:'BRL'}]);assert.equal(sum.amount,null);assert.equal(sum.complete,false);assert.equal(sum.successCount,null);assert.match(api.feeCoverageText(sum),/不能计算手续费/);
 });
 
-for(const mixed of [false,true])test('real WG '+(mixed?'mixed-source':'empty')+' Query retains the completed fee directory across paints and repeats, while force replaces it',async()=>{
+for(const mixed of [false,true])test('real WG '+(mixed?'mixed-source':'empty')+' Query keeps fees through paints and rereads the directory on query and refresh',async()=>{
  const other={...WG,id:'88888888-8888-4888-8888-888888888888',name:'Synthetic known AR',source:'ar',capabilities:{}},platforms=mixed?[WG,other]:[WG],h=harness({platforms});await settle();scope(h);if(mixed){h.L.platform='all';h.L.multi.platform=[];}
  h.setHandler(q=>{if(q.action==='rates')return {rows:[{id:'synthetic-complete-rate',scopeType:'country',country:'巴西',provider:'Synthetic provider',collectFee:'4%',payoutFee:'3%'}],total:1};if(q.action==='aggregate'){const p=platforms.find(p=>p.id===q.platformId),r=mixed?(p.source==='wg'?wgResult():aggregate(p)):emptyWgResult();return {...r,startAt:q.startAt,endAt:q.endAt,successStartAt:q.successStartAt,successEndAt:q.successEndAt};}return {};});
  const run=h.c.liveQuery();await settle();await run;assert.equal(h.L.feeLookupError,'');assert.equal(h.L.feeLookupRows?.length,1);assert.match(h.html(),/成功时间口径未提供，手续费暂不可统计/);const snapshot=h.L.feeLookupRows,count=()=>h.calls.filter(q=>q.action==='rates').length,n=count();assert.equal(n,1);
- h.c.render();h.c.livePage(1,'local');assert.equal(h.L.feeLookupRows,snapshot);assert.equal(count(),n);await h.c.liveQuery();await settle();assert.equal(h.L.feeLookupRows,snapshot);assert.equal(count(),n);
- await h.c.liveRefresh();await settle();assert.equal(count(),n+1);assert.notEqual(h.L.feeLookupRows,snapshot);assert.equal(h.L.feeLookupRows?.length,1);assert.equal(h.L.feeLookupError,'');assert.match(h.html(),/成功时间口径未提供，手续费暂不可统计/);
+ h.c.render();h.c.livePage(1,'local');assert.equal(h.L.feeLookupRows,snapshot);assert.equal(count(),n);await h.c.liveQuery();await settle();assert.notEqual(h.L.feeLookupRows,snapshot);assert.deepEqual(h.L.feeLookupRows,snapshot);assert.equal(count(),n+1);
+ await h.c.liveRefresh();await settle();assert.equal(count(),n+2);assert.notEqual(h.L.feeLookupRows,snapshot);assert.equal(h.L.feeLookupRows?.length,1);assert.equal(h.L.feeLookupError,'');assert.match(h.html(),/成功时间口径未提供，手续费暂不可统计/);
 });

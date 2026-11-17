@@ -138,7 +138,7 @@ export function createSyncOriginalRateHandler(runtime: Runtime) {
       for (const sheet of workbook.meta.sheets) {
         const grid = await readOriginalGrid(googleRead, settings.sourceId, sheet.sheetId, workbook, runtime.now);
         const payload = JSON.stringify(grid);
-        if (encoder.encode(payload).byteLength > MAX_PAGE_BYTES) throw new SyncError("source_payload_too_large", 413);
+        if (encoder.encode(payload).byteLength > MAX_PAGE_BYTES) throw new SyncError("snapshot_payload_too_large", 413);
         // One native sheet is written at a time; never retain 15 complete grids
         // in memory or replace/delete the previously published generation.
         const stagingBody = JSON.stringify({ run_id: runId, sheet_id: sheet.sheetId, payload: grid, collected_at: grid.fetchedAt });
