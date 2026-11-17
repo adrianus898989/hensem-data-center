@@ -248,7 +248,7 @@ const rateCss=".original-rates-workspace { --original-rates-line:#dce5f1; displa
 const E=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const {buildTidyModel,tidyBodySourceCell,tidyStatusTone}=sourceTools;
 let options={},serial=0,pollTimer=null,paused=false,queriedSheet=null,filterRevision=0,directorySerial=0,directoryRead=null,directoryScheduled=false;
-const defaults=()=>({meta:null,metaLoading:false,metaError:'',metaAttempted:false,grid:null,sheetId:null,loading:false,error:'',view:'compact',query:'',type:'',platform:'',status:'',page:1,limit:20,cell:null,filterDirty:false,lastCheckedAt:null,sourceMode:'original',scopeIdentity:'',scoped:null,scopedOptions:null,scopedQueryKey:'',scopeType:'all',country:''});
+const defaults=()=>({meta:null,metaLoading:false,metaError:'',metaAttempted:false,grid:null,sheetId:null,loading:false,error:'',view:'compact',query:'',type:'',platform:'',status:'',page:1,limit:20,cell:null,filterDirty:false,lastCheckedAt:null,sourceMode:'original',scopeIdentity:'',scoped:null,scopedOptions:null,scopedQueryKey:'',scopeType:'all',country:'',platformLabel:null});
 let state=defaults();
 const limits=[20,30,50,100,500];
 const GROUP_LABELS={identity:'',collect:'代收',payout:'代付',platform:'平台',other:''};
@@ -312,7 +312,7 @@ function gridTable(value){
 function content(){
  if(state.sourceMode==='scoped')return scopedContent();
  const value=model(),title=state.grid?.sheet.title||state.meta?.sheets.find(s=>s.sheetId===state.sheetId)?.title||'各国家费率',max=Math.max(1,Math.ceil(value.rows.length/state.limit));
- const status=state.error?'<span role="alert">'+E(state.error)+(state.grid?' · 保留上次成功原表':'')+'</span>':state.loading?'<span role="status">读取原表中…</span>':state.metaLoading?'<span role="status">读取国家页签目录中…</span>':state.metaError?'<span role="alert">国家页签目录读取失败：'+E(state.metaError)+'</span>':'';
+ const status=state.error?'<span role="alert">'+E(state.error)+'</span>':state.loading?'<span role="status">读取原表中…</span>':state.metaLoading?'<span role="status">读取国家页签目录中…</span>':state.metaError?'<span role="alert">国家页签目录读取失败：'+E(state.metaError)+'</span>':'';
  const timestamp=state.grid?.fetchedAt?'<time class="original-rates-time" datetime="'+E(state.grid.fetchedAt)+'" title="Supabase 原表同步时间">Supabase · '+E(state.grid.fetchedAt.replace('T',' ').replace('Z',' UTC'))+'</time>':'';
  let html='<div class="original-rates-heading"><h2>'+E(title)+'<span>三方费率</span></h2><div class="original-rates-heading-actions">'+timestamp+'<span class="original-rates-refresh-state" title="仅当前页面可见且无待查询筛选、输入焦点或编辑时，每60秒检查正式发布数据">'+(queriedSheet===state.sheetId&&state.grid?(state.filterDirty||paused?'自动刷新暂停':'60s 自动刷新'):'手动查询')+'</span></div></div>';
  html+='<form class="original-rates-filters" onsubmit="event.preventDefault()" onkeydown="HensemLiveRatesRestored.filterKey(event)">'+input('query','三方 / 原字段')+select('type','类型 / 钱包',[['','全部类型'],...value.types.map(type=>[type,type])],!value.types.length)+select('platform','平台',[['','全部平台'],...value.platforms.map(column=>[String(column.sourceColumn),column.label])],!value.platforms.length)+select('status','平台状态',[['','全部状态'],['good','开启'],['paused','暂停 / 停用'],['unconnected','未接入 / 不支持'],['attention','备用 / 维护']],!value.model?.columns.some(column=>column.group==='platform'||column.kind==='status'))+'<div class="original-rates-filter-actions"><button type="button" onclick="HensemLiveRatesRestored.load()"'+(state.loading?' disabled':'')+'>查询</button><button type="button" onclick="HensemLiveRatesRestored.reset()">重置</button>'+(state.filterDirty?'<small>筛选待查询</small>':'')+'</div></form>';
@@ -330,14 +330,25 @@ function paint(){syncScope();const host=root.document?.getElementById('live-rate
 // current authenticated actor's permissions and data scope on every request.
 function desiredMode(){try{return options.isRestrictedScope?.()===true?'scoped':'original';}catch{return 'scoped';}}
 function identity(){try{return desiredMode()+':'+String(options.scopeKey?.()||'');}catch{return 'scoped:unknown';}}
+const activeRequests=new Set();
+let pendingLoad=null;
+async function readRate(request,payload){
+ const controller=typeof AbortController==='function'?new AbortController():null;
+ if(controller)activeRequests.add(controller);
+ try{return await request(payload,{signal:controller?.signal});}
+ finally{if(controller)activeRequests.delete(controller);}
+}
+function cancelReads(){
+ pendingLoad=null;for(const controller of activeRequests)controller.abort();activeRequests.clear();
+}
 function cancelDirectory(){directorySerial++;directoryRead=null;state.metaLoading=false;}
-function syncScope(){const key=identity(),mode=desiredMode();if(state.scopeIdentity===key&&state.sourceMode===mode)return;serial++;cancelDirectory();stopPoll();queriedSheet=null;filterRevision++;state={...defaults(),view:state.view,limit:state.limit,sourceMode:mode,scopeIdentity:key};}
+function syncScope(){const key=identity(),mode=desiredMode();if(state.scopeIdentity===key&&state.sourceMode===mode)return;serial++;cancelReads();cancelDirectory();stopPoll();queriedSheet=null;filterRevision++;state={...defaults(),view:state.view,limit:state.limit,sourceMode:mode,scopeIdentity:key};}
 // Only the sheet directory initializes on entry. A grid remains an explicit
 // query, and restricted accounts never call the original-sheet endpoint.
 function scheduleDirectory(){if(directoryScheduled)return;directoryScheduled=true;Promise.resolve().then(()=>{directoryScheduled=false;syncScope();if(state.sourceMode==='original'&&!state.meta&&!state.metaAttempted&&!state.loading&&active()&&root.document?.getElementById('live-rates-restored'))void loadDirectory();});}
 function readDirectory(request=options.request,scopeIdentity=state.scopeIdentity){
  if(directoryRead?.scopeIdentity===scopeIdentity&&directoryRead.request===request)return directoryRead.promise;
- const entry={scopeIdentity,request,promise:null};entry.promise=Promise.resolve().then(()=>{if(typeof request!=='function')throw Error('原表读取服务未接入');return request({action:'ratesSheet'});}).then(validateMeta).finally(()=>{if(directoryRead===entry)directoryRead=null;});directoryRead=entry;return entry.promise;
+ const entry={scopeIdentity,request,promise:null};entry.promise=Promise.resolve().then(()=>{if(typeof request!=='function')throw Error('原表读取服务未接入');return readRate(request,{action:'ratesSheet'});}).then(validateMeta).finally(()=>{if(directoryRead===entry)directoryRead=null;});directoryRead=entry;return entry.promise;
 }
 async function loadDirectory(){
  syncScope();if(state.sourceMode!=='original'||state.loading||state.metaLoading||!active())return;
@@ -353,14 +364,17 @@ function validateScoped(value,request){
  if(value.rows.length&&value.total<request.offset+value.rows.length||value.hasMore!== (value.total>request.offset+request.limit))throw Error('当前范围费率分页待核对');return value;
 }
 async function loadScoped(settings={}){
- syncScope();if(state.sourceMode!=='scoped')return;const automatic=settings.automatic===true;if(automatic&&!canRefresh())return;stopPoll();const current=++serial,scopeIdentity=state.scopeIdentity,revision=filterRevision,request=scopedRequest(),queryKey=JSON.stringify(request),previous=state.scopedQueryKey===queryKey?state.scoped:null;state.loading=true;state.error='';if(!previous)state.scoped=null;paint();
- try{if(typeof options.request!=='function')throw Error('费率读取服务未接入');const response=validateScoped(await options.request(request),request);if(current!==serial||scopeIdentity!==identity())return;if(automatic&&(!canRefresh(true)||revision!==filterRevision))return;
+ syncScope();if(state.sourceMode!=='scoped')return;const automatic=settings.automatic===true;if(automatic&&!canRefresh())return;stopPoll();const current=++serial,scopeIdentity=state.scopeIdentity,revision=filterRevision,request=scopedRequest(),queryKey=JSON.stringify(request);state.loading=true;state.error='';if(!automatic){discardValues();}paint();
+ try{if(typeof options.request!=='function')throw Error('费率读取服务未接入');const response=validateScoped(await readRate(options.request,request),request);if(current!==serial||scopeIdentity!==identity())return;if(revision!==filterRevision||automatic&&!canRefresh(true))return;
   state.scoped=response;state.scopedOptions=response.options;state.scopedQueryKey=queryKey;state.lastCheckedAt=typeof response.asOf==='string'?response.asOf:null;queriedSheet='scoped';if(revision===filterRevision)state.filterDirty=false;
- }catch(error){if(current!==serial||scopeIdentity!==identity())return;if(revoked(error)){state={...defaults(),view:state.view,limit:state.limit,sourceMode:'scoped',scopeIdentity};queriedSheet=null;}else state.scoped=previous;state.error=error?.message||'费率暂时无法读取';}
+ }catch(error){if(current!==serial||scopeIdentity!==identity())return;if(revoked(error)){state={...defaults(),view:state.view,limit:state.limit,sourceMode:'scoped',scopeIdentity};queriedSheet=null;}else discardValues();state.error=error?.message||'费率暂时无法读取';}
  finally{if(current===serial){state.loading=false;paint();schedule();}}
 }
+function discardValues(){
+ state.grid=null;state.scoped=null;state.scopedQueryKey='';state.lastCheckedAt=null;
+}
 function scopedContent(){
- const data=state.scoped,available=!!data,choices=state.scopedOptions||{countries:[],platforms:[]},platforms=new Map();for(const p of choices.platforms)if(!state.country||p.scopeGroup===state.country){const labels=platforms.get(p.value)||[];if(!labels.includes(p.country))labels.push(p.country);platforms.set(p.value,labels);}const error=state.error?'<span role="alert">'+E(state.error)+(available?' · 保留上次同条件成功结果':'')+'</span>':state.loading?'<span role="status">读取费率中…'+(available?' · 保留上次查询结果':'')+'</span>':'',auto=available&&queriedSheet==='scoped'?(state.filterDirty||paused?'自动刷新暂停':'60s 自动刷新'):'手动查询';
+ const data=state.scoped,available=!!data,choices=state.scopedOptions||{countries:[],platforms:[]},platforms=new Map();for(const p of choices.platforms)if(!state.country||p.scopeGroup===state.country){const labels=platforms.get(p.value)||[];if(!labels.includes(p.country))labels.push(p.country);platforms.set(p.value,labels);}const error=state.error?'<span role="alert">'+E(state.error)+'</span>':state.loading?'<span role="status">读取费率中…'+'</span>':'',auto=available&&queriedSheet==='scoped'?(state.filterDirty||paused?'自动刷新暂停':'60s 自动刷新'):'手动查询';
  let html='<div class="original-rates-heading"><h2>三方费率<span>当前账号可见范围</span></h2><div class="original-rates-heading-actions">'+(state.lastCheckedAt?'<time class="original-rates-time" datetime="'+E(state.lastCheckedAt)+'">读取于 '+E(state.lastCheckedAt.replace('T',' ').replace('Z',' UTC'))+'</time>':'')+'<span class="original-rates-refresh-state">'+auto+'</span></div></div>';
  html+='<form class="original-rates-filters" onsubmit="event.preventDefault()" onkeydown="HensemLiveRatesRestored.filterKey(event)">'+input('query','三方名称')+select('scopeType','费率范围',[['all','全部可见费率'],['country','国家通用'],['platform','平台专属']])+select('country','国家 / 分组',[['','全部可见国家'],...choices.countries.map(c=>[c.value,c.label])],!choices.countries.length)+select('platform','平台',[['','全部可见平台'],...[...platforms].map(([p,countries])=>[p,p+' · '+countries.join(' / ')])],!platforms.size)+'<div class="original-rates-filter-actions"><button type="button" onclick="HensemLiveRatesRestored.load()"'+(state.loading?' disabled':'')+'>查询</button><button type="button" onclick="HensemLiveRatesRestored.reset()">重置</button>'+(state.filterDirty?'<small>筛选待查询</small>':'')+'</div></form>';
  const columns=['三方 / 类型','国家 / 平台','代收费率 / 单笔','代收限额','代付费率 / 单笔','代付限额','状态','记录更新时间'];
@@ -370,31 +384,41 @@ function scopedContent(){
 }
 function stopPoll(){if(pollTimer!==null)root.clearTimeout?.(pollTimer);pollTimer=null;}
 function active(){return !paused&&options.isActive?.()!==false&&options.isDirty?.()!==true&&options.isEditing?.()!==true&&root.document?.visibilityState!=='hidden';}
-function canRefresh(inFlight=false){syncScope();const host=root.document?.getElementById('live-rates-restored');return (!root.document||!!host)&&!!(state.grid||state.scoped)&&queriedSheet===(state.sourceMode==='scoped'?'scoped':state.sheetId)&&(!state.loading||inFlight)&&!state.filterDirty&&state.cell===null&&active()&&!host?.contains?.(root.document?.activeElement);}
+function canRefresh(inFlight=false){syncScope();const host=root.document?.getElementById('live-rates-restored');return (!root.document||!!host)&&queriedSheet!==null&&queriedSheet===(state.sourceMode==='scoped'?'scoped':state.sheetId)&&(!state.loading||inFlight)&&!state.filterDirty&&state.cell===null&&active()&&!host?.contains?.(root.document?.activeElement);}
 function schedule(){stopPoll();if(paused||queriedSheet===null||typeof root.setTimeout!=='function')return;const delay=Number.isFinite(Number(options.pollMs))?Math.max(30000,Math.min(300000,Number(options.pollMs))):60000;pollTimer=root.setTimeout(()=>{pollTimer=null;if(canRefresh())void load(state.sheetId,{automatic:true});else schedule();},delay);pollTimer?.unref?.();}
-function clear(){serial++;cancelDirectory();stopPoll();queriedSheet=null;filterRevision++;state={...defaults(),view:state.view,limit:state.limit,sourceMode:desiredMode(),scopeIdentity:identity()};return paint();}
-function configure(next={}){serial++;cancelDirectory();stopPoll();options={...next};paused=false;queriedSheet=null;filterRevision++;state={...defaults(),view:state.view,limit:state.limit,sourceMode:desiredMode(),scopeIdentity:identity()};return render();}
+function clear(){serial++;cancelReads();cancelDirectory();stopPoll();queriedSheet=null;filterRevision++;state={...defaults(),view:state.view,limit:state.limit,sourceMode:desiredMode(),scopeIdentity:identity()};return paint();}
+function configure(next={}){serial++;cancelReads();cancelDirectory();stopPoll();options={...next};paused=false;queriedSheet=null;filterRevision++;state={...defaults(),view:state.view,limit:state.limit,sourceMode:desiredMode(),scopeIdentity:identity()};return render();}
 function revoked(error){return [401,403].includes(error?.status)||/permission|unauthor|role_|access denied|未获授权|没有.*权限|无.*权限|会话.*失效|登录.*失效|账号.*停用|ip.*白名单/i.test(String(error?.code||'')+' '+String(error?.message||''));}
-async function load(sheetId,settings={}){
+function load(sheetId,settings={}){
+ syncScope();if(paused||options.isActive?.()===false)return;
+ if(!settings.automatic&&options.onQuery?.()===false)return;
+ const key=JSON.stringify([state.scopeIdentity,sheetId??null,filterRevision,state.page,state.limit,settings.automatic===true]);
+ if(pendingLoad?.key===key)return pendingLoad.promise;
+ if(pendingLoad){cancelReads();cancelDirectory();}
+ const promise=readRates(sheetId,settings),owner={key,promise};pendingLoad=owner;
+ return promise.finally(()=>{if(pendingLoad===owner)pendingLoad=null;});
+}
+async function readRates(sheetId,settings={}){
  syncScope();if(state.sourceMode==='scoped')return loadScoped(settings);
  const automatic=settings.automatic===true;if(automatic&&!canRefresh())return;stopPoll();
- const current=++serial,request=options.request,scopeIdentity=state.scopeIdentity,revision=filterRevision,previous={meta:state.meta,grid:state.grid,sheetId:state.sheetId},requested=sheetId??state.sheetId;
+ const current=++serial,request=options.request,scopeIdentity=state.scopeIdentity,revision=filterRevision,previousMeta=state.meta,requested=sheetId??state.sheetId;
  directorySerial++;state.metaLoading=false;state.metaAttempted=true;state.metaError='';
- const previousPlatform=state.platform&&state.grid?buildTidyModel(state.grid).columns.find(c=>String(c.sourceColumn)===state.platform)?.label:null;
- state.loading=true;state.error='';if(requested!==state.grid?.sheet.sheetId)state.grid=null;paint();
+ const previousPlatform=state.platformLabel;
+ state.loading=true;state.error='';if(!automatic){discardValues();}else if(requested!==state.grid?.sheet.sheetId)discardValues();paint();
  try{
   if(typeof request!=='function')throw Error('原表读取服务未接入');
   const meta=await readDirectory(request,scopeIdentity);if(current!==serial||scopeIdentity!==identity()){syncScope();return;}
-  if(automatic&&(!canRefresh(true)||revision!==filterRevision))return;
+  if(revision!==filterRevision||automatic&&!canRefresh(true))return;
   sheetId=Number.isInteger(requested)?requested:meta.sheets.some(s=>s.sheetId===277747449)?277747449:meta.sheets[0]?.sheetId;
   if(!Number.isInteger(sheetId)||!meta.sheets.some(s=>s.sheetId===sheetId))throw Error('所选页签不在最新原表，请重新选择国家页签');
   if(!automatic){state.meta=meta;state.sheetId=sheetId;paint();}
-  if(automatic&&meta.fetchedAt&&meta.fetchedAt===previous.meta?.fetchedAt){state.lastCheckedAt=new Date().toISOString();return;}
-  const grid=validateGrid(await request({action:'ratesSheet',sheetId}),sheetId);if(current!==serial||scopeIdentity!==identity()){syncScope();return;}
-  if(automatic&&(!canRefresh(true)||revision!==filterRevision))return;
+  if(automatic&&state.grid&&meta.fetchedAt&&meta.fetchedAt===previousMeta?.fetchedAt){state.lastCheckedAt=new Date().toISOString();return;}
+  if(automatic){discardValues();paint();}
+  const grid=validateGrid(await readRate(request,{action:'ratesSheet',sheetId}),sheetId);if(current!==serial||scopeIdentity!==identity()){syncScope();return;}
+  if(revision!==filterRevision||automatic&&!canRefresh(true))return;
   if(previousPlatform&&state.platform){const matches=buildTidyModel(grid).columns.filter(c=>c.group==='platform'&&c.label===previousPlatform);if(matches.length!==1)throw Error('所选平台列在新版原表中待核对，请重置平台筛选');state.platform=String(matches[0].sourceColumn);}
   state.meta=meta;state.sheetId=sheetId;state.grid=grid;queriedSheet=sheetId;state.lastCheckedAt=new Date().toISOString();if(revision===filterRevision)state.filterDirty=false;state.page=Math.max(1,Math.min(state.page,Math.max(1,Math.ceil(model().rows.length/state.limit))));
- }catch(error){if(current!==serial||scopeIdentity!==identity()){syncScope();return;}if(revoked(error)){state={...defaults(),metaAttempted:true,view:state.view,limit:state.limit,sourceMode:desiredMode(),scopeIdentity:identity()};queriedSheet=null;}else if(previous.grid&&previous.sheetId===requested){state.meta=previous.meta;state.grid=previous.grid;state.sheetId=previous.sheetId;}else{state.grid=null;state.sheetId=requested;}
+ }catch(error){if(current!==serial||scopeIdentity!==identity()){syncScope();return;}if(revoked(error)){state={...defaults(),metaAttempted:true,view:state.view,limit:state.limit,sourceMode:desiredMode(),scopeIdentity:identity()};queriedSheet=null;}else{discardValues();state.sheetId=requested;}
   if(!state.meta)state.metaError=error?.message||'国家页签目录暂时无法读取';
   state.error=error?.message||'原表暂时无法读取';
  }finally{if(current===serial){state.loading=false;paint();schedule();}}
@@ -407,18 +431,22 @@ function filterKey(event){
  event.preventDefault();syncScope();if(event.repeat||state.loading||!active())return;
  return load();
 }
-function reset(){filterRevision++;state.filterDirty=true;state.scopeType='all';state.country='';state.query='';state.type='';state.platform='';state.status='';state.page=1;state.cell=null;return paint();}
+function reset(){state.platformLabel=null;options.onDraft?.();filterRevision++;state.filterDirty=true;state.scopeType='all';state.country='';state.query='';state.type='';state.platform='';state.status='';state.page=1;state.cell=null;return paint();}
 function set(key,value){
  syncScope();if(!['view','query','type','platform','status','country','scopeType'].includes(key))return render();
  if(key==='view'&&!['compact','full'].includes(value)||key==='status'&&!['','good','paused','unconnected','attention'].includes(value))return render();
  if(key==='scopeType'&&!['all','country','platform'].includes(value))return render();if(state.sourceMode==='scoped'&&key==='country'&&value&&!state.scopedOptions?.countries.some(c=>c.value===value))return render();if(state.sourceMode==='scoped'&&key==='platform'&&value&&!state.scopedOptions?.platforms.some(p=>p.value===value&&(!state.country||p.scopeGroup===state.country)))return render();
  const active=root.document?.activeElement,focused=active?.getAttribute?.('data-rates-filter')===key,start=active?.selectionStart,end=active?.selectionEnd;
- if(state[key]!==String(value)&&key!=='view'){filterRevision++;state.filterDirty=true;}state[key]=String(value).slice(0,state.sourceMode==='scoped'?200:1000);if(key==='country')state.platform='';state.page=1;state.cell=null;const result=paint();
+ if(state[key]!==String(value)&&key!=='view'){
+  options.onDraft?.();filterRevision++;state.filterDirty=true;
+  if(key==='platform'&&state.sourceMode==='original')state.platformLabel=state.grid?buildTidyModel(state.grid).columns.find(column=>String(column.sourceColumn)===String(value))?.label:null;
+  if(state.sourceMode==='scoped'){serial++;cancelReads();stopPoll();queriedSheet=null;discardValues();state.loading=false;}
+ }state[key]=String(value).slice(0,state.sourceMode==='scoped'?200:1000);if(key==='country')state.platform='';state.page=1;state.cell=null;const result=paint();
  if(focused){const input=root.document?.querySelector('#live-rates-restored [data-rates-filter="'+key+'"]');input?.focus();if(start!=null)input?.setSelectionRange?.(start,end);}
  return result;
 }
-function page(number,limit){syncScope();if(state.sourceMode==='scoped'){if(state.loading||state.filterDirty)return paint();const size=limits.includes(Number(limit))?Number(limit):state.limit,pageNo=Number.isInteger(number)?Math.max(1,Math.min(number,Math.max(1,Math.ceil((state.scoped?.total||0)/size)))):state.page;state.limit=size;state.page=limit!==undefined?1:pageNo;return loadScoped();}if(limits.includes(Number(limit))){state.limit=Number(limit);number=1;}if(Number.isInteger(number))state.page=Math.max(1,Math.min(number,Math.max(1,Math.ceil(model().rows.length/state.limit))));state.cell=null;return paint();}
-function selectSheet(id){if(!state.meta?.sheets.some(sheet=>sheet.sheetId===id))return;serial++;stopPoll();queriedSheet=null;filterRevision++;Object.assign(state,{sheetId:id,grid:null,loading:false,error:'',query:'',type:'',platform:'',status:'',page:1,cell:null,filterDirty:true});return paint();}
+function page(number,limit){syncScope();if(state.sourceMode==='scoped'){if(state.loading||state.filterDirty)return paint();const size=limits.includes(Number(limit))?Number(limit):state.limit,pageNo=Number.isInteger(number)?Math.max(1,Math.min(number,Math.max(1,Math.ceil((state.scoped?.total||0)/size)))):state.page;state.limit=size;state.page=limit!==undefined?1:pageNo;return load();}if(limits.includes(Number(limit))){state.limit=Number(limit);number=1;}if(Number.isInteger(number))state.page=Math.max(1,Math.min(number,Math.max(1,Math.ceil(model().rows.length/state.limit))));state.cell=null;return paint();}
+function selectSheet(id){if(!state.meta?.sheets.some(sheet=>sheet.sheetId===id))return;options.onDraft?.();serial++;cancelReads();cancelDirectory();stopPoll();queriedSheet=null;filterRevision++;Object.assign(state,{sheetId:id,grid:null,platformLabel:null,loading:false,error:'',query:'',type:'',platform:'',status:'',page:1,cell:null,filterDirty:true});return paint();}
 function cell(row,column){const current=model();state.cell=Number.isInteger(row)&&current.rows.includes(row)&&current.columns.some(c=>c.sourceColumn===column)?{row,column}:null;return paint();}
 function key(event,row,column){
  const current=model(),cols=current.columns,rows=current.rows.slice((state.page-1)*state.limit,state.page*state.limit);let r=rows.indexOf(row),c=cols.findIndex(item=>item.sourceColumn===column);
@@ -428,6 +456,6 @@ function key(event,row,column){
 }
 function locate(platform){const scroller=root.document?.querySelector('#live-rates-restored .tidy-rate-scroll');if(!scroller)return;const target=platform?scroller.querySelector('[data-platform-start]'):null;scroller.scrollLeft=target?Math.max(0,target.offsetLeft-Number(scroller.dataset.frozenWidth||44)):0;}
 function snapshot(){syncScope();return {sheetId:state.sheetId,loading:state.loading||state.metaLoading,error:state.error||state.metaError,view:state.view,query:state.query,type:state.type,platform:state.platform,status:state.status,page:state.page,limit:state.limit,hasGrid:!!(state.grid||state.scoped),sourceMode:state.sourceMode,scopeIdentity:state.scopeIdentity,filterDirty:state.filterDirty,lastCheckedAt:state.lastCheckedAt,autoRefresh:queriedSheet===(state.sourceMode==='scoped'?'scoped':state.sheetId)&&!!(state.grid||state.scoped),paused};}
-root.HensemLiveRatesRestored={render,configure,load,retryDirectory:loadDirectory,selectSheet,pause(){paused=true;cancelDirectory();stopPoll();if(state.loading){serial++;state.loading=false;}},resume(){paused=false;if(!state.meta&&!state.metaLoading)state.metaAttempted=false;schedule();scheduleDirectory();},clear,reset,set,page,cell,key,filterKey,locate,model,sourceTools,snapshot};
+root.HensemLiveRatesRestored={render,configure,load,retryDirectory:loadDirectory,selectSheet,pause(){paused=true;serial++;cancelReads();cancelDirectory();stopPoll();queriedSheet=null;discardValues();Object.assign(state,{meta:null,metaAttempted:false,metaError:'',scopedOptions:null,loading:false,error:'',cell:null});paint();},resumeQuery(){paused=false;return load();},resume(){paused=false;if(!state.meta&&!state.metaLoading)state.metaAttempted=false;schedule();scheduleDirectory();},clear,reset,set,page,cell,key,filterKey,locate,model,sourceTools,snapshot};
 if(typeof module!=='undefined'&&module.exports)module.exports=root.HensemLiveRatesRestored;
 })(typeof window!=='undefined'?window:globalThis);

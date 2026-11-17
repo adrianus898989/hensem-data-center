@@ -181,11 +181,11 @@ test('a manual query pending the catalog expires when leaving and returning to o
  await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert.equal(h.L.dirty,false);assert.equal(h.L.loading,false);assert.equal(h.L.results.length,1);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2,'a new explicit query still reads current and comparison once');
 });
 
-test('dedicated-page responses cache data but do not repaint a different destination',async()=>{
+test('dedicated-page responses are dropped when the destination changes',async()=>{
  const h=await ready(),old=deferred(),current=deferred();h.setHandler(q=>q.action==='providerConfig'?old.promise:q.action==='platformAssignments'?current.promise:Promise.resolve({rows:[],total:0}));
  h.c.setPage('provider_config');h.c.liveQuery();assert.equal(h.L.providerConfigLoading,true);
  const before=pageWrites(h);h.c.setPage('teams');assert.equal(pageWrites(h)-before,1);assert.equal(h.L.platformAssignmentsLoading,false);h.c.liveQuery();assert.equal(h.L.platformAssignmentsLoading,true);
- const waiting=pageWrites(h);old.resolve({rows:[],total:0});await settle();assert.equal(pageWrites(h),waiting);assert.equal(h.L.providerConfigLoading,false);assert(h.L.providerConfig,'completed old request remains reusable');
+ const waiting=pageWrites(h);old.resolve({rows:[],total:0});await settle();assert.equal(pageWrites(h),waiting);assert.equal(h.L.providerConfigLoading,false);assert.equal(h.L.providerConfig,null);
  current.resolve({rows:[],total:0});await settle();assert.equal(pageWrites(h)-waiting,1);assert.equal(h.L.platformAssignmentsLoading,false);assert.equal(h.c.state.page,'teams');
 });
 
@@ -256,10 +256,10 @@ test('provider options refresh updates search choices without touching business 
 });
 
 
-test('a late rate-table response remains cached without repainting the order selector',async()=>{
+test('a late rate-table response is discarded without repainting the order selector',async()=>{
  const h=await ready(),pending=deferred();h.L.fees=null;h.setHandler(q=>q.action==='rates'?pending.promise:Promise.resolve(aggregate()));
  h.c.setPage('rates');h.c.liveQuery();assert.equal(h.L.feeLoading,true);h.c.setPage('orders');const before=pageWrites(h);
- pending.resolve({rows:[],total:0,options:{countries:[],platforms:[],providers:[]}});await settle();assert.equal(pageWrites(h),before);assert.equal(h.L.feeLoading,false);assert(h.L.fees);assert.match(h.html(),/请先选择一个商户/);
+ pending.resolve({rows:[],total:0,options:{countries:[],platforms:[],providers:[]}});await settle();assert.equal(pageWrites(h),before);assert.equal(h.L.feeLoading,false);assert.equal(h.L.fees,null);assert.match(h.html(),/请先选择一个商户/);
 });
 
 function reportCatalogFixture(){

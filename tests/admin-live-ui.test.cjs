@@ -1774,3 +1774,51 @@ test('the workorder export action builds source-labeled CSV from this ticket pag
  assert.equal(record[header.indexOf('充值状态来源')],'充值单');assert.match(csv,/"仅状态快照","已匹配"/);
  h.c.workorderOperationsSet('orderNo','new-payment',false);await h.c.liveExport();assert.equal(h.blobs.length,1);
 });
+
+
+test('standalone withdrawal form reopens its authorized source once and an unsubmitted draft stays idle',async()=>{
+ const h=await ready({page:'auto_withdraw',manualOverview:true,handler:withdrawalHandler});
+ const reads=()=>h.calls.filter(q=>q.action==='autoWithdraw');
+ const form={reportValidity:()=>true,elements:{}};
+ await h.c.withdrawQueryForm(form);await settle();assert.equal(reads().length,1);
+ h.c.setPage('overview');h.c.setPage('auto_withdraw');await settle();
+ assert.equal(reads().length,2);assert.deepEqual(reads()[1],reads()[0]);
+ h.c.withdrawDate('from','2026-09-21');h.c.setPage('overview');h.c.setPage('auto_withdraw');await settle();
+ assert.equal(reads().length,2);assert.equal(h.L.from,'2026-09-21T00:00:00');
+ await h.c.withdrawQueryForm(form);assert.equal(reads().length,3);assert.notEqual(reads()[2].startAt,reads()[1].startAt);
+});
+
+test('workorder list and workload queries reopen their native sources and preserve the submitted mode',async()=>{
+ for(const page of ['workorders','workorder_workload']){
+  const h=await ready({page,manualOverview:true});
+  if(page==='workorders')h.c.workorderOperationsMode('orders');
+  h.c.workorderOperationsSet('country','印度');await h.c.workorderOperationsLoad(true);await settle();
+  const before=h.calls.filter(q=>q.action==='workorderRecords'||q.action==='portalOperationLogs');
+  assert(before.length>0);
+  h.c.setPage('overview');h.c.setPage(page);await settle();
+  const after=h.calls.filter(q=>q.action==='workorderRecords'||q.action==='portalOperationLogs');
+  assert.deepEqual(after.slice(before.length),before);
+  h.c.workorderOperationsSet('operator','Unsubmitted operator');h.c.setPage('overview');h.c.setPage(page);await settle();assert.equal(h.calls.filter(q=>q.action==='workorderRecords'||q.action==='portalOperationLogs').length,after.length);
+ }
+});
+
+test('changing authority discards the submitted specialized query before a tab can resume it',async()=>{
+ const h=await ready({page:'auto_withdraw',manualOverview:true,handler:withdrawalHandler}),form={reportValidity:()=>true,elements:{}};
+ await h.c.withdrawQueryForm(form);await settle();h.c.setPage('overview');
+ h.c.hensemDataScope={mode:'all',identity:'Other account'};h.c.setPage('auto_withdraw');await settle();
+ assert.equal(h.calls.filter(q=>q.action==='autoWithdraw').length,1);assert.equal(h.L.pageQueried,false);assert(!h.html().includes('withdraw-auto-kpi-panel'));
+});
+
+test('revisiting a submitted intake coverage query rereads its catalog and dates, then leaves edited dates idle',async()=>{
+ const feed={id:'ph-report',timezone:'UTC',name:'NEW-PH',team:'胖虎',country:'胖虎巴西',system:'PANDA',dataset:'panda_success',rawCountry:'胖虎巴西',rawPlatform:'NEW-PH',lastDate:'2026-09-24',direction:'charge',sourceKind:'direct',defaultEnd:'2026-09-25'};
+ const h=await ready({page:'collected_data',manualOverview:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='intakeCoverage'?intakeCoverageFixtureReply(q,[feed]):aggregate(P)});
+ const calls=()=>h.calls.filter(q=>q.action==='intakeCoverage');
+ await h.c.collectedRefresh();h.c.collectedSet('country','胖虎巴西');
+ h.c.collectedRange('from','2026-09-23');h.c.collectedRange('to','2026-09-24');
+ await h.c.collectedCoverageQuery();const submitted=calls().at(-1);
+ assert.equal(submitted.operation,'rows');assert.equal(submitted.startAt,'2026-09-23');
+ const n=calls().length;h.c.setPage('overview');h.c.setPage('collected_data');await settle();
+ assert.deepEqual(calls().slice(n),[{action:'intakeCoverage',operation:'catalog'},submitted]);
+ h.c.collectedRange('from','2026-09-24');h.c.setPage('overview');h.c.setPage('collected_data');await settle();
+ assert.equal(calls().length,n+2);
+});

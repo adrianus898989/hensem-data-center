@@ -3,7 +3,7 @@ const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-payout-c
 const target=(platform='P1',country='IN')=>({platform,country_code:country,country_name:'印度',display_group:country,display_name:'印度',timezone:'Asia/Kolkata',members:[{site_code:'11',name:'品牌一'}]});
 const index=(system,targets=[target()])=>({version:1,system,targets,summaries:targets.map(t=>({...t,observed_local_date:'2026-09-22'})),readOnly:true});
 const snap=(system,t,configuration,dictionary=null)=>({version:1,system,target:t,snapshot:{country_code:t.country_code,platform:t.platform,timezone:t.timezone,observed_local_date:'2026-09-22',observed_at:'2026-09-22T06:00:00Z',configuration,dictionary},readOnly:true});
-function harness(request){const context={window:{}};vm.runInNewContext(source,context);const api=context.window.HensemLivePayoutConfig;let changes=0;api.configure({request,onChange:()=>changes++});return {api,changes:()=>changes};}
+function harness(request){const context={window:{},AbortController};vm.runInNewContext(source,context);const api=context.window.HensemLivePayoutConfig;let changes=0;api.configure({request,onChange:()=>changes++});return {api,changes:()=>changes};}
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{promise,resolve,reject}};
 const normalize=x=>JSON.parse(JSON.stringify(x));
 test('WG exact config navigation uses source keys while other systems keep their platform names',async()=>{
@@ -36,21 +36,26 @@ test('one explicit query loads every authorized system/country/platform with bou
  assert.equal(max,3);assert.deepEqual(f.calls.filter(q=>q.operation==='index').map(q=>q.system).sort(),systems.slice().sort());
  assert.deepEqual(f.calls.filter(q=>q.operation==='snapshot').map(q=>q.system+'/'+q.country+'/'+q.platform).sort(),['AR/BR/BR1','AR/IN/A1','AR/IN/A2','NEW_AR/IN/N1']);assert.equal(api.state().completed,4);assert.equal(api.state().failed,0);
 });
-test('system, country, platform and search changes reuse loaded data and preserve each system selection',async()=>{
+test('switching views within one batch preserves controls; querying a selected platform reads its directory and exact snapshot',async()=>{
  const f=allFixture(),{api}=harness(f.request);await api.refresh();const before=f.calls.length;
  api.selectPlatform(1);assert.equal(api.state().platform,'A2');assert.match(api.render(),/>A2<\/span>/);api.selectCountry(1);assert.equal(api.state().platform,'BR1');assert.match(api.render(),/>BR1<\/span>/);
  api.selectSystem(1);assert.equal(api.state().platform,'N1');assert.equal(api.state().snapshotStatus,'ready');api.selectSystem(0);assert.equal(api.state().country,'BR');assert.equal(api.state().platform,'BR1');
- api.selectCountry(0);api.setSearch('A2');await api.query();assert.equal(api.state().platform,'A2');assert.equal(api.state().snapshotStatus,'ready');assert.equal(f.calls.length,before);
+ api.selectCountry(0);api.setSearch('A2');await api.query();assert.equal(api.state().platform,'A2');assert.equal(api.state().snapshotStatus,'ready');assert.deepEqual(f.calls.slice(before).map(q=>[q.operation,q.platform]),[['index',undefined],['snapshot','A2']]);
 });
-test('leaving the page while fetching keeps results and the background query finishes for return',async()=>{
- const f=allFixture(),pending=deferred(),{api}=harness(async q=>{if(q.operation==='snapshot')await pending.promise;return f.request(q)});const run=api.refresh();await tick();api.pause();api.selectSystem(1);pending.resolve();await run;assert.equal(api.state().platform,'N1');assert.equal(api.state().snapshotStatus,'ready');api.selectSystem(0);assert.equal(api.state().platform,'A1');assert.match(api.render(),/>A1<\/span>/);
+test('leaving aborts a pending batch and returning reads the selected scope afresh',async()=>{
+ const f=allFixture(),pending=deferred(),signals=[];
+ const {api}=harness(async(q,options)=>{signals.push(options.signal);if(q.operation==='snapshot')await pending.promise;return f.request(q)});
+ const run=api.refresh();await tick();api.pause();assert(signals.every(signal=>signal.aborted));pending.resolve();await run;
+ assert.equal(api.state().snapshotStatus,'idle');assert.doesNotMatch(api.render(),/观测日期|>A1<\/span>/);
+ const before=f.calls.length;await api.resumeQuery();assert.equal(f.calls.slice(before).filter(q=>q.operation==='index').length,6);assert.equal(f.calls.slice(before).filter(q=>q.operation==='snapshot').length,4);
+ assert.match(api.render(),/>A1<\/span>/);
 });
-test('refresh preserves selected platform and updates cached values; transient failure preserves last success',async()=>{
+test('refresh preserves selected platform and shows only current values; transient failure clears the affected platform',async()=>{
  const f=allFixture();let revision=1,broken=false;const {api}=harness(async q=>{const r=await f.request(q);if(q.operation==='snapshot'){if(broken&&q.platform==='A2')throw Error('timeout');r.snapshot.configuration=config('VERSION '+revision);}return r;});
- await api.refresh();api.selectPlatform(1);revision=2;await api.refresh();assert.equal(api.state().platform,'A2');assert.match(api.render(),/VERSION 2/);broken=true;revision=3;await api.refresh();assert.equal(api.state().snapshotStatus,'ready');assert.match(api.render(),/VERSION 2/);assert.match(api.render(),/显示上次查询结果/);assert.equal(api.state().failed,1);api.selectPlatform(0);assert.match(api.render(),/VERSION 3/);
+ await api.refresh();api.selectPlatform(1);revision=2;await api.refresh();assert.equal(api.state().platform,'A2');assert.match(api.render(),/VERSION 2/);broken=true;revision=3;await api.refresh();assert.equal(api.state().snapshotStatus,'error');assert.doesNotMatch(api.render(),/VERSION 2|显示上次查询结果/);assert.match(api.render(),/配置读取失败/);assert.equal(api.state().failed,1);api.selectPlatform(0);assert.match(api.render(),/VERSION 3/);
 });
-test('index network failure retains that authorized directory while successful index removes revoked platforms',async()=>{
- const f=allFixture();let broken=false;const {api}=harness(async q=>{if(broken&&q.operation==='index'&&q.system==='AR')throw Error('timeout');return f.request(q)});await api.refresh();api.selectPlatform(1);broken=true;await api.refresh();assert.equal(api.state().platform,'A2');assert.match(api.render(),/>A2<\/span>/);assert.match(api.render(),/显示上次查询结果/);broken=false;f.targets.AR=[target('A1')];await api.refresh();assert.equal(api.state().platform,'A1');assert.doesNotMatch(api.render(),/<strong>A2/);
+test('index network failure hides the unverified directory and recovery removes revoked platforms',async()=>{
+ const f=allFixture();let broken=false;const {api}=harness(async q=>{if(broken&&q.operation==='index'&&q.system==='AR')throw Error('timeout');return f.request(q)});await api.refresh();api.selectPlatform(1);broken=true;await api.refresh();assert.equal(api.state().platform,null);assert.match(api.render(),/配置读取失败/);assert.doesNotMatch(api.render(),/>A2<\/span>|显示上次查询结果/);broken=false;f.targets.AR=[target('A1')];await api.refresh();assert.equal(api.state().platform,'A1');assert.doesNotMatch(api.render(),/<strong>A2/);
 });
 test('permission loss clears all cached sources and invalidates outstanding replies',async()=>{
  const f=allFixture(),late=deferred();let denied=false;const {api}=harness(async q=>{if(denied&&q.operation==='index'){if(q.system==='AR')throw Error('403 permission denied');await late.promise;}return f.request(q)});await api.refresh();denied=true;const run=api.refresh();await tick();assert.equal(api.state().indexStatus,'error');assert.match(api.render(),/授权已失效/);assert.doesNotMatch(api.render(),/<strong>A1|>A1<\/span>/);late.resolve();await run;api.selectSystem(1);assert.equal(api.state().indexStatus,'idle');assert.doesNotMatch(api.render(),/<strong>N1/);
@@ -59,15 +64,15 @@ test('actual host role, scope and expired-session errors clear cached results fr
  const messages=['当前角色没有此页面或操作权限，请联系管理员','当前角色没有查看明细权限','当前账号没有此范围的归类权限','当前登录账号已改变','登录账号或会话已改变，请使用当前会话','登录已退出，请重新登录','登录状态不完整，请重新登录','正式数据读取未获授权，或会话已失效','角色权限验证未通过，请重新登录或联系管理员。'];
  for(const operation of ['index','snapshot'])for(const message of messages){const f=allFixture();let denied=false;const {api}=harness(async q=>{if(denied&&q.operation===operation)throw Error(message);return f.request(q)});await api.refresh();assert.match(api.render(),/>A1<\/span>/);denied=true;await api.refresh();assert.equal(api.state().indexStatus,'error',message);assert.match(api.render(),/授权已失效/);assert.doesNotMatch(api.render(),/>A1<\/span>|显示上次查询结果/);api.selectSystem(1);assert.equal(api.state().indexStatus,'idle');assert.doesNotMatch(api.render(),/>N1<\/span>/);}
 });
-test('structured iframe denials revoke cache while temporary auth-network failures retain labeled cached results',async()=>{
+test('structured iframe denials revoke access and temporary auth-network failures leave results empty',async()=>{
  for(const code of ['ROLE_DENIED','refresh_invalid','session_changed','session_logged_out','profile_denied']){const f=allFixture();let denied=false;const {api}=harness(async q=>{if(denied)throw Object.assign(Error('安全错误'),{code});return f.request(q)});await api.refresh();denied=true;await api.refresh();assert.equal(api.state().indexStatus,'error',code);assert.doesNotMatch(api.render(),/>A1<\/span>/);}
- const f=allFixture();let failed=false;const {api}=harness(async q=>{if(failed)throw Object.assign(Error('登录续期暂时失败，请检查网络后重试'),{code:'refresh_network_error'});return f.request(q)});await api.refresh();failed=true;await api.refresh();assert.equal(api.state().snapshotStatus,'ready');assert.match(api.render(),/>A1<\/span>/);assert.match(api.render(),/显示上次查询结果/);
+ const f=allFixture();let failed=false;const {api}=harness(async q=>{if(failed)throw Object.assign(Error('登录续期暂时失败，请检查网络后重试'),{code:'refresh_network_error'});return f.request(q)});await api.refresh();failed=true;await api.refresh();assert.equal(api.state().indexStatus,'error');assert.match(api.render(),/配置读取失败/);assert.doesNotMatch(api.render(),/>A1<\/span>|显示上次查询结果/);
 });
 test('clear and account request replacement invalidate cached results and late responses',async()=>{
  const f=allFixture(),late=deferred(),{api}=harness(async q=>{await late.promise;return f.request(q)});const run=api.refresh();api.clear();late.resolve();await run;assert.equal(api.state().indexStatus,'idle');api.configure({request:f.request});await api.refresh();assert.equal(api.state().snapshotStatus,'ready');api.configure({request:async q=>index(q.system,[])});assert.equal(api.state().indexStatus,'idle');assert.doesNotMatch(api.render(),/观测日期/);
 });
 test('null snapshot is visibly uncollected and invalid responses cannot replace an existing snapshot',async()=>{
- const f=allFixture();let invalid=false;const {api}=harness(async q=>{const r=await f.request(q);if(q.operation==='snapshot'&&q.platform==='A1')return invalid?{...r,system:'WRONG'}:{...r,snapshot:null};return r;});await api.refresh();assert.match(api.render(),/尚未采集到配置快照/);invalid=true;await api.refresh();assert.equal(api.state().snapshotStatus,'ready');assert.equal(api.state().failed,1);assert.match(api.render(),/尚未采集到配置快照/);
+ const f=allFixture();let invalid=false;const {api}=harness(async q=>{const r=await f.request(q);if(q.operation==='snapshot'&&q.platform==='A1')return invalid?{...r,system:'WRONG'}:{...r,snapshot:null};return r;});await api.refresh();assert.match(api.render(),/尚未采集到配置快照/);invalid=true;await api.refresh();assert.equal(api.state().snapshotStatus,'error');assert.equal(api.state().failed,1);assert.match(api.render(),/配置读取失败/);assert.doesNotMatch(api.render(),/尚未采集到配置快照/);
 });
 test('openTarget uses exact country and keeps it selected while all authorized configs are loaded',async()=>{
  const f=allFixture({AR:[target('SAME'),target('SAME','BR')]}),{api}=harness(f.request);api.openTarget({system:'AR',country:'BR',platform:'SAME'});assert.equal(f.calls.length,0);await api.refresh();assert.equal(api.state().country,'BR');assert.equal(api.state().platform,'SAME');assert.equal(f.calls.filter(q=>q.operation==='snapshot'&&q.system==='AR').length,2);const before=f.calls.length;api.openTarget({system:'AR',country:'IN',platform:'SAME'});assert.equal(api.state().country,'IN');assert.equal(api.state().snapshotStatus,'ready');assert.equal(f.calls.length,before);
@@ -95,4 +100,22 @@ test('an invalid target remains unresolved when older index and snapshot replies
   api.openTarget({system:'INVALID',country:'IN',platform:'UNRESOLVED'});api.openTarget({system:'AR',country:'BR',platform:'BR1'});
   assert.equal(api.state().platform,'BR1');assert.equal(api.state().snapshotStatus,'ready');assert.doesNotMatch(api.render(),/来源信息不完整/);assert.equal(f.calls.length,before);
  }
+});
+
+test('the platform query clears the old value immediately, deduplicates active reads, and revalidates after return',async()=>{
+ const f=allFixture(),gate=deferred();let hold=false,revision=1;
+ const {api}=harness(async q=>{
+  if(hold&&q.operation==='index')await gate.promise;
+  const response=await f.request(q);
+  if(q.operation==='snapshot')response.snapshot.configuration=config('selected-version-'+revision);
+  return response;
+ });
+ await api.refresh();api.setSearch('A2');assert.match(api.render(),/selected-version-1/);
+ hold=true;revision=2;const before=f.calls.length,first=api.query(),second=api.query();
+ assert.doesNotMatch(api.render(),/selected-version-1/);gate.resolve();await Promise.all([first,second]);
+ assert.deepEqual(f.calls.slice(before).map(q=>[q.operation,q.platform]),[['index',undefined],['snapshot','A2']]);
+ assert.match(api.render(),/selected-version-2/);api.pause();assert.doesNotMatch(api.render(),/selected-version-2/);
+ revision=3;const count=f.calls.length;await api.resumeQuery();
+ assert.deepEqual(f.calls.slice(count).map(q=>[q.operation,q.platform]),[['index',undefined],['snapshot','A2']]);
+ assert.match(api.render(),/selected-version-3/);
 });
