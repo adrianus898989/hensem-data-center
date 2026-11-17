@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),ts=require('typescript');
 const {webcrypto}=require('node:crypto');
 const source=fs.readFileSync(path.join(__dirname,'../supabase/functions/sync-deposit-issue-sheet/index.ts'),'utf8');
-const compiled=ts.transpileModule(source+'\nexport {rowsFromValues,dateValue,entryRowsFromValues,ENTRY_TABS,CURRENT_ENTRY_TABS,DEFAULT_ENTRY_SOURCE_ID,HISTORICAL_ENTRY_SOURCE_ID};',{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+const compiled=ts.transpileModule(source+'\nexport {rowsFromValues,dateValue,entryRowsFromValues,ENTRY_TABS,CURRENT_ENTRY_TABS,DEFAULT_ENTRY_SOURCE_ID,HISTORICAL_ENTRY_SOURCE_ID,finalReceipt,requestJson};',{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 const moduleUnderTest={exports:{}};new Function('module','exports',compiled)(moduleUnderTest,moduleUnderTest.exports);
 const {rowsFromValues,dateValue,entryRowsFromValues,ENTRY_TABS,CURRENT_ENTRY_TABS,DEFAULT_ENTRY_SOURCE_ID,HISTORICAL_ENTRY_SOURCE_ID,createDepositIssueSyncHandler}=moduleUnderTest.exports;
 const headers=['盘口','订单号','UTR','金额','三方','UPI','KYC-UPI','KYC正确','UTR是否匹配','三方回复','对上','状态','未入款天数','日期','三方'];
@@ -75,7 +75,7 @@ function harness({failUpsert=false,missingTab=false,failEntries=false,failArchiv
   }finally{inFlight--;}
  };
  const handle=handlerFactory({env:key=>env[key],fetch,now:()=>Date.parse('2026-09-24T10:00:00Z'),crypto,log:event=>{events.push(event);onDiagnostic?.(event);}});
- const call=(secret='synthetic-sync')=>handle(new Request('https://synthetic-project.supabase.co/functions/v1/sync-deposit-issue-sheet',{method:'POST',headers:{'x-sync-secret':secret,'Content-Type':'application/json'},body:JSON.stringify({action:'sync'})}));
+ const call=(secret='synthetic-sync',body={action:'sync'})=>handle(new Request('https://synthetic-project.supabase.co/functions/v1/sync-deposit-issue-sheet',{method:'POST',headers:{'x-sync-secret':secret,'Content-Type':'application/json'},body:JSON.stringify(body)}));
  return {calls,writes,events,call,stored,maxInFlight:()=>maxInFlight};
 }
 test('authorized refresh reads both complete sources and only mirrors their safe columns',async()=>{
@@ -300,4 +300,43 @@ test('a moved row identity header uses the full range and its actual columns',as
  const h=harness({resultBatch:short=>[{values:[changed,changedRow]},{},{},...(short?[{values:[changed.slice(0,2),changedRow.slice(0,2)]}]:[])]});
  assert.equal((await h.call()).status,200);assert.equal(h.calls.filter(x=>x.url.pathname.includes('synthetic_source_')).length,2);
  assert.equal(h.writes.flat().find(r=>r.source_tab==='UPI核对').platform,row[0]);
+});
+
+test('a fast scheduled sync and its denial/failure keep their normal final HTTP outcomes',async()=>{
+ const body={action:'sync',receipt:'final_multi_status'};
+ for(const [options,secret,expected] of [[{},'synthetic-sync',200],[{},'invalid',401],[{failResultRead:true},'synthetic-sync',503]]){
+  const h=harness(options),response=await h.call(secret,body);
+  assert.equal(response.status,expected);
+  const value=await response.json();assert.equal(value.ok,expected===200);
+  if(expected===503)assert.equal(value.sourceResults.result.upstreamHttpStatus,503);
+  if(expected===401)assert.equal(h.calls.length,0);
+ }
+});
+test('slow receipts deliver valid JSON only when both source outcomes are known, including true upstream failures',async()=>{
+ for(const code of [200,504]){
+  let resolve;const done=new Promise(r=>{resolve=r});
+  const response=await moduleUnderTest.exports.finalReceipt(done,1);
+  assert.equal(response.status,207);
+  const reader=response.body.getReader(),initial=await reader.read();
+  assert.equal(new TextDecoder().decode(initial.value).trim(),'');
+  const value={ok:code===200,sourceResults:{result:{ok:code===200},entries:{ok:true}}};
+  resolve(Response.json(value,{status:code}));
+  const body=await reader.read();assert.deepEqual(JSON.parse(new TextDecoder().decode(body.value)),{...value,finalHttpStatus:code});
+  assert.equal((await reader.read()).done,true);
+ }
+ let resolve;const done=new Promise(r=>{resolve=r});
+ const response=await moduleUnderTest.exports.finalReceipt(done,1);
+ await response.body.cancel();resolve(Response.json({ok:true}));
+});
+test('the scheduled read reserves commit time, while normal callers retain the original 120s bound',async()=>{
+ const delays=[];
+ const fixture={exports:{}};
+ new Function('module','exports','setTimeout','clearTimeout',compiled)(fixture,fixture.exports,(fn,ms)=>{delays.push(ms);return 1},()=>{});
+ const runtime={fetch:async()=>Response.json({ok:true}),now:()=>1000};
+ const google='https://sheets.googleapis.com/synthetic';
+ const read=(rt,url)=>fixture.exports.requestJson(rt,url,{method:'GET'},1024);
+ await read(runtime,google);await read({...runtime,deadline:216000},google);
+ await read({...runtime,deadline:33000},google);await read({...runtime,deadline:33000},'https://synthetic-project.supabase.co');
+ assert.deepEqual(delays,[120000,183000,2000,32000]);
+ await assert.rejects(()=>read({...runtime,deadline:30000},google),/sync_request_timed_out/);
 });

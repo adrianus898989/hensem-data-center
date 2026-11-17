@@ -3,12 +3,7 @@
 begin;
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
-do $$
-declare r record;
-begin
-  for r in select jobid from cron.job where jobname='deposit-issue-sheet-sync'
-  loop perform cron.unschedule(r.jobid); end loop;
-end $$;
+-- Scheduling the existing name updates its command without duplicating the job.
 select cron.schedule(
   'deposit-issue-sheet-sync',
   '*/5 * * * *',
@@ -19,8 +14,8 @@ select cron.schedule(
       'Content-Type','application/json',
       'x-sync-secret',(select decrypted_secret from vault.decrypted_secrets where name='third_party_sync_secret' limit 1)
     ),
-    body := '{"action":"sync"}'::jsonb,
-    timeout_milliseconds := 150000
+    body := '{"action":"sync","receipt":"final_multi_status"}'::jsonb,
+    timeout_milliseconds := 230000
   );
   $$
 );

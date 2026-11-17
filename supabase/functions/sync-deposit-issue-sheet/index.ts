@@ -11,15 +11,17 @@ const CURRENT_ENTRY_TABS = new Set([...ENTRY_TABS, "9KCLUB", "MAANWIN"]);
 const MAX_ROWS = 40000;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 120_000;
+const SCHEDULED_DEADLINE_MS = 215_000;
+const GOOGLE_READ_RESERVE_MS = 30_000;
 const encoder = new TextEncoder();
 
 type SyncDiagnostic = { event: "deposit_sheet_sync"; source: "result" | "entries" | "both"; stage: SyncStage; state: "started" | "complete" | "failed"; durationMs?: number; stageDurationsMs?: Partial<Record<SyncStage, number>>; rowsRead?: number; rowsWritten?: number; tabsRead?: number; code?: string; tab?: string; missingHeaders?: string[] };
-type Runtime = { env: (name: string) => string | undefined; fetch: typeof fetch; now: () => number; crypto: Crypto; log?: (event: SyncDiagnostic) => void };
+type Runtime = { env: (name: string) => string | undefined; fetch: typeof fetch; now: () => number; crypto: Crypto; deadline?: number; log?: (event: SyncDiagnostic) => void };
 type Settings = { sourceId: string; entrySourceId: string; entrySourceMigrated: boolean; email: string; privateKey: string; supabaseUrl: string; serviceKey: string };
 type SyncStage = "configuration" | "token" | "result_read" | "entry_metadata" | "entry_read" | "db_upsert" | "db_archive" | "complete";
 type MirrorTarget = { table: string; rows: Record<string, unknown>[]; source: string; tabs: string[] };
-type SourceResult = { ok: boolean; stage: SyncStage; code?: string; rowsRead: number; rowsWritten: number; tabsRead: number; syncedAt?: string };
-class SyncError extends Error { constructor(readonly code: string, readonly status = 503, readonly headerContext?: { tab: string; missingHeaders: string[] }) { super(code); } }
+type SourceResult = { ok: boolean; stage: SyncStage; code?: string; rowsRead: number; rowsWritten: number; tabsRead: number; syncedAt?: string; upstreamHttpStatus?: number };
+class SyncError extends Error { constructor(readonly code: string, readonly status = 503, readonly headerContext?: { tab: string; missingHeaders: string[] }, readonly upstreamHttpStatus?: number) { super(code); } }
 function diagnostic(runtime: Runtime, value: SyncDiagnostic) {
   // Only fixed stage/error names, recognized tab labels, counters and elapsed
   // time. Never log requests, URLs, credentials, source rows or upstream errors.
@@ -92,11 +94,16 @@ async function readText(response: Response, maxBytes: number): Promise<string> {
   } finally { reader.releaseLock(); }
 }
 async function requestJson(runtime: Runtime, url: string, init: RequestInit, maxBytes: number): Promise<any> {
-  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const isGoogleRead = url.startsWith("https://sheets.googleapis.com/");
+  const remaining = runtime.deadline === undefined ? REQUEST_TIMEOUT_MS :
+    runtime.deadline - runtime.now() - (isGoogleRead ? GOOGLE_READ_RESERVE_MS : 0);
+  if (remaining <= 0) throw new SyncError("sync_request_timed_out", 504);
+  const timeout = Math.min(remaining, isGoogleRead && runtime.deadline !== undefined ? 183_000 : REQUEST_TIMEOUT_MS);
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await runtime.fetch(url, { ...init, redirect: "error", cache: "no-store", signal: controller.signal });
     const text = await readText(response, maxBytes);
-    if (!response.ok) throw new SyncError("upstream_request_failed", response.status >= 500 ? 503 : 502);
+    if (!response.ok) throw new SyncError("upstream_request_failed", response.status >= 500 ? 503 : 502, undefined, response.status);
     try { return text ? JSON.parse(text) : null; } catch { throw new SyncError("invalid_upstream_response"); }
   } catch (error) {
     if (error instanceof SyncError) throw error;
@@ -278,12 +285,39 @@ async function readEntrySheets(settings: Settings, runtime: Runtime, headers: Re
   return { rows, tabs: tabs.map((t: any) => t.title) };
 }
 
-export function createDepositIssueSyncHandler(runtime: Runtime) {
-  return async function handle(request: Request): Promise<Response> {
-    if (request.method !== "POST") return json({ ok: false, code: "method_not_allowed" }, 405);
-    if (!(await sameSecret(runtime.env("SYNC_SECRET") || "", request.headers.get("x-sync-secret") || "", runtime.crypto))) return json({ ok: false, code: "unauthorized" }, 401);
-    let body: any = {}; try { body = await request.json(); } catch { return json({ ok: false, code: "invalid_sync_request" }, 400); }
-    if (!body || typeof body !== "object" || Array.isArray(body) || body.action !== "sync") return json({ ok: false, code: "invalid_sync_request" }, 400);
+async function finalReceipt(work: Promise<Response>, waitMs = 75_000): Promise<Response> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const pending = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), waitMs); });
+  const quick = await Promise.race([work, pending]).finally(() => clearTimeout(timer));
+  if (quick) return quick;
+  // Start the authorized cron response before the gateway's 150 s idle limit.
+  // Leading whitespace is valid JSON. The sole document is the final outcome;
+  // the 207 status tells the caller to inspect each source and finalHttpStatus.
+  let cancelled = false;
+  let keepAlive: ReturnType<typeof setInterval> | undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(" ".repeat(4095) + "\n"));
+      keepAlive = setInterval(() => controller.enqueue(encoder.encode("\n")), 15_000);
+      void (async () => {
+        try {
+          const response = await work;
+          const receipt = await response.json();
+          if (!cancelled) controller.enqueue(encoder.encode(JSON.stringify({ ...receipt, finalHttpStatus: response.status })));
+        } catch {
+          if (!cancelled) controller.enqueue(encoder.encode(JSON.stringify({ ok: false, code: "deposit_issue_sync_failed", finalHttpStatus: 503 })));
+        } finally {
+          clearInterval(keepAlive);
+          if (!cancelled) controller.close();
+        }
+      })();
+    },
+    cancel() { cancelled = true; clearInterval(keepAlive); },
+  });
+  return new Response(stream, { status: 207, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "private, no-store, no-transform" } });
+}
+
+async function synchronize(runtime: Runtime): Promise<Response> {
     let stage: SyncStage = "configuration";
     try {
       const settings = config(runtime), collectedAt = new Date(runtime.now()).toISOString();
@@ -333,6 +367,7 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
           diagnostic(runtime, { event: "deposit_sheet_sync", source, stage: result.stage, state: "complete", durationMs: elapsed(startedAt), stageDurationsMs, rowsRead: result.rowsRead, rowsWritten: result.rowsWritten, tabsRead: result.tabsRead });
           return { result, status: 200 };
         } catch (error) {
+          if (error instanceof SyncError && error.upstreamHttpStatus !== undefined) result.upstreamHttpStatus = error.upstreamHttpStatus;
           result.code = error instanceof SyncError ? error.code : "deposit_issue_sync_failed";
           finishStage();
           diagnostic(runtime, { event: "deposit_sheet_sync", source, stage: result.stage, state: "failed", durationMs: elapsed(startedAt), stageDurationsMs, rowsRead: result.rowsRead, rowsWritten: result.rowsWritten, tabsRead: result.tabsRead, code: result.code, ...(error instanceof SyncError && error.headerContext ? error.headerContext : {}) });
@@ -362,6 +397,17 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
       diagnostic(runtime, { event: "deposit_sheet_sync", source: "both", stage, state: "failed", code });
       return json({ ok: false, code, sourceResults: { result: notStarted, entries: notStarted } }, status);
     }
+}
+
+export function createDepositIssueSyncHandler(runtime: Runtime) {
+  return async function handle(request: Request): Promise<Response> {
+    if (request.method !== "POST") return json({ ok: false, code: "method_not_allowed" }, 405);
+    if (!(await sameSecret(runtime.env("SYNC_SECRET") || "", request.headers.get("x-sync-secret") || "", runtime.crypto))) return json({ ok: false, code: "unauthorized" }, 401);
+    let body: any = {}; try { body = await request.json(); } catch { return json({ ok: false, code: "invalid_sync_request" }, 400); }
+    if (!body || typeof body !== "object" || Array.isArray(body) || body.action !== "sync") return json({ ok: false, code: "invalid_sync_request" }, 400);
+    if (body.receipt !== "final_multi_status") return synchronize(runtime);
+    const work = synchronize({ ...runtime, deadline: runtime.now() + SCHEDULED_DEADLINE_MS });
+    return finalReceipt(work);
   };
 }
 const deno = (globalThis as unknown as { Deno?: { env: { get: (name: string) => string | undefined }; serve: (handler: (request: Request) => Promise<Response>) => unknown } }).Deno;
