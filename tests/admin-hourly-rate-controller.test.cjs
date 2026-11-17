@@ -354,3 +354,50 @@ test('permission denial clears verified current-day amount rows and ignores late
  }
  await h.win.HensemHourlyMatrixActions.load(true);assert.equal(h.calls.length,3);h.app.cancel();
 });
+
+test('verified prepared order cursor and nested source parts support both amount tabs on current and closed days',async()=>{
+ const prepared=require('../admin-preview/live-prepared-aggregates.js');
+ for(const offsetDays of [0,-1]){
+  const h=liveAmountDay({offsetDays}),platform=h.ctx.platforms()[0];
+  Object.assign(platform,{country:'印度',source:offsetDays?'ar':'newar',sourceName:'Native'});
+  const q={...h.ctx.query(platform),action:'aggregate',view:'full',platformId:platform.id};
+  const rows=amountSnapshot([3,4],[2,10]);
+  const raw={version:1,platform,startAt:q.startAt,endAt:q.endAt,successBasis:'created',rows:[],hasMore:true,
+   total:rows.total,summary:rows.summary,amountBands,groups:{amount:[],provider:rows.groups.provider,amount_range:rows.groups.amount_range},
+   capabilities:{successCohort:'created_at_current_stored_status',independentSuccessWindow:false}};
+  const computedAt=new Date().toISOString(),publication={id:'sample',generation:1,computedAt,cutoff:computedAt,
+   expiresAt:new Date(Date.now()+60_000).toISOString(),calculationComplete:true,sourceComplete:false,freshness:'fresh',refreshState:'idle'};
+  const reader=prepared.create({publicationVersion:2,context:()=>'test-user',platform:()=>platform,
+   request:async()=>({version:2,items:[{request:q,status:'ready',publication,result:raw,
+    resultGroups:{contract:'prepared-result-groups-v1',profile:'amount-v1',groups:['amount','amount_range','provider']}}]})});
+  const read=await reader.read(q,{responseProfile:'amount-v1'});
+  assert.equal(raw.hasMore,true);assert.equal(read.complete,undefined);
+  assert.equal(read._preparedPublication.calculationComplete,true);assert.equal(read._preparedResultGroups.profile,'amount-v1');
+  h.L.results=[{...read,_parts:[read]}];
+  h.L.view='amount-merchant';h.app.html();await wait();
+  assert.equal(h.calls.length,0);
+  assert.equal(h.rendered('charge').merchant.ready.size,1);assert.equal(h.rendered('withdraw').merchant.ready.size,1);
+  h.L.view='amount-provider';const run=h.win.HensemHourlyMatrixActions.load();assert.equal(h.calls.length,1);
+  const call=h.calls[0],response=h.reply(call);
+  if(offsetDays)Object.assign(response,rows);
+  call.resolve(response);await run;h.app.html();
+  assert.equal(h.rendered('charge').provider.rows[0].total.successCount,offsetDays?3:5);
+  assert.equal(h.rendered('withdraw').provider.rows[0].total.successCount,offsetDays?2:7);
+  h.L.view='amount-merchant';h.app.html();await wait();assert.equal(h.calls.length,1);
+  reader.cancel();h.app.cancel();
+ }
+});
+
+test('an unverified main-page cursor or an unfinished native matrix never becomes a verified amount response',async()=>{
+ for(const bad of ['main','nested-main','matrix']){
+  const h=liveAmountDay(),main=h.L.results[0];delete main.complete;
+  const part={...main};main._parts=[part];
+  if(bad==='main')main.hasMore=true;
+  if(bad==='nested-main')part.hasMore=true;
+  const run=h.win.HensemHourlyMatrixActions.load(),c=h.calls[0];
+  const r=h.reply(c);if(bad==='matrix')r.hasMore=true;
+  c.resolve(r);await run;h.app.html();
+  for(const d of ['charge','withdraw'])assert.equal(h.rendered(d).provider.ready.size,0);
+  assert.equal(h.calls.length,1);h.app.cancel();
+ }
+});

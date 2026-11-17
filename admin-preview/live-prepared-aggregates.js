@@ -84,7 +84,14 @@
   // A server without profile support must still return its full legacy DTO.
   const view=q.view||'full',dimensions=resultGroups?resultGroups.groups:view==='providers'?['provider']:view==='drilldown'?['daily',...(q.kind==='latency'||q.durationRange?['provider','provider_daily']:[])]:['provider','daily','hourly','amount','matrix','latency','pending_age',...(q.amountBands?['amount_range','matrix_range']:[])];
   if(dimensions.some(key=>!Array.isArray(r.groups[key]))||Object.values(r.groups).some(rows=>!Array.isArray(rows))||view==='drilldown'&&(r.complete!==true||r.hasMore!==false)||q.durationVersion===2&&r.durationVersion!==2)throw failure('invalid');
-  return {...r,...(resultGroups?{_preparedResultGroups:copy(resultGroups)}:{}),_preparedPublication:{...p,status:'ready',...(publicationVersion===2?{publicationVersion:2,freshness:Date.parse(p.expiresAt)<=now||p.interactiveRefreshAt!=null&&Date.parse(p.interactiveRefreshAt)<=now?'refresh_due':p.freshness}:{})}};
+  const result={...r,...(resultGroups?{_preparedResultGroups:copy(resultGroups)}:{}),_preparedPublication:{...p,status:'ready',...(publicationVersion===2?{publicationVersion:2,freshness:Date.parse(p.expiresAt)<=now||p.interactiveRefreshAt!=null&&Date.parse(p.interactiveRefreshAt)<=now?'refresh_due':p.freshness}:{})}};
+  // Ready full aggregates have no detail rows. On the amount page their native
+  // order-list cursor says nothing about the verified aggregate groups.
+  if(responseProfile==='amount-v1'&&view==='full'&&r.hasMore===true&&
+     r.coverage?.complete!==false&&r.coverage?.requestedComplete!==false&&
+     r.pandaCoverage?.complete!==false&&r.pandaCoverage?.requestedComplete!==false&&
+     r.pandaCoverage?.reason!=='verified_created_prefix_only')delete result.hasMore;
+  return result;
  }
  function create(options){
   if(typeof options?.request!=='function'||typeof options.context!=='function'||typeof options.platform!=='function')throw TypeError('Prepared aggregates require request, context and platform callbacks');
