@@ -140,10 +140,10 @@ test('a team without matching metadata never falls through to another team or a 
  const f=fixture({team:'UNKNOWN'});await f.page.load();assert.equal(f.calls.length,0);assert.match(f.page.state.error,/没有可读取/);const specific=fixture();specific.page.state.platforms=['M8-ONLY'];await specific.page.load();assert.equal(specific.calls.length,0);assert.match(specific.page.state.error,/不属于当前团队/);
 });
 
-test('withdraw page snapshots preserve filters, loaded data and unsaved note draft with independent cancellation serials',async()=>{
- const f=fixture();await f.page.load();f.page.state.account='SAVED';f.page.state.platforms=['PH-ONLY'];f.page.state.page=3;f.page.state.noteDraft='unsaved note';const data=f.page.state.data,saved=f.page.capture(),serial=f.page.state.serial,reads=f.calls.length;
+test('withdraw page snapshots preserve filters and discard business results and note drafts with independent cancellation serials',async()=>{
+ const f=fixture();await f.page.load();f.page.state.account='SAVED';f.page.state.platforms=['PH-ONLY'];f.page.state.page=3;f.page.state.noteDraft='unsaved note';const saved=f.page.capture(),serial=f.page.state.serial,reads=f.calls.length;
  f.page.pause();f.page.restore(null);f.page.state.account='OTHER';f.page.state.platforms=['SAME'];f.page.restore(saved);
- assert.equal(f.page.state.data,data);assert.equal(f.page.state.account,'SAVED');assert.deepEqual(plain(f.page.state.platforms),['PH-ONLY']);assert.equal(f.page.state.page,3);assert.equal(f.page.state.noteDraft,'unsaved note');assert(f.page.state.serial>serial);f.page.render();assert.equal(f.calls.length,reads);
+ assert.equal(f.page.state.data,null);assert.equal(f.page.state.account,'SAVED');assert.deepEqual(plain(f.page.state.platforms),['PH-ONLY']);assert.equal(f.page.state.page,3);assert.equal(f.page.state.noteDraft,'');assert(f.page.state.serial>serial);f.page.render();assert.equal(f.calls.length,reads);
 });
 
 test('confirmed SUPERLG history is a separate exact authorized source and never blocks current Philippines queries',async()=>{
@@ -151,7 +151,7 @@ test('confirmed SUPERLG history is a separate exact authorized source and never 
  for(const view of ['auto_withdraw','withdraw_operators']){
   const f=fixture({catalog:[],withdrawCatalog:rows,country:'菲律宾',team:'M8',view});await f.page.load();assert.equal(f.calls.at(-1).country,'菲律宾');assert.deepEqual(f.calls.at(-1).platforms,['SUPERLG','PH19']);assert.match(f.page.render(),/当前记录/);assert.match(f.page.render(),/历史记录（2026-07-30）/);
   const before=f.calls.length,from=f.L.from,to=f.L.to;f.context.withdrawHistorical('historical');assert.equal(f.calls.length,before,'source selection waits for manual query');assert.equal(f.L.from,from);assert.equal(f.L.to,to);assert.equal(f.L.team,'M8');await f.page.load();assert.equal(f.calls.at(-1).country,'LG');assert.deepEqual(f.calls.at(-1).platforms,['SUPERLG']);assert.equal(f.page.state.data.rawCountry,'LG');
-  const saved=f.page.capture(),data=f.page.state.data;f.page.restore(null);f.page.restore(saved);assert.equal(f.page.state.historical,true);assert.equal(f.page.state.data,data);assert.equal(f.L.from,from);assert.match(f.page.render(),/value="historical" selected/);assert.equal(f.calls.length,before+1,'restoring a tab does not read again');
+  const saved=f.page.capture();f.page.restore(null);f.page.restore(saved);assert.equal(f.page.state.historical,true);assert.equal(f.page.state.data,null);assert.equal(f.L.from,from);assert.match(f.page.render(),/value="historical" selected/);assert.equal(f.calls.length,before+1,'restoring a tab does not read again');
   f.context.withdrawHistorical('current');await f.page.load();assert.equal(f.calls.at(-1).country,'菲律宾');assert.deepEqual(f.calls.at(-1).platforms,['SUPERLG','PH19']);
  }
 });

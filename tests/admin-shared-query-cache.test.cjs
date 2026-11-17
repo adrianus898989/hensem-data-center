@@ -18,7 +18,7 @@ async function ready(page){
  if(page==='orders'){h.L.platform=P.id;h.L.multi.platform=[P.id];}
  h.setHandler(reply);return h;
 }
-for(const page of pages)test(page+': ordinary repeat reuses complete aggregates and fees; explicit refresh rereads; details remain live',async()=>{
+for(const page of pages)test(page+': ordinary repeat rereads complete aggregates and fees; explicit refresh rereads; details remain live',async()=>{
  const h=await ready(page);await h.c.liveQuery();await settle();
  const count=requests(h,'aggregate').length,feeCount=requests(h,'rates').length,detailCount=requests(h,'details').length,readAt=h.L.results[0]._aggregateReadAt;
  const usesComparison=!['latency','risk'].includes(page),shape=q=>({platformId:q.platformId,view:q.view||'full',startAt:q.startAt,endAt:q.endAt,status:q.status,durationVersion:q.durationVersion??null});
@@ -29,23 +29,23 @@ for(const page of pages)test(page+': ordinary repeat reuses complete aggregates 
  const facts=JSON.stringify({total:h.L.results[0].total,summary:h.L.results[0].summary,groups:h.L.results[0].groups});assert.equal(h.L.results[0].total,65);
  assert.match(h.nodes.get('liveFilters').innerHTML,/onclick="liveRefresh\(\)"/,'explicit refresh stays available');
  h.setNow('2026-09-23T12:00:10Z');await h.c.liveQuery();await settle();
- assert.equal(requests(h,'aggregate').length,count);assert.equal(requests(h,'rates').length,feeCount);
- assert.equal(h.L.results[0]._aggregateCacheHit,true);assert.equal(h.L.results[0]._aggregateReadAt,readAt);
+ assert.equal(requests(h,'aggregate').length,count*2);assert.equal(requests(h,'rates').length,feeCount*2);
+ assert.equal(h.L.results[0]._aggregateCacheHit,false);assert(h.L.results[0]._aggregateReadAt>readAt);
  if(!usesComparison)assert.equal(JSON.stringify({total:h.L.results[0].total,summary:h.L.results[0].summary,groups:h.L.results[0].groups}),facts,'current-only renderers retain all current facts on cache reuse');
  assert.equal(h.L.comparisonStatus,usesComparison?'ready':'idle');assert.equal(h.L.comparisonResults.length,usesComparison?1:0);
  assert.equal(requests(h,'details').length,detailCount+(page==='orders'?1:0));
- assert.match(h.nodes.get('liveFilters').innerHTML,/数据读取[^]*缓存/);
- await h.c.liveRefresh();await settle();assert.deepEqual(requests(h,'aggregate').map(shape),[...expected,...expected],'refresh rereads exactly the consumed windows without an unused comparison');
- assert.equal(requests(h,'rates').length,feeCount*2);assert.equal(h.L.results[0]._aggregateCacheHit,false);
+ assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/数据读取[^<]*缓存/);
+ await h.c.liveRefresh();await settle();assert.deepEqual(requests(h,'aggregate').map(shape),[...expected,...expected,...expected],'refresh rereads exactly the consumed windows without an unused comparison');
+ assert.equal(requests(h,'rates').length,feeCount*3);assert.equal(h.L.results[0]._aggregateCacheHit,false);
  if(!usesComparison)assert.equal(JSON.stringify({total:h.L.results[0].total,summary:h.L.results[0].summary,groups:h.L.results[0].groups}),facts,'current-only renderers retain all current facts after refresh');
  assert.equal(h.L.comparisonStatus,usesComparison?'ready':'idle');assert.equal(h.L.comparisonResults.length,usesComparison?1:0);
  assert.equal(requests(h,'details').length,detailCount+(page==='orders'?2:0));
 });
-for(const page of pages)test(page+': current window stays frozen within 30 seconds then advances on expiry or explicit refresh',async()=>{
+for(const page of pages)test(page+': each ordinary query advances the live cutoff even within 30 seconds',async()=>{
  const h=await ready(page);h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';h.L.dirty=true;
  await h.c.liveQuery();await settle();const count=requests(h,'aggregate').length,queryNow=h.L.queryNow,end=h.L.results[0].endAt;
  h.setNow('2026-09-23T12:00:29Z');await h.c.liveQuery();await settle();
- assert.equal(requests(h,'aggregate').length,count);assert.equal(h.L.queryNow,queryNow);assert.equal(h.L.results[0].endAt,end);
+ assert.equal(requests(h,'aggregate').length,count*2);assert(h.L.queryNow>queryNow);assert(Date.parse(h.L.results[0].endAt)>Date.parse(end));
  h.setNow('2026-09-23T12:00:30Z');await h.c.liveQuery();await settle();
  assert(requests(h,'aggregate').length>count);assert(h.L.queryNow>queryNow);assert(Date.parse(h.L.results[0].endAt)>Date.parse(end));
  const refreshedCount=requests(h,'aggregate').length,advanced=h.L.queryNow;
@@ -58,7 +58,7 @@ test('new shared-cache pages keep changed filters, authority and native identiti
  assert.equal(requests(h,'aggregate').length,before+2);assert(requests(h,'aggregate').slice(before).every(q=>q.providers?.[0]==='Synthetic different provider'));
  before=requests(h,'aggregate').length;h.c.hensemDataScope={mode:'selected',identity:'SYNTHETIC-NEW-SCOPE'};await h.c.liveQuery();await settle();assert.equal(requests(h,'aggregate').length,before+2);
  before=requests(h,'aggregate').length;h.L.catalog=[{...P,sourceName:'Synthetic different native'}];await h.c.liveQuery();await settle();assert.equal(requests(h,'aggregate').length,before+2);
- before=requests(h,'aggregate').length;h.c.hensemRoleAllowed=(page,action)=>action!=='query';await h.c.liveQuery();await settle();assert.equal(requests(h,'aggregate').length,before);assert.equal(h.L.results.length,0);assert(h.L.queryFailures.length);
+ before=requests(h,'aggregate').length;h.c.hensemRoleAllowed=(page,action)=>action!=='query';await h.c.liveQuery();await settle();assert.equal(requests(h,'aggregate').length,before);assert.equal(h.L.results.length,0);assert.match(h.html(),/权限/);
  h.c.hensemRoleAllowed=()=>true;await h.c.liveQuery();await settle();assert.equal(requests(h,'aggregate').length,before+2,'permission rejection cleared former cache');
 });
 test('navigation cancels a shared-page query and ignores its late completion instead of caching it',async()=>{
@@ -70,4 +70,15 @@ test('navigation cancels a shared-page query and ignores its late completion ins
 test('incomplete shared-page responses are reread instead of becoming complete cached statistics',async()=>{
  const h=await ready('risk');h.setHandler(q=>q.action==='aggregate'?{...reply(q),complete:false}:reply(q));await h.c.liveQuery();await settle();const count=requests(h,'aggregate').length;
  await h.c.liveQuery();await settle();assert.equal(requests(h,'aggregate').length,count*2);assert.equal(h.L.results[0]._aggregateCacheHit,false);
+});
+
+test('overlapping identical queries have one owner; reopening reads changed source facts before painting',async()=>{
+ const h=await ready('risk'),gate=deferred();let total=65,block=true;
+ h.setHandler(q=>q.action==='aggregate'?(block?gate.promise:aggregate(P,total)):reply(q));
+ const a=h.c.liveQuery(),b=h.c.liveQuery();await settle();assert.equal(requests(h,'aggregate').length,1);
+ gate.resolve(aggregate(P,total));await Promise.all([a,b]);assert.equal(h.L.results[0].total,65);
+ block=false;total=77;h.c.setPage('time');h.c.setPage('risk');assert.equal(h.L.results.length,0);
+ await settle();assert.equal(requests(h,'aggregate').length,2);assert.equal(h.L.results[0].total,77);
+ h.c.liveSet('provider','Pending draft');h.c.setPage('time');h.c.setPage('risk');await settle();
+ assert.equal(requests(h,'aggregate').length,2);assert.equal(h.L.results.length,0);assert.equal(h.L.provider,'Pending draft');
 });

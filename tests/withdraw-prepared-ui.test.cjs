@@ -7,16 +7,16 @@ function fixture(pageName='auto_withdraw'){
  return {context,L,page,calls,pending,get renders(){return renders}};
 }
 const data=n=>({prepared:{status:'ready',contract:'withdraw-independent-windows-v2',generation:'synthetic-'+n},rows:[{country:'印度',platform:'A',total:n,success:n,processed:n}],total:1,totals:{total:n,processed:n},startDate:'2026-10-15',endDate:'2026-10-15',notes:[]});
-for(const view of['auto_withdraw','withdraw_operators'])test(view+' pending never replaces applied data, date changes are draft, one light read per click',async()=>{
- const f=fixture(view);let run=f.page.load();f.pending.shift().resolve(data(3));await run;const original=f.page.state.data,applied=f.page.state.applied;
+for(const view of['auto_withdraw','withdraw_operators'])test(view+' pending clears old applied data, date changes are draft, one light read per click',async()=>{
+ const f=fixture(view);let run=f.page.load();f.pending.shift().resolve(data(3));await run;const original=f.page.state.data;
  f.context.withdrawDate('from','2026-10-14');assert.equal(f.calls.length,1);assert.equal(f.page.state.data,original);
  run=f.page.load();f.pending.shift().resolve({prepared:{status:'building'},rows:null,totals:null,total:null});await run;
- assert.equal(f.page.state.data,original);assert.equal(f.page.state.applied,applied);assert.equal(f.page.state.dirty,false);assert.match(f.page.render(),/后台正在准备/);assert.equal(f.calls.length,2);assert.equal(f.page.state.loading,false);
+ assert.equal(f.page.state.data,null);assert.equal(f.page.state.applied,null);assert.equal(f.page.state.dirty,false);assert.match(f.page.render(),/后台正在准备/);assert.equal(f.calls.length,2);assert.equal(f.page.state.loading,false);
  run=f.page.load();f.pending.shift().resolve({...data(7),startDate:'2026-10-14'});await run;assert.equal(f.page.state.data.totals.total,7);assert.equal(f.page.state.prepared,null);assert.equal(f.calls.length,3);assert.equal(f.page.state.applied.query.startAt.slice(0,10),'2026-10-14');
 });
 test('prepared late replies cannot overwrite another selection, paused page, or revoked access',async()=>{
  const f=fixture();const old=f.page.load();f.context.withdrawDate('from','2026-10-13');assert.equal(f.calls[0].o.signal.aborted,true);const fresh=f.page.load();f.pending[1].resolve(data(8));await fresh;f.pending[0].resolve({prepared:{status:'failed'},rows:null});await old;assert.equal(f.page.state.data.totals.total,8);assert.equal(f.page.state.prepared,null);
- const paused=f.page.load();f.page.pause();f.pending[2].resolve(data(9));await paused;assert.equal(f.page.state.data.totals.total,8);
+ const paused=f.page.load();f.page.pause();f.pending[2].resolve(data(9));await paused;assert.equal(f.page.state.data,null);
  const revoked=f.page.load();f.context.hensemRoleAccess={canView:false};f.pending[3].resolve(data(10));await revoked;assert.equal(f.page.state.data,null);assert.equal(f.page.state.applied,null);
 });
 test('initial pending/failed remain unknown, without zero totals or native fallback',async()=>{
@@ -38,7 +38,7 @@ test('an operator page that becomes ready after pending applies its requested of
  const f=fixture('withdraw_operators'),timers=new Map();let timerId=0;f.context.setTimeout=fn=>{timers.set(++timerId,fn);return timerId};f.context.clearTimeout=id=>timers.delete(id);
  let run=f.page.load();f.pending.shift().resolve({...data(5),total:60});await run;
  f.page.state.page=2;run=f.page.load();assert.equal(f.calls[1].q.offset,20);f.pending.shift().resolve({prepared:{status:'building'}});await run;
- assert.equal(f.page.state.page,1);assert.equal(f.page.state.applied.query.offset,0);
+ assert.equal(f.page.state.page,2);assert.equal(f.page.state.applied,null);
  const[timerKey,poll]=timers.entries().next().value;timers.delete(timerKey);poll();f.pending.shift().resolve({...data(8),total:60});await new Promise(resolve=>setImmediate(resolve));
  assert.equal(f.page.state.page,2);assert.equal(f.page.state.applied.query.offset,20);assert.equal(f.page.state.data.totals.processed,8);
 });
@@ -55,11 +55,11 @@ function budgetClock(f){
  f.context.setTimeout=(fn,ms)=>{timers.set(++id,{fn,ms});return id};f.context.clearTimeout=key=>timers.delete(key);
  return {timers,set(value){now=value},fire(){const[key,timer]=timers.entries().next().value;timers.delete(key);timer.fn();return timer.ms}};
 }
-test('one deadline stops a stalled withdrawal request, preserves the last result and permits explicit resume',async()=>{
+test('one deadline stops a stalled withdrawal request, clears the last result and permits explicit resume',async()=>{
  const f=fixture(),clock=budgetClock(f);let run=f.page.load();f.pending.shift().resolve(data(3));await run;
  run=f.page.load();const stalled=f.pending.shift();assert.equal([...clock.timers.values()][0].ms,60000);
- clock.set(60000);clock.fire();await run;assert.equal(f.calls.at(-1).o.signal.aborted,true);assert.equal(f.page.state.loading,false);assert.equal(f.page.state.prepared.status,'paused');assert.equal(f.page.state.data.totals.total,3);assert.match(f.page.render(),/继续读取/);assert.equal(clock.timers.size,0);
- run=f.page.load();assert.equal([...clock.timers.values()][0].ms,60000);stalled.resolve(data(99));await new Promise(resolve=>setImmediate(resolve));assert.equal(f.page.state.data.totals.total,3);f.pending.shift().resolve(data(8));await run;assert.equal(f.page.state.data.totals.total,8);assert.equal(clock.timers.size,0);
+ clock.set(60000);clock.fire();await run;assert.equal(f.calls.at(-1).o.signal.aborted,true);assert.equal(f.page.state.loading,false);assert.equal(f.page.state.prepared.status,'paused');assert.equal(f.page.state.data,null);assert.match(f.page.render(),/继续读取/);assert.equal(clock.timers.size,0);
+ run=f.page.load();assert.equal([...clock.timers.values()][0].ms,60000);stalled.resolve(data(99));await new Promise(resolve=>setImmediate(resolve));assert.equal(f.page.state.data,null);f.pending.shift().resolve(data(8));await run;assert.equal(f.page.state.data.totals.total,8);assert.equal(clock.timers.size,0);
 });
 test('prepared polling stops at one minute while the final in-flight transfer has a bounded grace',async()=>{
  const f=fixture(),clock=budgetClock(f);let run=f.page.load();clock.set(55000);f.pending.shift().resolve({prepared:{status:'building'}});await run;
@@ -102,12 +102,12 @@ test('repeated same-country submissions during preparation share the original po
  clock.set(3000);clock.fire();assert.equal(f.calls.length,2);
  f.pending.shift().resolve(data(5));await new Promise(resolve=>setImmediate(resolve));assert.equal(f.page.state.data.totals.total,5);assert.equal(clock.timers.size,0);
 });
-test('a background poll failure replaces preparation with the real error while retaining applied results',async()=>{
- const f=fixture(),clock=budgetClock(f);let run=f.page.load();f.pending.shift().resolve(data(4));await run;const previous=f.page.state.data;
+test('a background poll failure replaces preparation with the real error with no previously applied results',async()=>{
+ const f=fixture(),clock=budgetClock(f);let run=f.page.load();f.pending.shift().resolve(data(4));await run;assert.equal(f.page.state.data.totals.total,4);
  run=f.page.load();f.pending.shift().resolve({prepared:{status:'building'}});await run;clock.set(3000);clock.fire();
- assert.equal(f.page.state.data,previous);assert.match(f.page.render(),/上次成功结果已保留/);
+ assert.equal(f.page.state.data,null);assert.doesNotMatch(f.page.render(),/上次成功结果已保留/);
  f.pending.shift().reject(Error('synthetic transport failure'));await new Promise(resolve=>setImmediate(resolve));
- assert.equal(f.page.state.loading,false);assert.equal(f.page.state.prepared,null);assert.equal(f.page.state.data,previous);
+ assert.equal(f.page.state.loading,false);assert.equal(f.page.state.prepared,null);assert.equal(f.page.state.data,null);
  assert.match(f.page.render(),/synthetic transport failure/);assert.doesNotMatch(f.page.render(),/后台正在准备|正在读取/);assert.equal(clock.timers.size,0);
 });
 test('changing a prepared polling scope cancels it and a late preparation cannot restore the old message',async()=>{
@@ -165,11 +165,11 @@ async function advanceStage(f,clock,at,payload){
 }
 for(const view of ['auto_withdraw','withdraw_operators'])test(view+' advancing one generation automatically displays ready results after a minute without another click',async()=>{
  const f=fixture(view),clock=budgetClock(f);let run=f.page.load();f.pending.shift().resolve(data(4));await run;
- const old=f.page.state.data;f.context.withdrawDate('from','2026-10-14');run=f.page.load();f.pending.shift().resolve(stage());await run;
- assert.equal(f.page.state.dirty,false);assert.equal(f.page.state.data,old);assert.doesNotMatch(f.page.render(),/查看结果|筛选条件已修改/);
+ f.context.withdrawDate('from','2026-10-14');run=f.page.load();f.pending.shift().resolve(stage());await run;
+ assert.equal(f.page.state.dirty,false);assert.equal(f.page.state.data,null);assert.doesNotMatch(f.page.render(),/查看结果|筛选条件已修改/);
  await advanceStage(f,clock,3000,stage(2));assert.equal([...clock.timers.values()][0].ms,5000);
  clock.set(65000);clock.fire();assert.equal([...clock.timers.values()][0].ms,10000);
- assert.equal(f.page.state.data,old);assert.doesNotMatch(f.page.render(),/正在读取|筛选条件已修改/);
+ assert.equal(f.page.state.data,null);assert.doesNotMatch(f.page.render(),/正在读取|筛选条件已修改/);
  f.pending.shift().resolve(stage(3));await settle();assert.equal(f.page.state.prepared.status,'building');
  await advanceStage(f,clock,100000,stage(4));assert.equal([...clock.timers.values()][0].ms,10000);
  await advanceStage(f,clock,120000,{...data(19),startDate:'2026-10-14'});
@@ -244,7 +244,7 @@ for(const change of ['permission','catalog','draft'])test('waiting timer cancels
 test('restoring a left page cannot revive polling or advertise automatic completion without an active wait',async()=>{
  const f=fixture(),clock=budgetClock(f),first=f.page.load();f.pending.shift().resolve(stage());await first;
  const saved=f.page.capture();f.page.pause();assert.equal(clock.timers.size,0);
- f.page.restore(saved);assert.equal(f.page.state.prepared.status,'paused');assert.match(f.page.render(),/继续读取/);assert.doesNotMatch(f.page.render(),/完成后自动显示/);
+ f.page.restore(saved);assert.equal(f.page.state.prepared,null);assert.doesNotMatch(f.page.render(),/继续读取|完成后自动显示/);
  assert.equal(f.calls.length,1);assert.equal(clock.timers.size,0);
 });
 const pollDraft=async()=>{for(let i=0;i<12;i++)await Promise.resolve()};
@@ -257,7 +257,7 @@ async function beginDailyOverride(f,clock,status='building'){
 for(const view of ['auto_withdraw','withdraw_operators'])for(const status of ['missing','building','stale'])test(view+' daily drill preserves its override through repeated '+status+' preparation',async()=>{
  const f=fixture(view),clock=budgetClock(f),expected=await beginDailyOverride(f,clock,status);
  const draft=JSON.stringify([f.L.country,f.L.from,f.L.to,f.page.state.platforms,f.page.state.rowCountry,f.page.state.daily]);
- assert.equal(f.page.state.applied.query.daily,false);assert.equal(f.page.state.data.totals.total,3);
+ assert.equal(f.page.state.applied,null);assert.equal(f.page.state.data,null);
  clock.set(3000);assert.equal(clock.fire(),3000);assert.equal(f.calls.length,3);assert.equal(JSON.stringify(f.calls.at(-1).q),expected);
  f.pending.shift().resolve({prepared:{status}});await pollDraft();assert.equal(f.page.state.prepared.status,status);
  clock.set(6000);assert.equal(clock.fire(),3000);assert.equal(f.calls.length,4);assert.equal(JSON.stringify(f.calls.at(-1).q),expected);
@@ -293,7 +293,7 @@ for(const change of ['permission','identity','native'])test('daily override reje
 test('late daily replies cannot overwrite a new query or cancel its deadline',async()=>{
  const f=fixture(),clock=budgetClock(f);await beginDailyOverride(f,clock);clock.set(3000);clock.fire();const late=f.pending.shift(),oldSignal=f.calls.at(-1).o.signal;
  f.context.withdrawDate('from','2026-10-14');const fresh=f.page.load();assert.equal(oldSignal.aborted,true);const ownedTimer=[...clock.timers.keys()][0];
- late.resolve(data(99));await pollDraft();assert.equal(f.page.state.loading,true);assert(clock.timers.has(ownedTimer));assert.equal(f.page.state.data.totals.total,3);
+ late.resolve(data(99));await pollDraft();assert.equal(f.page.state.loading,true);assert(clock.timers.has(ownedTimer));assert.equal(f.page.state.data,null);
  f.pending.shift().resolve({...data(8),startDate:'2026-10-14'});await fresh;assert.equal(f.page.state.applied.query.daily,false);assert.equal(f.page.state.data.totals.total,8);assert.equal(clock.timers.size,0);
 });
 for(const stop of ['transport','failed','pause','cancel'])test('daily override '+stop+' stops without automatic retry',async()=>{
@@ -301,7 +301,7 @@ for(const stop of ['transport','failed','pause','cancel'])test('daily override '
  if(stop==='pause')f.page.pause();if(stop==='cancel')f.page.cancel();
  if(stop==='transport')reply.reject(Error('synthetic daily failure'));else reply.resolve(stop==='failed'?{prepared:{status:'failed'}}:data(99));
  await pollDraft();assert.equal(f.calls.length,3);assert.equal(f.page.state.loading,false);assert.equal(clock.timers.size,0);
- if(stop==='cancel')assert.equal(f.page.state.data,null);else assert.equal(f.page.state.data.totals.total,3);
+ assert.equal(f.page.state.data,null);
  if(stop==='transport')assert.match(f.page.state.error,/synthetic daily failure/);
  if(stop==='failed')assert.equal(f.page.state.prepared.status,'failed');
 });
@@ -314,7 +314,7 @@ test('invalid draft permits ready applied-row drill but cannot continue polling'
  for(const ready of [true,false]){
   const f=fixture(),clock=budgetClock(f),first=f.page.load();f.pending.shift().resolve(data(3));await first;
   f.L.multi.team=['missing'];f.L.team='missing';f.context.withdrawDaily(0);f.pending.shift().resolve(ready?data(8):{prepared:{status:'building'}});await pollDraft();
-  if(ready){assert.equal(f.page.state.data.totals.total,8);assert.equal(f.page.state.applied.query.daily,true);}else{clock.set(3000);clock.fire();await pollDraft();assert.equal(f.page.state.data.totals.total,3);}
+  if(ready){assert.equal(f.page.state.data.totals.total,8);assert.equal(f.page.state.applied.query.daily,true);}else{clock.set(3000);clock.fire();await pollDraft();assert.equal(f.page.state.data,null);}
   assert.equal(f.calls.length,2);assert.equal(clock.timers.size,0);
  }
 });

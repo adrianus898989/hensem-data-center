@@ -16,9 +16,9 @@ function ready(request,count=10,success=4,provider='Synthetic provider'){
 const queued=request=>({request,status:'missing',result:null,publication:null,preparation:{state:'queued',retryable:true}});
 const reads=h=>h.calls.filter(q=>q.action==='aggregatePrepared');
 const grid=html=>html.match(/<table\b[^>]*class="provider-daily-matrix-table"[\s\S]*?<\/table>/)?.[0]||'';
-async function setup(){
+async function setup(catalog=platforms){
  const time=clock(),listeners=new Map();
- const h=harness({platforms,roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true,extraModules:['live-statistic-windows.js','live-prepared-aggregates.js'],beforeLive:c=>{
+ const h=harness({platforms:catalog,roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true,extraModules:['live-statistic-windows.js','live-prepared-aggregates.js'],beforeLive:c=>{
   c.setTimeout=time.setTimeout;c.clearTimeout=time.clearTimeout;c.Date=class extends Date{constructor(...args){super(...(args.length?args:[time.now]));}static now(){return time.now;}};
   c.addEventListener=(name,fn)=>listeners.set(name,fn);
  }});
@@ -82,9 +82,7 @@ test('navigation while a peer queues hides partial daily data and ignores its la
  assert.equal(h.html(),after);assert.equal(reads(h).length,count);assert.doesNotMatch(h.html(),/Old page provider/);
 });
 test('progressive daily rendering retains the existing Panda coverage gate',async()=>{
- const h=await setup(),run=h.c.liveQuery();await settle();assert(grid(h.html()));
- h.listeners.get('pagehide')();await run;
- const panda={...platforms[1],source:'panda'};
- h.L.catalog=[platforms[0],panda];h.L.queryPlatforms=[platforms[0],panda];h.L.loading=true;h.L.dirty=false;h.L.pageQueried=true;
- h.c.render();assert.match(h.html(),/已读 1 \/ 2 平台/);assert.doesNotMatch(h.html(),/provider-daily-matrix-table|kpi-value/);
+ const h=await setup([platforms[0],{...platforms[1],source:'panda'}]),run=h.c.liveQuery();
+ await settle();assert.match(h.html(),/已读 1 \/ 2 平台/);assert.doesNotMatch(h.html(),/provider-daily-matrix-table|kpi-value/);
+ h.listeners.get('pagehide')();await run;assert.doesNotMatch(h.html(),/provider-daily-matrix-table|kpi-value/);
 });

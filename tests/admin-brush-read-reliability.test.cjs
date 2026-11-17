@@ -23,14 +23,14 @@ test('events owns one lane, cancels health, disables health readiness and keeps 
 test('identical in-flight query joins existing work and queued platforms have no active deadline',async()=>{
  const h=await setup(),run=h.c.liveQuery();await settle();const count=h.history.length,timers=h.timers.length;await h.c.liveQuery();await settle();assert.equal(h.history.length,count);assert.equal(h.timers.length,timers);assert.equal(h.history.length,1);await finish(h,run);assert.equal(h.max(),1);
 });
-test('a repeated same-scope query reuses verified results with zero RPC; explicit refresh rereads all',async()=>{
+test('a repeated same-scope query rereads verified results; explicit refresh rereads all',async()=>{
  const h=await setup();await finish(h,h.c.liveQuery());const n=h.history.length,stamp=h.api.capture().results[0]._submissionReadAt;
- await h.c.liveQuery();assert.equal(h.history.length,n);assert(h.api.capture().results.every(r=>r._submissionCacheHit));assert.equal(h.api.capture().results[0]._submissionReadAt,stamp);assert.match(h.html(),/数据读取[^<]*缓存/);assert(h.writes.some(w=>/onclick="liveRefresh\(\)"/.test(w.html)),'the rendered filters provide explicit refresh');
- await finish(h,h.c.liveRefresh());assert.equal(h.history.length,n+3);assert(h.api.capture().results.every(r=>!r._submissionCacheHit));assert.equal(h.max(),1);
+ await finish(h,h.c.liveQuery());assert.equal(h.history.length,n+3);assert(h.api.capture().results.every(r=>!r._submissionCacheHit));assert.equal(h.api.capture().results[0]._submissionReadAt,stamp);assert.doesNotMatch(h.html(),/数据读取[^<]*缓存/);assert(h.writes.some(w=>/onclick="liveRefresh\(\)"/.test(w.html)),'the rendered filters provide explicit refresh');
+ await finish(h,h.c.liveRefresh());assert.equal(h.history.length,n+6);assert(h.api.capture().results.every(r=>!r._submissionCacheHit));assert.equal(h.max(),1);
 });
 test('successful cached platforms are retained while failed platforms still retry exactly once and remain visible',async()=>{
  const h=await setup();await finish(h,h.c.liveQuery(),q=>q.platformId===Q.id?Error('读取超时'):undefined);assert.equal(h.api.metric().received,2);assert.equal(h.api.metric().complete,false);assert.equal(h.api.capture().failures[0].attempts,2);assert.match(h.html(),/部分统计待核对/);const n=h.history.length;
- await finish(h,h.c.liveQuery(),q=>q.platformId===Q.id?Error('读取超时'):undefined);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[Q.id,Q.id]);assert.equal(h.api.metric().received,2);assert.equal(h.api.metric().complete,false);assert.match(h.html(),/重试未完成/);
+ await finish(h,h.c.liveQuery(),q=>q.platformId===Q.id?Error('读取超时'):undefined);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[P.id,Q.id,R.id,Q.id]);assert.equal(h.api.metric().received,2);assert.equal(h.api.metric().complete,false);assert.match(h.html(),/重试未完成/);
  const start=h.history.length;await finish(h,h.c.liveSubmissionRetryPlatform(Q.id));assert.deepEqual(h.history.slice(start).map(q=>q.platformId),[Q.id]);assert.equal(h.api.metric().complete,true);
 });
 test('cache expiration, scope and native identity changes require new reads rather than broadening stored results',async()=>{
@@ -55,8 +55,8 @@ test('missing recharge history is retained as source evidence and opening its ex
 
 test('current-day reuse keeps the exact original window for 30 seconds and then reads a fresh window',async()=>{
  const h=await setup();h.c.liveSet('from','2026-09-23T00:00:00');h.c.liveSet('to','2026-09-23T23:59:59');await finish(h,h.c.liveQuery());const n=h.history.length,end=h.history[0].endAt;
- h.setNow('2026-09-23T12:00:29Z');await h.c.liveQuery();assert.equal(h.history.length,n);assert.equal(h.api.capture().results[0].endAt,end);
- h.setNow('2026-09-23T12:00:30Z');await finish(h,h.c.liveQuery());assert.equal(h.history.length,n+3);assert.notEqual(h.history.at(-1).endAt,end);assert.equal(h.max(),1);
+ h.setNow('2026-09-23T12:00:29Z');await finish(h,h.c.liveQuery());assert.equal(h.history.length,n+3);assert.notEqual(h.api.capture().results[0].endAt,end);
+ h.setNow('2026-09-23T12:00:30Z');await finish(h,h.c.liveQuery());assert.equal(h.history.length,n+6);assert.notEqual(h.history.at(-1).endAt,end);assert.equal(h.max(),1);
 });
 test('an explicit single-platform retry also pauses health and cannot reread a cached ready platform',async()=>{
  const h=await setup();await finish(h,h.c.liveQuery(),q=>q.platformId===Q.id?Error('读取超时'):undefined);const n=h.history.length,cancels=h.controls.cancels;
@@ -66,7 +66,7 @@ test('an explicit single-platform retry also pauses health and cannot reread a c
 test('a three-minute today batch may reuse its exact window after completion, without extending old platform TTL or renewing the anchor',async()=>{
  const h=await setup();h.c.liveSet('from','2026-09-23T00:00:00');h.c.liveSet('to','2026-09-23T23:59:59');const run=h.c.liveQuery();await settle();const end=h.history[0].endAt;
  h.setNow('2026-09-23T12:01:00Z');await advance(h);h.setNow('2026-09-23T12:02:00Z');await advance(h);h.setNow('2026-09-23T12:03:00Z');await advance(h);await run;const n=h.history.length,completion=h.api.capture().windowCompletedAt;
- await finish(h,h.c.liveQuery());assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[P.id,Q.id],'old early-platform cache entries still expire');assert(h.history.slice(n).every(q=>q.endAt===end));assert.equal(h.api.capture().results.find(r=>r.platform.id===R.id)._submissionCacheHit,true);assert.equal(h.api.capture().windowCompletedAt,completion,'cache hits and same-window retries do not extend the window anchor');
+ await finish(h,h.c.liveQuery());assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[P.id,Q.id,R.id]);assert(h.history.slice(n).every(q=>q.endAt!==end));assert(h.api.capture().results.every(r=>!r._submissionCacheHit));
  const m=h.history.length;h.setNow('2026-09-23T12:03:31Z');await finish(h,h.c.liveQuery());assert.equal(h.history.length,m+3);assert.notEqual(h.history.at(-1).endAt,end);assert(h.api.capture().results.every(r=>!r._submissionCacheHit));
 });
 
@@ -82,43 +82,43 @@ function legacySources(h){Object.assign(h.L.catalog.find(p=>p.id===P.id),{source
 test('actual AR/NEWAR summary wire without calculationComplete reuses the exact successful snapshot and refresh remains explicit',async()=>{
  const h=await setup();legacySources(h);const wire=q=>legacySummary(q,h);await finish(h,h.c.liveQuery(),wire);const n=h.history.length,prior=h.api.capture().results.map(r=>[r.platform.id,r._submissionReadAt,r.startAt,r.endAt]);
  assert.equal(h.api.metric().complete,true);assert(h.api.capture().results.every(r=>!Object.hasOwn(r.coverage,'calculationComplete')));
- await finish(h,h.c.liveQuery(),wire);assert.equal(h.history.length,n,'same actor/native/query/window within TTL issues zero RPCs');assert(h.api.capture().results.every(r=>r._submissionCacheHit));assert.deepEqual(h.api.capture().results.map(r=>[r.platform.id,r._submissionReadAt,r.startAt,r.endAt]),prior);
+ await finish(h,h.c.liveQuery(),wire);assert.equal(h.history.length,n+3);assert(h.api.capture().results.every(r=>!r._submissionCacheHit));assert.deepEqual(h.api.capture().results.map(r=>[r.platform.id,r._submissionReadAt,r.startAt,r.endAt]),prior);
  assert(h.api.capture().results.every(r=>r.coverage.sourceCompletenessVerified===false&&!Object.hasOwn(r.coverage,'calculationComplete')),'a cache hit never manufactures source or calculation proof');
- await finish(h,h.c.liveQuery(true),wire);assert.equal(h.history.length,n+3);assert(h.api.capture().results.every(r=>!r._submissionCacheHit));assert.equal(h.max(),1);
+ await finish(h,h.c.liveQuery(true),wire);assert.equal(h.history.length,n+6);assert(h.api.capture().results.every(r=>!r._submissionCacheHit));assert.equal(h.max(),1);
 });
 
 test('legacy caching never coerces missing or malformed mandatory gap counters to zero',async()=>{
  for(const key of ['orderCount','missingMemberCount','unknownStatusCount','orderSequenceUncertainCount'])for(const value of [undefined,null,false,'0',-1,0.5]){
   const h=await setup();legacySources(h);const wire=q=>legacySummary(q,h,r=>{if(q.platformId===Q.id){if(value===undefined)delete r.coverage[key];else r.coverage[key]=value;}});
-  await finish(h,h.c.liveQuery(),wire);const n=h.history.length;await finish(h,h.c.liveQuery(),wire);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[Q.id],key+' '+String(value));assert(h.api.capture().results.filter(r=>r.platform.id!==Q.id).every(r=>r._submissionCacheHit));
+  await finish(h,h.c.liveQuery(),wire);const n=h.history.length;await finish(h,h.c.liveQuery(),wire);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[P.id,Q.id,R.id],key+' '+String(value));assert(h.api.capture().results.filter(r=>r.platform.id!==Q.id).every(r=>!r._submissionCacheHit));
  }
 });
 
 test('explicit calculation failure and unknown legacy source-completeness contracts refuse reuse',async()=>{
  for(const change of [r=>r.coverage.calculationComplete=false,r=>r.coverage.calculationComplete=null,r=>delete r.coverage.sourceCompletenessVerified,r=>r.coverage.sourceCompletenessVerified=true]){
-  const h=await setup();legacySources(h);const wire=q=>legacySummary(q,h,r=>{if(q.platformId===Q.id)change(r);});await finish(h,h.c.liveQuery(),wire);const n=h.history.length;await finish(h,h.c.liveQuery(),wire);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[Q.id]);
+  const h=await setup();legacySources(h);const wire=q=>legacySummary(q,h,r=>{if(q.platformId===Q.id)change(r);});await finish(h,h.c.liveQuery(),wire);const n=h.history.length;await finish(h,h.c.liveQuery(),wire);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[P.id,Q.id,R.id]);
  }
 });
 
 test('present optional gap fields must be exact zero integers and positive gaps stay uncached',async()=>{
  for(const key of ['coverageUnknownDays','missingSuccessTimeCount'])for(const value of [null,false,'0',-1,0.5,1]){
-  const h=await setup();legacySources(h);const wire=q=>legacySummary(q,h,r=>{if(q.platformId===Q.id)r.coverage[key]=value;});await finish(h,h.c.liveQuery(),wire);const n=h.history.length;await finish(h,h.c.liveQuery(),wire);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[Q.id],key+' '+String(value));
+  const h=await setup();legacySources(h);const wire=q=>legacySummary(q,h,r=>{if(q.platformId===Q.id)r.coverage[key]=value;});await finish(h,h.c.liveQuery(),wire);const n=h.history.length;await finish(h,h.c.liveQuery(),wire);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[P.id,Q.id,R.id],key+' '+String(value));
  }
 });
 
 test('missing native recharge history remains unknown in a reused legacy result',async()=>{
- const h=await setup();legacySources(h);const wire=q=>legacySummary(q,h,r=>{if(q.platformId===Q.id){r.coverage.missingRechargeCount=100;r.coverage.missingLevelCount=20;r.metrics.forEach(x=>x.unknown_members=7);}});await finish(h,h.c.liveQuery(),wire);const n=h.history.length;assert.match(h.html(),/7 个 ID 充值历史待补/);await finish(h,h.c.liveQuery(),wire);assert.equal(h.history.length,n);assert.match(h.html(),/7 个 ID 充值历史待补/);const cached=h.api.capture().results.find(r=>r.platform.id===Q.id);assert.equal(cached.coverage.missingRechargeCount,100);assert.equal(cached.coverage.sourceCompletenessVerified,false);
+ const h=await setup();legacySources(h);const wire=q=>legacySummary(q,h,r=>{if(q.platformId===Q.id){r.coverage.missingRechargeCount=100;r.coverage.missingLevelCount=20;r.metrics.forEach(x=>x.unknown_members=7);}});await finish(h,h.c.liveQuery(),wire);const n=h.history.length;assert.match(h.html(),/7 个 ID 充值历史待补/);await finish(h,h.c.liveQuery(),wire);assert.equal(h.history.length,n+3);assert.match(h.html(),/7 个 ID 充值历史待补/);const cached=h.api.capture().results.find(r=>r.platform.id===Q.id);assert.equal(cached.coverage.missingRechargeCount,100);assert.equal(cached.coverage.sourceCompletenessVerified,false);
 });
 
 test('YASH cache requires explicit complete calculation and source/day/success-time coverage',async()=>{
  const good=r=>{r.coverage={...r.coverage,calculationComplete:true,sourceCompletenessVerified:true,coverageUnknownDays:0,missingSuccessTimeCount:0};};
  for(const change of [null,r=>delete r.coverage.calculationComplete,r=>r.coverage.calculationComplete=false,r=>delete r.coverage.sourceCompletenessVerified,r=>r.coverage.sourceCompletenessVerified=false,r=>delete r.coverage.coverageUnknownDays,r=>r.coverage.coverageUnknownDays=1,r=>delete r.coverage.missingSuccessTimeCount,r=>r.coverage.missingSuccessTimeCount=1]){
-  const h=await setup();legacySources(h);Object.assign(h.L.catalog.find(p=>p.id===Q.id),{source:'kb',scopeGroup:'IN',sourceName:'YASH.BET',name:'YASH.BET'});const wire=q=>legacySummary(q,h,r=>{if(q.platformId===Q.id){good(r);change?.(r);}});await finish(h,h.c.liveQuery(),wire);const n=h.history.length;await finish(h,h.c.liveQuery(),wire);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),change?[Q.id]:[]);
+  const h=await setup();legacySources(h);Object.assign(h.L.catalog.find(p=>p.id===Q.id),{source:'kb',scopeGroup:'IN',sourceName:'YASH.BET',name:'YASH.BET'});const wire=q=>legacySummary(q,h,r=>{if(q.platformId===Q.id){good(r);change?.(r);}});await finish(h,h.c.liveQuery(),wire);const n=h.history.length;await finish(h,h.c.liveQuery(),wire);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[P.id,Q.id,R.id]);
  }
 });
 
 test('calculationComplete omission is supported only for the known AR/NEWAR legacy summaries',async()=>{
- for(const source of ['lg','game66']){const h=await setup();legacySources(h);h.L.catalog.find(p=>p.id===Q.id).source=source;const wire=q=>legacySummary(q,h);await finish(h,h.c.liveQuery(),wire);const n=h.history.length;await finish(h,h.c.liveQuery(),wire);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[Q.id]);}
+ for(const source of ['lg','game66']){const h=await setup();legacySources(h);h.L.catalog.find(p=>p.id===Q.id).source=source;const wire=q=>legacySummary(q,h);await finish(h,h.c.liveQuery(),wire);const n=h.history.length;await finish(h,h.c.liveQuery(),wire);assert.deepEqual(h.history.slice(n).map(q=>q.platformId),[P.id,Q.id,R.id]);}
 });
 
 test('real legacy-wire reuse still expires and cannot cross native scope, account identity or revoked permission',async()=>{
@@ -132,6 +132,6 @@ test('real legacy-wire reuse still expires and cannot cross native scope, accoun
 
 test('the actual today legacy wire keeps its original window without extending the result TTL',async()=>{
  const h=await setup();legacySources(h);h.c.liveSet('from','2026-09-23T00:00:00');h.c.liveSet('to','2026-09-23T23:59:59');const wire=q=>legacySummary(q,h);await finish(h,h.c.liveQuery(),wire);const n=h.history.length,end=h.history[0].endAt,stamp=h.api.capture().results[0]._submissionReadAt;
- h.setNow('2026-09-23T12:00:29Z');await h.c.liveQuery();assert.equal(h.history.length,n);assert(h.api.capture().results.every(r=>r.endAt===end));assert.equal(h.api.capture().results[0]._submissionReadAt,stamp);
- h.setNow('2026-09-23T12:00:30Z');await finish(h,h.c.liveQuery(),wire);assert.equal(h.history.length,n+3);assert.notEqual(h.history.at(-1).endAt,end);
+ h.setNow('2026-09-23T12:00:29Z');await finish(h,h.c.liveQuery(),wire);assert.equal(h.history.length,n+3);assert(h.api.capture().results.every(r=>r.endAt!==end));assert(h.api.capture().results[0]._submissionReadAt>stamp);
+ h.setNow('2026-09-23T12:00:30Z');await finish(h,h.c.liveQuery(),wire);assert.equal(h.history.length,n+6);assert.notEqual(h.history.at(-1).endAt,end);
 });

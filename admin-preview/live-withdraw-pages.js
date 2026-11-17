@@ -17,14 +17,14 @@
   const {L,E,C,R,N,box,table,request,render}=ctx;
   const S={localSnapshot:false,serverPaging:false,applied:null,data:null,dataKey:'',loadingKey:'',prepared:null,error:'',loading:false,dirty:false,serial:0,view:'auto',metricView:'created',secondaryPage:1,platforms:[],rowCountry:'',account:'',sort:'total',asc:false,daily:false,historical:false,page:1,size:20,open:false,search:'',reason:null,reasonData:null,reasonError:'',reasonSelectionChanged:false,reasonBusy:false,reasonSerial:0,reasonPage:1,reasonSize:20,reasonLabel:'',reasonQuery:'',reasonSelectionGrouping:'',reasonTrigger:null,originalNote:'',originalNoteTitle:'驳回原文',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false};
   const initialState={...S,platforms:[]};
-  let readController=null,pendingRead=null,preparedTimer=null,readDeadlineTimer=null,loadedBase=null;
+  let readController=null,pendingRead=null,preparedTimer=null,readDeadlineTimer=null,loadedBase=null,readingScope=null;
   const setLoading=value=>{S.loading=value;ctx.onLoading?.(value)};
-  function stopRead(){if(preparedTimer!==null){root.clearTimeout?.(preparedTimer);preparedTimer=null;}if(readDeadlineTimer!==null){root.clearTimeout?.(readDeadlineTimer);readDeadlineTimer=null;}readController?.abort();readController=null;pendingRead=null;}
+  function stopRead(){readingScope=null;if(preparedTimer!==null){root.clearTimeout?.(preparedTimer);preparedTimer=null;}if(readDeadlineTimer!==null){root.clearTimeout?.(readDeadlineTimer);readDeadlineTimer=null;}readController?.abort();readController=null;pendingRead=null;}
   const jsArgument=value=>JSON.stringify(String(value??'')).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const sourceNote=(value,empty='（源备注为空）',title='驳回原文',label='',exact=false)=>{const sanitized=S.reasonData?.reasonTextSanitized===true&&S.reasonData?.reasonTextFormat==='sanitized_label_v1';if(sanitized&&title!=='备注来源状态')title='采集说明（已脱敏）';const raw=String(value??''),full=exact?(raw.trim()?raw:empty):cleanNote(value)||empty,preview=label||(full.length>96?full.slice(0,96)+'…':full);return '<button type="button" class="withdraw-source-note" title="'+(title==='备注来源状态'?'点击查看备注来源状态':sanitized?'点击查看采集说明（已脱敏）':'点击查看完整原文')+'" onclick="withdrawReasonOriginal('+jsArgument(full)+','+jsArgument(title)+(exact?',true':'')+')">'+E(preview)+'</button>'};
   const rejectionSourceNote=(value,row={})=>{if(row.rejectionNoteState==='withheld'){const labels={remark:'主备注',front:'前台备注',back:'后台备注'},sources=(row.hiddenNoteSources||[]).map(key=>labels[key]).filter(Boolean);return sourceNote(null,'（'+(sources.length?sources.join('、'):'源业务备注')+'已隐藏，驳回备注待核对）','备注来源状态','',true)}if(row.rejectionNoteState==='missing')return sourceNote(null,'（未采集到明确驳回备注）','备注来源状态','',true);if(row.rejectionNoteState==='empty')return sourceNote(null,'（源备注为空）','备注来源状态','',true);return sourceNote(value,'（源备注为空）','驳回原文','',true)};
   const sourceNoteStates=row=>{if(!row.sourceNoteStates)return '';const labels={remark:'主备注',front:'前台备注',back:'后台备注'},hidden=new Set(row.hiddenNoteSources||[]);return '<small class="cell-sub">'+Object.entries(labels).map(([key,label])=>{const state=row.sourceNoteStates[key],text=key==='front'&&row.verifiedRejectionNote?.sourceField==='frontRemark'&&row.verifiedRejectionNote?.verificationMethod==='manual_source_ui'?'已在源站核实':state==='empty'?'为空':hidden.has(key)?state==='redacted'?'部分已隐藏':'已隐藏':state==='template'?'已采集业务模板':'未取得可用文本';return E(label+'：'+text)}).join(' · ')+'</small>'};
-  const reasonCache=new Map(),reasonSemantics=new Map();
+  const reasonSemantics=new Map();
   let reasonSnapshot=null,reasonRead=null;
   function stopReasonRead(){const job=reasonRead;reasonRead=null;S.reasonBusy=false;if(job){root.clearTimeout?.(job.pollTimer);root.clearTimeout?.(job.deadlineTimer);job.controller?.abort();job.cancel();}}
   const view=()=>ctx.page()==='withdraw_operators'?'operators':'auto';
@@ -36,14 +36,14 @@
   const resultDaily=()=>S.applied?.query.daily??S.daily;
   const displayAllowed=p=>root.HensemLiveReportData?.displayAllowed?.(p)!==false;
   const accessKey=()=>{const a=root.hensemRoleAccess||{},s=root.hensemDataScope||{},entries=[...(L.catalog||[]),...(L.withdrawCatalog||[])].map(p=>JSON.stringify([p.id||'',p.source||p.system||'',p.identityCountry??p.country,p.sourceName||p.source_name||p.name,p.team||'',p.scopeGroup||p.scope_group||'',displayAllowed(p)])).sort();return JSON.stringify([s.mode||'document',s.identity||'document',a.mode||'document',a.roleId||'',a.version??null,a.assignmentVersion??null,a.canView??null,Array.isArray(a.permissions)?a.permissions.slice().sort():[],entries]);};
-  function clearResult(){loadedBase=null;reasonSnapshot=null;reasonCache.clear();reasonSemantics.clear();S.serial++;stopRead();stopReasonRead();S.reasonSerial++;setLoading(false);Object.assign(S,{applied:null,data:null,dataKey:'',loadingKey:'',localSnapshot:false,serverPaging:false,reason:null,reasonData:null,reasonBusy:false,reasonError:'',reasonSelectionChanged:false,reasonLabel:'',reasonQuery:'',reasonSelectionGrouping:'',originalNote:'',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false,prepared:null,error:'',dirty:true});}
+  function clearResult(){loadedBase=null;reasonSnapshot=null;reasonSemantics.clear();S.serial++;stopRead();stopReasonRead();S.reasonSerial++;setLoading(false);Object.assign(S,{applied:null,data:null,dataKey:'',loadingKey:'',localSnapshot:false,serverPaging:false,reason:null,reasonData:null,reasonBusy:false,reasonError:'',reasonSelectionChanged:false,reasonLabel:'',reasonQuery:'',reasonSelectionGrouping:'',originalNote:'',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false,prepared:null,error:'',dirty:true});}
   const retiredYashClassification=data=>{
    const retired=value=>value?.classificationBasis==='confirmed_manual_only';
    // Retire only the superseded YASH policy, including saved tabs and prior rows.
    return retired(data?.yashCoverage)||[...(Array.isArray(data?.rows)?data.rows:[]),...(Array.isArray(data?.previousRows)?data.previousRows:[])].some(row=>row.platform==='YASH.BET'&&['印度','IN'].includes(row.country)&&[row,row.previous].some(retired));
   };
   const retiredYashMessage='统计口径已更新，请重新查询。';
-  function resultAllowed(){if(root.hensemRoleAccess?.canView===false||S.applied&&(S.applied.accessKey!==accessKey()||S.applied.nativeStamp&&S.applied.nativeStamp!==nativeStamp()||S.applied.query.view!==view())){clearResult();return false;}if(retiredYashClassification(S.data)){clearResult();S.error=retiredYashMessage;return false;}return true;}
+  function resultAllowed(){const scope=readingScope||S.applied;if(root.hensemRoleAccess?.canView===false||scope&&(scope.accessKey!==accessKey()||scope.nativeStamp&&scope.nativeStamp!==nativeStamp()||scope.query.view!==view())){clearResult();return false;}if(retiredYashClassification(S.data)){clearResult();S.error=retiredYashMessage;return false;}return true;}
   const filterKey=(scope,q)=>JSON.stringify([scope,q.country,q.startAt,q.endAt,q.successStartAt,q.successEndAt,q.successBasis,q.includeSecondary!==false,q.platforms,q.scopeTargets||null,q.view,q.daily,q.account||'']);
   function draftChanged(){if(!S.applied||!S.data)return S.dirty;try{return (S.applied.successWindowExplicit===true)!==!!(L.successFrom&&L.successTo)||filterKey(selectionKey(),query())!==filterKey(S.applied.scopeKey,S.applied.query);}catch{return true;}}
   const identity=p=>{const row=root.HensemLiveReportData?.normalizeIdentity(p)||{...p,identityCountry:p.identityCountry??p.country,country:isPanghuCountry(p.country)?'巴西':['香港','红膏蟹'].includes(p.country)?'国家待核对':p.country,team:isPanghuCountry(p.country)?'胖虎':p.team||(['香港','红膏蟹'].includes(p.country)?p.country:'__unassigned__')};return row.team==='__unassigned__'&&!p.team?{...row,team:'__team_pending__'}:row};
@@ -90,17 +90,18 @@
   }
   async function load(reset=false,override=null){
    resultAllowed();loadedBase=null;stopReasonRead();reasonSnapshot=null;S.reasonSerial++;S.reason=null;S.reasonData=null;
-   if(!L.catalogReady)return;if(reset){S.page=1;reasonCache.clear();}
+   if(!L.catalogReady)return;if(reset)S.page=1;
    if(root.hensemRoleAccess?.canView===false)return;
    const scope=override?.applied.scopeKey||selectionKey();
-   if(!override&&S.applied&&S.applied.country!==displayCountry())clearResult();
+   if(!override&&S.applied&&draftChanged())clearResult();
    const target=view();if(S.view!==target){clearResult();S.view=target;S.page=1;S.sort=target==='operators'?'processed':'total';S.asc=false;S.daily=false;S.reason=null}
    let targetQuery,key;try{targetQuery=override?.query||query();key=JSON.stringify([scope,targetQuery])}catch(e){S.serial++;stopRead();setLoading(false);S.loadingKey='';S.error=e.message||'读取失败';S.dirty=true;render();return}
    if(S.loading&&S.loadingKey===key)return pendingRead;
    if(!override&&preparedTimer!==null&&S.prepared?.queryKey===key)return;
    const applied=override?{...override.applied,query:targetQuery,accessKey:accessKey(),nativeStamp:nativeStamp()}:{query:targetQuery,scopeKey:scope,country:displayCountry(),teams:activeTeams().slice(),catalog:scopeCatalog().map(p=>({...p})),platforms:S.platforms.slice(),rowCountry:S.rowCountry,historical:S.historical,successWindowExplicit:!!(L.successFrom&&L.successTo),accessKey:accessKey(),nativeStamp:nativeStamp()};
+   Object.assign(S,{data:null,dataKey:'',applied:null,localSnapshot:false,originalNote:'',note:null,noteDraft:''});
    const keepPrepared=override?.preparedPoll>0&&S.prepared?.queryKey===key&&['missing','building','stale'].includes(S.prepared.status);
-   const serial=++S.serial;stopRead();const controller=typeof root.AbortController==='function'?new root.AbortController():null;readController=controller;S.loadingKey=key;setLoading(true);if(!keepPrepared)S.prepared=null;S.error='';if(!keepPrepared)render();
+   const serial=++S.serial;stopRead();const controller=typeof root.AbortController==='function'?new root.AbortController():null;readController=controller;readingScope=applied;S.loadingKey=key;setLoading(true);if(!keepPrepared)S.prepared=null;S.error='';if(!keepPrepared)render();
    const wait=override?.preparedWait||{startedAt:Date.now(),reads:0,progress:null,extended:false,invalidated:false};
    // A drill may read an applied row while the controls hold another draft.
    // Keep the first draft stamp across polls without replacing the drill query.
@@ -118,7 +119,7 @@
      const data=await(typeof root.setTimeout==='function'?Promise.race([response,new Promise((_,reject)=>{readDeadlineTimer=root.setTimeout(()=>{readDeadlineTimer=null;deadlineExpired=true;reject(budgetError());controller?.abort();},requestBudget);})]):response);
      if(serial!==S.serial)return;
      if(readDeadlineTimer!==null){root.clearTimeout?.(readDeadlineTimer);readDeadlineTimer=null;}
-if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeStamp!==nativeStamp()||root.hensemRoleAccess?.canView===false){clearResult();render();return;}if(Date.now()>=requestExpiresAt)throw budgetError();if(data?.prepared&&data.prepared.status!=='ready'){
+     if(applied.accessKey!==accessKey()||applied.nativeStamp!==nativeStamp()||root.hensemRoleAccess?.canView===false){clearResult();render();return;}if(Date.now()>=requestExpiresAt)throw budgetError();if(data?.prepared&&data.prepared.status!=='ready'){
       if(!['missing','building','stale','failed'].includes(data.prepared.status))throw Error('统计准备状态无效，请重试。');
       if(data.prepared.status!=='failed'){
        const progress=preparedProgress(data.prepared),previous=wait.progress;
@@ -148,7 +149,7 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
       return;
      }if(retiredYashClassification(data))throw Error(retiredYashMessage);S.prepared=null;S.secondaryPage=1;S.applied=applied;if(!applied.successWindowExplicit)S.metricView='created';S.data={...data,country:applied.country,rawCountry:targetQuery.country,scopeTargets:targetQuery.scopeTargets||null,scopeKey:scope};S.dataKey=key;S.dirty=false;S.localSnapshot=target==='auto'&&!targetQuery.daily&&targetQuery.offset===0&&targetQuery.limit===500&&Array.isArray(data.rows)&&data.total!==null&&data.total!==undefined&&data.total!==''&&typeof data.total!=='boolean'&&Number.isSafeInteger(Number(data.total))&&Number(data.total)>=0&&Number(data.total)<=500&&data.rows.length===Number(data.total);S.serverPaging=target==='auto'&&!targetQuery.daily&&!S.localSnapshot;if(!S.localSnapshot&&targetQuery.limit!==500)S.page=Math.floor((targetQuery.offset||0)/S.size)+1;if(S.serverPaging){if(targetQuery.limit===500){S.sort=targetQuery.sort;S.asc=targetQuery.ascending;S.page=1;}if(Array.isArray(S.data.rows)&&S.data.rows.length>S.size)S.data.rows=S.data.rows.slice(0,S.size);}S.page=Math.min(S.page,Math.max(1,Math.ceil(Number(data.total||0)/S.size)));setLoading(false);S.loadingKey='';rememberLoadedBase();render()}
     catch(e){if(serial!==S.serial)return;if(deadlineExpired||e?.code==='WITHDRAW_READ_BUDGET'){S.prepared={status:'paused',queryKey:key,reason:'read_budget_elapsed'};S.dirty=true;setLoading(false);S.loadingKey='';render();return;}if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(e?.code||''))||/^(preview_denied|synthetic_session_denied|assigned_role_required|page_action_denied|role_permission_denied|session_denied)$/.test(String(e?.message||''))){clearResult();S.error='登录或查询权限已变化，请重新验证后查询。';render();return;}setLoading(false);S.loadingKey='';S.prepared=null;S.error=e.message||'读取失败';render()}
-    finally{if(serial===S.serial){if(readDeadlineTimer!==null){root.clearTimeout?.(readDeadlineTimer);readDeadlineTimer=null;}readController=null;pendingRead=null;}}
+    finally{if(serial===S.serial){if(readDeadlineTimer!==null){root.clearTimeout?.(readDeadlineTimer);readDeadlineTimer=null;}readController=null;pendingRead=null;if(!S.prepared)readingScope=null;}}
    })();pendingRead=run;return run;
   }
   const clone=value=>JSON.parse(JSON.stringify(value));
@@ -506,7 +507,6 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
    if(!reasonSemanticCompatible(data,semanticScope))throw Error('原因规则已更新，旧组合统计不再展示，请重试。');
    if(data.reasonGrouping!==atomicGrouping||reasonSemantics.has(semanticScope))return;
    reasonSemantics.set(semanticScope,atomicGrouping);
-   for(const [key,value]of reasonCache)if(value.semanticScope===semanticScope&&blockingKinds.includes(value.kind))reasonCache.delete(key);
    if(reasonSnapshot?.semanticScope===semanticScope)reasonSnapshot=null;
   }
   const blockingReasonLabel=(value,row={})=>cleanNote(value)==='检测没备注'?(row.noteState==='unknown'?'未采集到说明':row.noteState==='present'?cleanNote(value):'未记录拦截说明'):cleanNote(value);
@@ -676,9 +676,9 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
   function draw(){resultAllowed();const operators=view()==='operators',d=S.data||{},t=d.totals||{},prior=d.previousTotals,matched=matchedSummary(d),comparisonIssue=calculationIssue(d)||summaryComparisonIssue(d),den=operators?'processed':'total',rows=displayedRows(),daily=resultDaily(),changed=draftChanged();
    const ratio=(r,key)=>{const count=r[key],total=r[den];if(!shareKnown(r,key,den))return '—';const value=R(count,total);return key==='autoCount'&&Number(count)/Number(total)<0.45?'<span class="red">'+value+'</span>':value};
    const controls=toolbar();let body='';if(changed&&!S.prepared&&!S.loading)body+='<div class="live-status withdraw-draft-notice" role="status">筛选条件已修改，点击查询更新。'+(S.data?'以下仍为上次成功查询结果（'+E(S.applied?.country||S.data.country)+'）。':'')+'</div>';
-   if(S.loading&&!S.prepared){body+='<div class="live-status" role="status">正在读取'+(operators?'操作人统计':'自动出款统计')+'…'+(S.data?(changed?'上次成功结果仍显示，尚未刷新。':'同一筛选的上次成功结果仍显示，尚未刷新。'):'')+'</div>';if(!S.data)return controls+body}
-   if(S.error){body+='<div class="live-status live-error" role="alert">'+(S.data?(changed?'查询失败，上次成功结果已保留。':'刷新失败，同一筛选的上次成功结果已保留。'):'')+E(S.error)+' <button class="link" onclick="withdrawLoad()">重试</button></div>';if(!S.data)return controls+body}
-   if(S.prepared){body+='<div class="live-status" role="status" data-withdraw-prepared="'+E(S.prepared.status)+'">'+(S.prepared.status==='paused'?'本次读取已暂停。':S.prepared.status==='failed'?'统计准备暂未完成，请稍后重试。':'后台正在准备'+E(S.prepared.country||'所选范围')+'的统计，完成后自动显示。')+(S.data?' 上次成功结果已保留。':'')+(['paused','failed'].includes(S.prepared.status)?' <button class="link" onclick="withdrawLoad()">'+(S.prepared.status==='paused'?'继续读取':'重试')+'</button>':'')+'</div>';if(!S.data)return controls+body;}
+   if(S.loading&&!S.prepared){body+='<div class="live-status" role="status">正在读取'+(operators?'操作人统计':'自动出款统计')+'…'+'</div>';if(!S.data)return controls+body}
+   if(S.error){body+='<div class="live-status live-error" role="alert">'+E(S.error)+' <button class="link" onclick="withdrawLoad()">重试</button></div>';if(!S.data)return controls+body}
+   if(S.prepared){body+='<div class="live-status" role="status" data-withdraw-prepared="'+E(S.prepared.status)+'">'+(S.prepared.status==='paused'?'本次读取已暂停。':S.prepared.status==='failed'?'统计准备暂未完成，请稍后重试。':'后台正在准备'+E(S.prepared.country||'所选范围')+'的统计，完成后自动显示。')+(['paused','failed'].includes(S.prepared.status)?' <button class="link" onclick="withdrawLoad()">'+(S.prepared.status==='paused'?'继续读取':'重试')+'</button>':'')+'</div>';if(!S.data)return controls+body;}
    if(!S.data)return controls+'<div class="live-status">请选择筛选条件，点击查询。</div>';
    const evidence=readEvidence(d);body+=publicationNotice(d,changed);
    if(S.metricView==='secondary'&&S.applied?.successWindowExplicit!==true)S.metricView='created';
@@ -792,17 +792,13 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
   async function reasonsLoad(force=false,presentationOnly=false){
    if(!resultAllowed()||!S.reason)return;
    if(typeof root.hensemRoleAllowed==='function'&&!root.hensemRoleAllowed(ctx.page(),'query')){clearResult();render();return;}
-   const context=reasonContext(),base={action:'withdrawReasons',...S.reason,platform:rowPlatform(S.reason)},semanticScope=reasonSemanticScope(base),scope=JSON.stringify([context,base]),query={...base,offset:(S.reasonPage-1)*S.reasonSize,limit:S.reasonSize},key=JSON.stringify([context,query]),cached=reasonCache.get(key);
+   const context=reasonContext(),base={action:'withdrawReasons',...S.reason,platform:rowPlatform(S.reason)},semanticScope=reasonSemanticScope(base),scope=JSON.stringify([context,base]),query={...base,offset:(S.reasonPage-1)*S.reasonSize,limit:S.reasonSize},key=JSON.stringify([context,query]);
    if(reasonRead?.key===key&&(!force||reasonRead.force)){S.reasonBusy=true;renderReason();return reasonRead.promise;}
    stopReasonRead();const serial=++S.reasonSerial;
    S.reasonError='';S.reasonSelectionChanged=false;
-   // Changing page size is a presentation change, not a refresh. Keep the
-   // displayed snapshot even past its request-cache TTL; explicit retry still
-   // fetches fresh data, and every date/platform/filter has a different scope.
+   // Pagination can slice the complete active response. Reopening the drawer always rereads it.
    if(!force&&presentationOnly&&reasonSnapshot?.scope===scope&&(!blockingKinds.includes(base.kind)||reasonSemanticCompatible(reasonSnapshot.data,semanticScope))){const data=reasonSnapshot.data;S.reasonPage=Math.min(S.reasonPage,Math.max(1,Math.ceil(Number(data.total)/S.reasonSize)));const offset=(S.reasonPage-1)*S.reasonSize;S.reasonData={...data,rows:data.rows.slice(offset,offset+S.reasonSize),offset,limit:S.reasonSize};S.reasonBusy=false;renderReason(true);reasonFocus();return}
    reasonSnapshot=null;
-   if(force)for(const [cacheKey,value] of reasonCache)if(value.scope===scope)reasonCache.delete(cacheKey);
-   if(!force&&cached&&Date.now()-cached.time<60000&&(!blockingKinds.includes(base.kind)||reasonSemanticCompatible(cached.data,semanticScope))){S.reasonData=cached.data;rememberReasonSnapshot(scope,query,cached.data,semanticScope);S.reasonBusy=false;renderReason();reasonFocus();return}
    const controller=typeof root.AbortController==='function'?new root.AbortController():null;
    const job={key,serial,context,force,controller};const cancelled=new Promise(resolve=>{job.cancel=()=>resolve(null);});reasonRead=job;
    S.reasonBusy=true;S.reasonData=null;renderReason();reasonFocus();
@@ -813,11 +809,10 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
      // returns an empty selection. Reopen the rule list once through the same
      // cancellable request path; never turn that mismatch into a zero result.
      if(data?.reasonGrouping===atomicGrouping&&query.reasonKey&&blockingKinds.includes(query.kind)&&S.reasonSelectionGrouping!==atomicGrouping){S.reason.kind='blocking';clearReasonFilters();S.reasonData=null;return reasonsLoad(force);}
-     const lastComplete=reasonLastComplete(data),max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad(force)}if(!lastComplete&&data?.available===true&&!data.error&&data.partial!==true&&data.complete!==false){reasonCache.set(key,{data,scope,semanticScope,kind:query.kind,time:Date.now()});if(reasonCache.size>30)reasonCache.delete(reasonCache.keys().next().value);}if(!lastComplete)rememberReasonSnapshot(scope,query,data,semanticScope);S.reasonData=data;S.reasonBusy=false;renderReason();reasonFocus()}
+     const lastComplete=reasonLastComplete(data),max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad(force)}if(!lastComplete)rememberReasonSnapshot(scope,query,data,semanticScope);S.reasonData=data;S.reasonBusy=false;renderReason();reasonFocus()}
     catch(e){if(!currentReasonRead(job))return;if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(e?.code||''))||/^(preview_denied|synthetic_session_denied|assigned_role_required|page_action_denied|role_permission_denied|session_denied)$/.test(String(e?.message||''))){clearResult();S.error='登录或查询权限已变化，请重新验证后查询。';render();return;}if(e?.code==='WITHDRAW_REASON_SELECTION_CHANGED'&&['blockingVariants','blockingOrders'].includes(query.kind)){
       // Only retire the exact authorized native/day's blocking selections.
       // A stale or cancelled response never reaches this branch.
-      for(const [cacheKey,value]of reasonCache)if(value.semanticScope===semanticScope&&blockingKinds.includes(value.kind))reasonCache.delete(cacheKey);
       if(reasonSnapshot?.semanticScope===semanticScope)reasonSnapshot=null;
       S.reasonSelectionChanged=true;S.reasonError='原因分类已更新，请返回原因列表重新选择。';
      }else S.reasonError=e.message;S.reasonBusy=false;S.reasonData=null;renderReason();reasonFocus()}
@@ -883,10 +878,22 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
   root.withdrawNoteSample=()=>{S.noteSample=true;render()};
   root.withdrawNoteClose=()=>{if(S.noteSaving)return;S.note=null;S.noteSample=false;S.noteError='';render()};
   root.withdrawNoteSave=async()=>{if(!resultAllowed()||!S.note||S.noteSaving||!S.data?.canWriteNotes)return;loadedBase=null;const target=S.note;S.noteSaving=true;S.noteError='';render();try{const saved=await request({action:'withdrawNote',date:target.date,country:target.storageCountry||target.country,platform:target.storagePlatform,reason:S.noteDraft,expectedVersion:target.expectedVersion});if(!resultAllowed()||S.note!==target)return;loadedBase=null;S.data.notes=[...(S.data.notes||[]).filter(n=>!(n.date===saved.date&&n.country===saved.country&&n.platform===saved.platform)),{...saved,sourceCountry:target.country}];S.noteSaving=false;S.note=null;render()}catch(e){if(!resultAllowed()||S.note!==target)return;S.noteSaving=false;S.noteError=e.message||'备注保存失败，输入已保留';render()}};
-  function capture(){return {...S,platforms:S.platforms.slice(),reasonTrigger:null,loading:false,reasonBusy:false,error:S.loading?'读取已暂停，点击查询继续':S.error,reasonError:S.reasonBusy?'明细读取已暂停，点击重试继续':S.reasonError};}
-  function pause(){loadedBase=null;reasonSnapshot=null;S.serial++;stopRead();stopReasonRead();S.reasonSerial++;setLoading(false);reasonCache.clear();if(S.prepared&&['missing','building','stale'].includes(S.prepared.status))S.prepared={...S.prepared,status:'paused',reason:'page_left'};}
+  const preferenceKeys=['view','metricView','platforms','rowCountry','account','sort','asc','daily','historical','page','size','open','search','reasonSize'];
+  function preferences(value){
+   const result={};
+   for(const key of preferenceKeys)if(value&&Object.hasOwn(value,key))result[key]=value[key];
+   result.platforms=Array.isArray(result.platforms)?result.platforms.slice():[];
+   return result;
+  }
+  function capture(){return preferences(S);}
+  function pause(){clearResult();}
   root.addEventListener?.('pagehide',pause);
-  function restore(saved){pause();const serial=S.serial,reasonSerial=S.reasonSerial;for(const key of Object.keys(S))delete S[key];Object.assign(S,saved||initialState,{serial,reasonSerial,platforms:(saved?.platforms||[]).slice(),reasonTrigger:null,loading:false,reasonBusy:false});if(S.prepared&&['missing','building','stale'].includes(S.prepared.status))S.prepared={...S.prepared,status:'paused',reason:'page_restored'};}
+  function restore(saved){
+   pause();
+   const serial=S.serial,reasonSerial=S.reasonSerial;
+   Object.assign(S,initialState,preferences(saved),{serial,reasonSerial});
+   if(!L.successFrom||!L.successTo)S.metricView='created';
+  }
   const canExport=()=>resultAllowed()&&!!S.applied&&!!S.data&&!S.loading&&!S.error&&!S.prepared&&!draftChanged()&&(S.metricView!=='secondary'||S.applied.successWindowExplicit===true&&!!S.data.secondary);
   function exportMeta(){if(!canExport())return null;const q=S.applied.query,explicit=S.applied.successWindowExplicit===true;return [['统计口径',S.metricView==='secondary'?'独立时间窗成功记录；不与创建窗取交集':'创建订单当前状态；保持来源原成功状态口径'],['创建时间（平台当地，含起止秒）',q.startAt.slice(0,19),q.endAt.slice(0,19)],explicit?[(q.successBasis==='source_updated'?'独立源订单更新时间（平台当地，含起止秒）':'独立源订单成功时间（平台当地，含起止秒）'),q.successStartAt.slice(0,19),q.successEndAt.slice(0,19)]:['成功时间筛选','未填写；按创建订单当前状态统计'],['说明','源更新时间不代表成功发生时间；未提供可信时间字段显示未知'],...(S.metricView!=='secondary'&&(S.data.rows||[]).some(row=>confirmed9kDuration(row)||confirmed9kDuration(row.previous,row))?[['9KCLUB处理用时',confirmed9kDurationNote]]:[]),['统计生成时间',S.data.prepared?.computedAt||''],['来源完整性',readEvidence(S.data).partial?'已入库小计，不能作为全天完整总计':'来源完整性已确认'],['统计更新状态',readEvidence(S.data).issue||'已核验'],['前期比较','按两期同平台、同口径的已入库记录比较；缺值、无基数或口径不同不混算'],...(S.reason&&blockingKinds.includes(S.reason.kind)&&!S.reasonBusy&&!S.reasonError&&atomicMembership(S.reasonData)?[['原因规则命中口径',atomicExplanation(S.reasonData)],['原因占比分母',S.reasonData.noteCount??'', '当前平台、当地日期的人工处理记录；筛选和翻页不改变分母']]:[])];}
   return {capture,pause,restore,render:draw,load,state:S,query,cancel:clearResult,canExport,exportMeta};

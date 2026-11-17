@@ -20,7 +20,7 @@
  const total=(rows)=>Object.fromEntries(fields.map(k=>{const values=rows.map(r=>k.endsWith('_count')?count(r[k]):number(r[k]));const n=values.reduce((a,v)=>a+(v??0),0);return [k,!values.length||values.includes(null)||!Number.isFinite(n)||k.endsWith('_count')&&!Number.isSafeInteger(n)?null:n];}));
  const uniqPlatforms=list=>[...new Map((list||[]).filter(p=>typeof p?.id==='string'&&p.id).map(p=>[p.id,p])).values()];
  function create(c){
-  const L=c.L;let serial=0,S=initial(),retained=null;
+  const L=c.L;let serial=0,S=initial();
   function initial(){return {version:2,status:'idle',scope:null,payments:{},comparePayments:{},cashflowDays:{},cashflowDay:'',cashflowStatus:'idle',workorders:{},workStatus:'idle',trendStatus:'idle',workTrendStatus:'idle',direction:'charge',dimension:'platform',sort:'all_count',compareDate:'',trendDays:7,expanded:null,trend:null,error:''};}
   const allowed=action=>!c.roleAllowed||c.roleAllowed(action);
   const active=()=>c.getPage()===PAGE&&allowed('view');
@@ -37,9 +37,16 @@
   const current=()=>authorized()&&matches();
   const paint=()=>{if(active())c.render();};
   function cancel(){serial++;if(active())c.cancelReads?.();for(const key of ['status','workStatus','trendStatus','workTrendStatus','cashflowStatus'])if(S[key]==='loading')S[key]='paused';}
-  function clear(){cancel();S=initial();retained=null;}
-  function capture(){return copy(S);}
-  function restore(value){cancel();retained=null;S=value?.version===2&&[7,15,30].includes(value.trendDays)&&['charge','withdraw','workorder'].includes(value.direction)&&value.scope?.access===authority()?copy(value):initial();for(const key of ['status','workStatus','trendStatus','workTrendStatus','cashflowStatus'])if(S[key]==='loading')S[key]='paused';}
+  function clear(){cancel();S=initial();}
+  function captureControls(){return {direction:S.direction,dimension:S.dimension,sort:S.sort,compareDate:S.compareDate,trendDays:S.trendDays};}
+  function restore(value){
+   clear();if(!value)return;
+   if(['charge','withdraw','workorder'].includes(value.direction))S.direction=value.direction;
+   if(['platform','provider'].includes(value.dimension))S.dimension=value.dimension;
+   if(['all_count','all_amount'].includes(value.sort))S.sort=value.sort;
+   if([7,15,30].includes(value.trendDays))S.trendDays=value.trendDays;
+   if(date(value.compareDate))S.compareDate=value.compareDate;
+  }
   function dates(scope,trend=false){return trend?Array.from({length:S.trendDays+1},(_,i)=>shift(scope.date,-i)):[scope.date,S.scope?.compareDate||S.compareDate];}
   function period(day,p,scope){
    const delta=(Date.parse(day+'T00:00:00Z')-Date.parse(scope.date+'T00:00:00Z'))/86400000,window={successBasis:scope.successBasis};
@@ -81,7 +88,7 @@
      // The standalone day cache only needs the certified platform summary.
      if(cashflowScope)delete result.groups;
      Object.assign(entry,{status:'ready',response:result,note:'已读取后台统计',local:bounds.local});
-    }catch(error){if(token!==serial||!current())return;if(rejectAuthority(error))return;if(['stale','invalid'].includes(error?.status))retained=null;Object.assign(entry,{status:['missing','stale','building','unsupported'].includes(error?.status)?error.status:'error',note:error?.message||'读取失败'});}paint();
+    }catch(error){if(token!==serial||!current())return;if(rejectAuthority(error))return;Object.assign(entry,{status:['missing','stale','building','unsupported'].includes(error?.status)?error.status:'error',note:error?.message||'读取失败'});}paint();
    })),token);
   }
   function paymentStatus(days){return days.some(day=>S.scope.platforms.some(p=>S.scope.native.includes(p.id)&&!notOperating(day,p)&&!readable(S.payments[day]?.[p.id])))?'partial':'ready';}
@@ -329,8 +336,8 @@
   function draw(){
    const controls='<div class="daily-toolbar"><div>'+[['charge','代收'],['withdraw','代付'],['workorder','工单']].map(([k,label])=>'<button class="'+(S.direction===k?'on':'')+'" onclick="liveDailyDirection(\''+k+'\')">'+label+'</button>').join('')+'</div><div>'+[['platform','平台'],['provider','三方']].map(([k,label])=>'<button class="'+(S.dimension===k?'on':'')+'" onclick="liveDailyDimension(\''+k+'\')">'+label+'</button>').join('')+'<select aria-label="每日对比排序" onchange="liveDailySort(this.value)"><option value="all_count" '+(S.sort==='all_count'?'selected':'')+'>全部笔数 ↓</option><option value="all_amount" '+(S.sort==='all_amount'?'selected':'')+'>全部金额 ↓</option></select></div></div>';
    if(S.error)return '<div class="daily-comparison">'+controls+'<div class="live-status live-error">'+E(S.error)+'</div></div>';
-   if(!S.scope||!authorized())return '<div class="daily-comparison">'+controls+'<div class="live-status">'+(L.dirty?'筛选条件已修改，请点击查询读取对应范围。':'选择国家、平台和统计日期后点击查询。')+'</div></div>';
-   const m=model(true),draft=!matches(),waiting=S.direction==='workorder'&&S.workStatus==='idle',state=S.direction==='workorder'?S.workStatus:S.status;
+   if(!current())return '<div class="daily-comparison">'+controls+'<div class="live-status">'+(L.dirty?'筛选条件已修改，请点击查询读取对应范围。':'选择国家、平台和统计日期后点击查询。')+'</div></div>';
+   const m=model(true),waiting=S.direction==='workorder'&&S.workStatus==='idle',state=S.direction==='workorder'?S.workStatus:S.status;
    if(S.direction!=='workorder'&&S.status==='idle')return '<div class="daily-comparison">'+controls+'<div class="live-status">支付数据尚未查询。<button onclick="liveDailyQuery()">查询每日支付对比</button></div></div>';
    if(S.direction==='workorder'&&S.workStatus==='unsupported')return '<div class="daily-comparison">'+controls+'<div class="live-status">工单目前仅支持创建和第二时间相同的完整单日，按原始提交日统计；未读取工单。</div></div>';
    if(waiting)return '<div class="daily-comparison">'+controls+'<div class="live-status">工单按原始提交记录计算，源状态 4 计已处理。<button class="btn primary" onclick="liveDailyWorkorderQuery()">查询工单每日对比</button></div></div>';
@@ -347,15 +354,10 @@
    const scopeNote='<details class="report-explanation" data-report-explanation="daily-comparison"><summary>统计说明</summary><div>'+E(S.scope.country)+' · '+E(S.scope.currency)+' · '+E(windowNote)+' · '+E(comparisonNote)+E(updatedNote)+' · 可比 '+pair.count+' 个相同原生平台。占比以当前已读范围为分母；缺失保留 —。<br>'+basisNote+'</div></details>';
    const refreshNotice=S.direction==='workorder'?'':publications.some(p=>p.refreshState==='failed')?'更新未完成':publications.some(p=>['queued','running'].includes(p.refreshState))?'更新中':publications.some(p=>p.freshness==='refresh_due')?'待更新':'';
    const scopeAlerts=[unfinished?'所选时间尚未结束，暂不计算与历史完整区间的涨跌':'',refreshNotice,S.direction!=='workorder'&&publications.some(p=>p.sourceComplete!==true)?'来源完整性待核验':''].filter(Boolean);
-   return '<div class="daily-comparison">'+controls+(draft?'<div class="live-status">筛选条件已修改，当前保留上次查询结果；点击查询后更新。</div>':'')+scopeNote+(scopeAlerts.length?'<div class="report-explanation-alert" role="status">'+scopeAlerts.map(E).join(' · ')+'</div>':'')+status+coverage(m)+top+tables+trend(m)+'</div>';
+   return '<div class="daily-comparison">'+controls+scopeNote+(scopeAlerts.length?'<div class="report-explanation-alert" role="status">'+scopeAlerts.map(E).join(' · ')+'</div>':'')+status+coverage(m)+top+tables+trend(m)+'</div>';
   }
 
-  function render(){
-   const cashflow=cashflowPanel(),html=draw(),catalog=c.authorizedPlatforms?.()||c.selected(),canRetain=retained&&active()&&allowed('query')&&retained.access===authority()&&retained.lifecycleRevision===lifecycleRevision()&&retained.direction===S.direction&&retained.platforms.every(p=>catalog.some(current=>nativeKey(current)===nativeKey(p)));
-   if(canRetain&&S.direction!=='workorder'&&['loading','partial','error'].includes(S.status))return cashflow+'<div class="live-panel-note" role="status">'+(S.status==='loading'?'正在读取所选范围':'本次读取未完成')+'，以下保留上次查询结果。</div><section class="live-retained-result" inert aria-label="上次查询结果">'+retained.html+'</section>';
-   if(authorized()&&matches()&&S.direction!=='workorder'&&S.status==='ready'&&html.length<2000000)retained={access:authority(),lifecycleRevision:lifecycleRevision(),direction:S.direction,platforms:S.scope.platforms.map(p=>({...p})),html};
-   return cashflow+html;
-  }
+  function render(){return cashflowPanel()+draw();}
 
   const updatedBasisNote=()=>S.direction==='workorder'?'':[!S.scope?.successFrom?'按创建日期选单，成功金额与笔数按已入库订单的当前成功状态统计，不代表期间实际到账。':S.scope?.successBasis==='source_updated'?'成功按成功状态＋源订单更新时间统计；未提供该时钟的来源保留 —。':'成功按源成功时间统计；没有可核验成功时钟的来源保留 —。',S.scope?.successBasis==='success'&&S.scope.platforms.some(p=>src(p.source)==='kb'&&p.capabilities?.successTimeBasis==='source_completed_at')?'KB成功按成功状态＋源订单完成时间统计，不代表银行到账时间。':'',S.direction==='withdraw'&&S.scope?.platforms.some(p=>src(p.source)==='panda'||p.capabilities?.reviewedWithdrawalsOnly===true)?'熊猫提现仅已审核范围，创建指标也仅覆盖该范围。':''].filter(Boolean).join(' ');
   const canExport=()=>current()&&allowed('export')&&['ready','partial'].includes(S.direction==='workorder'?S.workStatus:S.status);
@@ -375,7 +377,7 @@
    return rows;
   }
 
-  return {load,loadTrend,cancel,clear,capture,restore,render,filterDateExtras,loadWorkorders,model,canExport,exportRows,currentReady:()=>current()&&!!S.scope};
+  return {load,loadTrend,cancel,clear,capture:()=>copy(S),captureControls,restore,render,filterDateExtras,loadWorkorders,model,canExport,exportRows,currentReady:()=>current()&&!!S.scope};
  }
  root.HensemLiveDailyComparison={create};
 })(typeof window==='object'?window:globalThis);

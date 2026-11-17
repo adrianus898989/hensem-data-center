@@ -6,7 +6,7 @@ function range(h){for(const [key,value]of Object.entries({from:'2026-10-11T00:00
 const main=q=>q.action==='aggregatePrepared';
 const attachments=q=>['rates','workorders','submissionAnalysis','intakeCoverage'].includes(q.action);
 test('seven-day unavailable query replaces old publication status with its exact current range and no invented zeros',async()=>{
- const h=await fixture();await h.c.liveQuery();assert(h.L.retainedContent);h.L.retainedContent.html+='<div data-provider-published>2026-10-15 全部三方 · 缺 54 项统计</div>';
+ const h=await fixture();await h.c.liveQuery();assert(h.L.results.length);
  range(h);const n=h.calls.length,wait=deferred();let held;
  h.override(q=>{if(main(q)){held=q;return wait.promise.then(()=>prepared(q,'building'));}});const run=h.c.liveQuery();await settle();assert(held);assert.match(h.html(),/data-collection-pending aria-busy="true"/);assert.match(h.html(),/<th scope="col">统一三方<\/th>/);assert.doesNotMatch(h.html(),/data-aggregate-read-status|live-read-phase|data-provider-published|缺 54 项|live-retained-result|provider-summary-kpis|当前筛选范围没有已入库记录|<tfoot>/);
  assert.match(h.c.document.getElementById('liveFilters').innerHTML,/aria-busy="true">查询中…/);
@@ -24,9 +24,13 @@ test('partial current orders never claim a complete main table while their attac
 test('new query and navigation keep old late prepared responses from restoring stale scope',async()=>{
  const h=await fixture(),wait=deferred();range(h);let held;h.override(q=>{if(main(q)){held=q;return wait.promise;}});const run=h.c.liveQuery();await settle();h.c.setPage('amount');wait.resolve(prepared(held));await run;await settle();assert.equal(h.c.state.page,'amount');assert.equal(h.L.results.length,0);assert.doesNotMatch(h.html(),/TukPay|主表已完成/);
 });
-test('same exact live scope preserves its last complete table on forced transient failure, with an explicit old-result notice',async()=>{
- const h=await fixture();h.setDay('2026-10-14');await h.c.liveQuery();await settle();assert(h.L.retainedContent);const old=h.L.retainedContent,scope=old.queryScope;assert.equal(old.providerReadMode,'live');assert.equal(scope,h.L.queryScope);assert.match(old.html,/Synthetic provider/);
- h.override(q=>main(q)?prepared(q,'building'):undefined);await h.c.liveQuery(true);await settle();assert.equal(h.L.retainedContent,old);assert.equal(h.L.results.length,0);assert.equal(h.L.queryFailures.length,18);assert.match(h.html(),/本次读取未完成，以下保留上次查询结果/);assert.match(h.html(),/live-retained-result/);assert.match(h.html(),/Synthetic provider/);assert.doesNotMatch(h.html(),/data-provider-published|缺 54 项|主表已完成/);assert.equal(h.L.retainedContent.queryScope,scope);
+test('a repeated live query cannot substitute its last complete table for a new unavailable response',async()=>{
+ const h=await fixture();h.setDay('2026-10-14');await h.c.liveQuery();await settle();
+ assert.equal(h.L.results.length,18);assert.match(h.html(),/Synthetic provider/);
+ h.override(q=>main(q)?prepared(q,'building'):undefined);const n=h.calls.length;await h.c.liveQuery(true);await settle();
+ assert(h.calls.slice(n).some(main));assert.equal(h.L.results.length,0);assert.equal(h.L.queryFailures.length,18);
+ assert.doesNotMatch(h.html(),/Synthetic provider|live-retained-result|data-provider-published|缺 54 项|主表已完成/);
+ assert.match(h.html(),/当前范围暂无可用统计/);
 });
 
 test('prepared comparison and exact-period intake finish while the independent workorder stays held, without duplicate reads',async()=>{

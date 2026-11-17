@@ -36,8 +36,8 @@ test('force refresh clears old profiles, keeps main first and derives trend from
  const h=await setup('merchants');h.setRate(()=>feeRows('Synthetic provider'));await h.c.liveQuery();assert.equal(bands(h).charge.edges[0],250);const fee=deferred();h.setRate(()=>fee.promise);const before=h.requests().length,run=h.c.liveQuery(true);await settle();assert.equal(h.L.results.length,1);assert.equal(h.L.amountBandProfiles,null);assert.equal(rateCount(h),2);assert(h.requests().slice(before).every(q=>q.view==='providers'));await trend(h);assert.equal(full(h).length,0);
  fee.resolve(limits('Synthetic provider',500,50000));await run;await settle();assert.equal(rateCount(h),2);assert.equal(full(h)[0].amountBands.charge[0],500);assert.equal(full(h)[0].amountBands.charge.at(-1),50000);
 });
-test('ordinary repeated query reuses original exact rate snapshot without a second physical read',async()=>{
- const h=await setup('merchants');h.setRate(()=>feeRows('Synthetic provider'));await h.c.liveQuery();const original=bands(h),requestCount=h.requests().length;await h.c.liveQuery();assert.equal(rateCount(h),1);assert.deepEqual(bands(h),original);assert.equal(h.requests().length,requestCount);await trend(h);assert.equal(rateCount(h),1);assert.equal(full(h)[0].amountBands.charge[0],250);
+test('a repeated query reads the current fee directory and uses its changed range',async()=>{
+ const h=await setup('merchants');h.setRate(()=>feeRows('Synthetic provider'));await h.c.liveQuery();const requestCount=h.requests().length;h.setRate(()=>limits('Synthetic provider',700,70000));await h.c.liveQuery();assert.equal(rateCount(h),2);assert(h.requests().length>requestCount);await trend(h);assert.equal(rateCount(h),2);assert.equal(full(h)[0].amountBands.charge[0],700);
 });
 for(const replacement of ['provider','date','account','native','page'])test('late merchant directory cannot deliver profiles or trend across '+replacement+' change',async()=>{
  const h=await setup('merchants'),old=deferred(),fresh=deferred();let n=0;h.setRate(()=>++n===1?old.promise:fresh.promise);const first=h.c.liveQuery();await settle();await trend(h);
@@ -61,8 +61,8 @@ for(const options of [{provider:'',status:'all'},{status:'success'},{status:'pen
 test('a validated empty directory uses original explicit country-reference profile; failed page validation does not',async()=>{
  for(const valid of [true,false]){const h=await setup('merchants');h.setRate(()=>valid?{rows:[],total:0}:{rows:[],total:1});await h.c.liveQuery();await trend(h);if(valid){assert(h.L.amountBandProfiles);assert.equal(h.L.loadedView,'full');assert.equal(full(h).length,1);}else{assert.equal(h.L.amountBandProfiles,null);assert.equal(full(h).length,0);assert.match(h.L.merchantTrend.error,/目录不完整/);}assert.equal(rateCount(h),1);}
 });
-test('merchant snapshot restore retains its validated frozen profiles and performs no extra reads',async()=>{
- const h=await setup('merchants');h.setRate(()=>feeRows('Synthetic provider'));await h.c.liveQuery();const original=bands(h);h.c.setPage('time');h.c.setPage('merchants');assert.deepEqual(bands(h),original);const before=rateCount(h);await trend(h);assert.equal(full(h)[0].amountBands.charge[0],250);assert.equal(rateCount(h),before);
+test('reopening the merchant page reads its current rates before building the trend',async()=>{
+ const h=await setup('merchants');h.setRate(()=>feeRows('Synthetic provider'));await h.c.liveQuery();const before=rateCount(h);h.c.setPage('time');h.setRate(()=>limits('Synthetic provider',700,70000));h.c.setPage('merchants');assert.equal(h.L.amountBandProfiles??null,null);await settle();await trend(h);assert.equal(full(h)[0].amountBands.charge[0],700);assert.equal(rateCount(h),before+1);
 });
 test('all pages of the original fee directory validate before trend can use its selected-provider ranges',async()=>{
  const h=await setup('merchants'),second=deferred();h.setRate(q=>q.offset===0?{rows:feeRows('Synthetic provider').rows,total:2}:second.promise);const run=h.c.liveQuery();await settle();assert.equal(h.L.results.length,1);assert.equal(rateCount(h),2);assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.amountBandProfiles,null);await trend(h);assert.equal(full(h).length,0);
@@ -82,7 +82,7 @@ for(const replacement of ['account','native','view','date'])test('late full tren
  else if(replacement==='native')h.L.catalog=h.L.catalog.map(p=>({...p,sourceName:'New full native'}));
  else if(replacement==='view')h.c.liveView('business');
  else h.c.liveSet('from','2026-09-21T00:00:00');
- const expected=JSON.stringify(h.L.results);late.resolve({version:2,items:full(h).map(ready)});await settle();assert.equal(JSON.stringify(h.L.results),expected);if(replacement!=='date')assert.equal(JSON.stringify(h.L.results),facts);assert.notEqual(h.L.loadedView,'full');assert.equal(rateCount(h),1);
+ const expected=JSON.stringify(h.L.results);late.resolve({version:2,items:full(h).map(ready)});await settle();if(['account','native'].includes(replacement)){assert.equal(h.L.results.length,0);}else{assert.equal(JSON.stringify(h.L.results),expected);if(replacement==='view')assert.equal(JSON.stringify(h.L.results),facts);}assert.notEqual(h.L.loadedView,'full');assert.equal(rateCount(h),1);
 });
 test('expired directory is reread once on explicit query and cannot lend previous profiles while pending',async()=>{
  const h=await setup('merchants');h.setRate(()=>feeRows('Synthetic provider'));await h.c.liveQuery();h.setNow('2026-09-23T12:06:00Z');const fee=deferred();h.setRate(()=>fee.promise);const run=h.c.liveQuery();await settle();assert.equal(rateCount(h),2);assert.equal(h.L.amountBandProfiles,null);assert.equal(h.L.results.length,1);await trend(h);assert.equal(full(h).length,0);fee.resolve(limits('Synthetic provider',800,80000));await run;await settle();assert.equal(rateCount(h),2);assert.equal(full(h)[0].amountBands.charge[0],800);

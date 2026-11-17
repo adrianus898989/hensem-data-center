@@ -101,7 +101,7 @@ for(const page of ['time','amount']){
   assert.deepEqual(Array.from(h.L.multi.direction),['withdraw']);
   h.c.setPage(page);
   assert.equal(h.L.direction,'all');
-  assert.equal(h.L.pageQueried,true);
+  assert.equal(h.L.results.length,0);await settle();
   // Simulate an open, single-direction tab saved by the previous adapter.
   h.L.direction='charge';h.L.multi.direction=['charge'];
   h.c.setPage('matrix');

@@ -44,7 +44,7 @@ test('JAICLUB duplicate receipt headers keep O original date separate from P age
  assert.equal(r.followup_at,null);assert.equal(r.followup_date,null);assert.equal(r.staff_code,'STAFF-001/STAFF-002');
  assert(!JSON.stringify(r).includes('PRIVATE-'));
 });
-function harness({failUpsert=false,missingTab=false,failEntries=false,failArchive=false,failEntryRead=false,failResultRead=false,failEntryMetadata=false,initialRows=[],envOverrides={},metadataTabs,entryValues={},onRequest,onDiagnostic,handlerFactory=createDepositIssueSyncHandler}={}){
+function harness({failUpsert=false,missingTab=false,failEntries=false,failArchive=false,failEntryRead=false,failResultRead=false,failEntryMetadata=false,initialRows=[],envOverrides={},metadataTabs,entryValues={},resultBatch,onRequest,onDiagnostic,handlerFactory=createDepositIssueSyncHandler}={}){
  const stored=new Map(initialRows.map(r=>[r.table+":"+r.id,{...r}]));
  const calls=[],writes=[],events=[],env={SYNC_SECRET:'synthetic-sync',GOOGLE_SERVICE_ACCOUNT_EMAIL:'example@example.invalid',GOOGLE_PRIVATE_KEY:'-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----',DEPOSIT_ISSUE_SHEET_ID:'synthetic_source_12345',DEPOSIT_FOLLOWUP_SHEET_ID:'synthetic_entries_12345',SUPABASE_URL:'https://synthetic-project.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'synthetic-service-key'};
  Object.assign(env,envOverrides);
@@ -54,7 +54,12 @@ function harness({failUpsert=false,missingTab=false,failEntries=false,failArchiv
   try{await onRequest?.(url,init);
   if(url.origin==='https://oauth2.googleapis.com')return Response.json({access_token:'synthetic-google-token'});
   if(url.origin==='https://sheets.googleapis.com'){
-   if(url.pathname.includes('synthetic_source_'))return failResultRead?new Response('PRIVATE upstream error',{status:503}):Response.json({valueRanges:[{values:[headers,row]},{values:[[],['LKgoPay']]},{values:[[],['已确认']]}]});
+   if(url.pathname.includes('synthetic_source_')){
+    const short=url.searchParams.getAll('ranges').length===4;
+    const ranges=resultBatch?resultBatch(short):[{values:[headers,row]},{values:[[],['LKgoPay']]},{values:[[],['已确认']]},...(short?[{values:[headers.slice(0,2),row.slice(0,2)]}]:[])];
+    if(short && Array.isArray(ranges[0]?.values))ranges[0]={values:ranges[0].values.map(r=>r.slice(2))};
+    return failResultRead?new Response('PRIVATE upstream error',{status:503}):Response.json({valueRanges:ranges});
+   }
    if(url.pathname.endsWith('/values:batchGet')){
     if(failEntryRead)return new Response('PRIVATE upstream error',{status:503});
     return Response.json({valueRanges:url.searchParams.getAll('ranges').map(range=>({values:entryValues[range.split("'")[1]]||(range.startsWith("'51GAME'")?[entryHeaders,entryRow]:[entryHeaders])}))});
@@ -75,7 +80,7 @@ function harness({failUpsert=false,missingTab=false,failEntries=false,failArchiv
 }
 test('authorized refresh reads both complete sources and only mirrors their safe columns',async()=>{
  const h=harness(),response=await h.call();assert.equal(response.status,200);const body=await response.json();assert.equal(body.rowsWritten,1);assert.equal(body.entryRows,1);assert.equal(body.entryTabs,16);
- const google=h.calls.find(x=>x.url.origin==='https://sheets.googleapis.com').url;assert.equal(google.searchParams.get('valueRenderOption'),'FORMATTED_VALUE');assert.deepEqual(google.searchParams.getAll('ranges'),['UPI核对!A1:N40001','UPI核对!AB1:AB40001','UPI核对!AS1:AS40001']);assert.equal(h.writes[0][0].canonical_provider,'LKgoPay');assert.equal(h.writes[0][0].confirmation_status,'已确认');
+ const google=h.calls.find(x=>x.url.origin==='https://sheets.googleapis.com').url;assert.equal(google.searchParams.get('valueRenderOption'),'FORMATTED_VALUE');assert.deepEqual(google.searchParams.getAll('ranges'),['UPI核对!C1:N16384','UPI核对!AB1:AB16384','UPI核对!AS1:AS16384','UPI核对!A1:B40001']);assert.equal(h.writes[0][0].canonical_provider,'LKgoPay');assert.equal(h.writes[0][0].confirmation_status,'已确认');
  assert.equal(h.writes[0][0].record_date,'2026-09-23');assert.equal(h.writes[0][0].status,'已入款');assert.equal(h.writes[1][0].followup_status,'Success To Other Platform');assert.equal(h.writes[1][0].utr,'00001234');
  const archives=h.calls.filter(x=>x.init.method==='PATCH');assert.equal(archives.length,17);assert.equal(archives[0].url.searchParams.get('source_sheet'),'eq.synthetic_source_12345');assert.equal(archives[0].url.searchParams.get('source_tab'),'eq.UPI核对');assert.equal(archives[1].url.searchParams.get('source_sheet'),'eq.synthetic_entries_12345');
  assert.deepEqual(archives.slice(1).map(x=>x.url.searchParams.get('source_tab')).sort(),[...ENTRY_TABS].map(x=>'eq.'+x).sort());
@@ -264,4 +269,35 @@ test('whitespace-equivalent labels retain the exact original row DTO and unknown
  assert.deepEqual(entryRowsFromValues([compact,entryRow],DEFAULT_ENTRY_SOURCE_ID,'51GAME',1,'2026-10-15T00:00:00Z'),old);
  const extraHeaders=[...compact,'PRIVATE-ACCOUNT-NUMBER'],extra=[...entryRow,'PRIVATE-BANK-ACCOUNT'];
  assert.deepEqual(entryRowsFromValues([extraHeaders,extra],DEFAULT_ENTRY_SOURCE_ID,'51GAME',1,'2026-10-15T00:00:00Z'),old);
+});
+
+test('a result beyond the first window is taken only from a new full-range response',async()=>{
+ const last=16386;
+ const ids=Array.from({length:last},()=>[]);ids[0]=headers.slice(0,2);ids[last-1]=row.slice(0,2);
+ const full=Array.from({length:last},()=>[]);full[0]=headers;full[last-1]=row;
+ const h=harness({resultBatch:short=>short?[{values:[headers,row]},{},{},{values:ids}]:[{values:full},{},{}]});
+ const res=await h.call();assert.equal(res.status,200);const result=h.writes.flat().filter(r=>r.source_tab==='UPI核对');
+ assert.deepEqual(result.map(r=>r.source_row),[last]);assert.equal(h.calls.filter(x=>x.url.pathname.includes('synthetic_source_')).length,2);
+});
+test('empty result or missing identity range preserves the prior result mirror',async()=>{
+ for(const [cases,identity,code] of [[[headers],{values:[headers.slice(0,2)]},'source_rows_empty'],[[headers,row],{},'source_columns_incomplete']]){
+  const h=harness({resultBatch:()=>[{values:cases},{},{},identity]});
+  const response=await h.call(),body=await response.json();assert.equal(body.sourceResults.entries.ok,true);assert.equal(body.sourceResults.result.ok,false);
+  assert.equal(body.sourceResults.result.code,code);assert(!h.calls.some(c=>c.url.pathname.endsWith('/admin_deposit_issue_rows')));
+ }
+});
+test('different column extents keep sparse rows, partial identities and trailing blank cells aligned',async()=>{
+ const ids=[headers.slice(0,2),[],['platform-only'],['','order-only'],[],['tail']];
+ const h=harness({resultBatch:()=>[{values:[headers,[],row,row]},{values:[[],[],['chosen']]},{},{values:ids}]});
+ const res=await h.call();assert.equal(res.status,200);
+ const rows=h.writes.flat().filter(r=>r.source_tab==='UPI核对');
+ assert.deepEqual(rows.map(r=>[r.source_row,r.platform,r.order_number]),[[3,'platform-only',null],[4,null,'order-only'],[6,'tail',null]]);
+ assert.equal(rows[0].canonical_provider,'chosen');assert.equal(rows[0].amount,rows[1].amount);assert.equal(rows[2].amount,null);
+});
+test('a moved row identity header uses the full range and its actual columns',async()=>{
+ const changed=[...headers];[changed[0],changed[3]]=[changed[3],changed[0]];
+ const changedRow=[...row];[changedRow[0],changedRow[3]]=[changedRow[3],changedRow[0]];
+ const h=harness({resultBatch:short=>[{values:[changed,changedRow]},{},{},...(short?[{values:[changed.slice(0,2),changedRow.slice(0,2)]}]:[])]});
+ assert.equal((await h.call()).status,200);assert.equal(h.calls.filter(x=>x.url.pathname.includes('synthetic_source_')).length,2);
+ assert.equal(h.writes.flat().find(r=>r.source_tab==='UPI核对').platform,row[0]);
 });

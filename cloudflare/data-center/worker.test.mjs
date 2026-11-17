@@ -34,10 +34,11 @@ test('upstream redirects are pinned and rewritten to the same site', async () =>
   const r=await serve(request(site),async()=>new Response(null,{status:301,headers:{Location:site+'index.html?token=private'}}));
   assert.equal(r.headers.get('location'),site+'index.html');
 });
-test('hash assets cache successfully but HTML and errors do not', async () => {
+test('hash assets, HTML and errors use the same no-store policy', async () => {
   const path=site+'_next/static/chunks/app/page-4d7a3cfeb00ad3aa.js';
   const r=await serve(request(path),async(_,options)=>{assert.equal(options.cache,'no-store');return new Response('public')});
-  assert.match(r.headers.get('cache-control'),/immutable/);
+  assert.equal(r.headers.get('cache-control'),'no-store');
+  assert.equal(r.headers.get('cdn-cache-control'),'no-store');
   const e=await serve(request(path),async()=>new Response('missing',{status:404}));
   assert.equal(e.headers.get('cache-control'),'no-store');
   const html=await serve(request(path),async()=>new Response('<html/>',{headers:{'Content-Type':'text/html'}}));

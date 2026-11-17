@@ -5,6 +5,7 @@ const ACTIVITY_EVENT = "hensem:dashboard:user-activity";
 const IDLE_LOGOUT_KEY = "hensem.dashboard.idle_logout_at";
 export const DASHBOARD_INPUT_EVENTS = ["pointerdown", "pointermove", "keydown", "touchstart", "wheel"] as const;
 let memoryActivity = 0;
+let activityWriteFailed = false;
 
 export function readLastActivity(): number {
   if (typeof window === "undefined") return 0;
@@ -12,7 +13,9 @@ export function readLastActivity(): number {
     const value = Number(window.localStorage.getItem(DASHBOARD_LAST_ACTIVITY_KEY) || 0);
     // Another tab may have recorded the newest trusted input. Retain that
     // observed time if browser storage later becomes temporarily unavailable.
-    memoryActivity = Number.isFinite(value) ? value : 0;
+    if (Number.isFinite(value)) {
+      memoryActivity = activityWriteFailed ? Math.max(memoryActivity, value) : value;
+    }
     return memoryActivity;
   } catch { return memoryActivity; }
 }
@@ -20,11 +23,15 @@ export function readLastActivity(): number {
 export function writeLastActivity(value = Date.now()) {
   memoryActivity = value;
   if (typeof window === "undefined") return;
-  try { window.localStorage.setItem(DASHBOARD_LAST_ACTIVITY_KEY, String(value)); } catch {}
+  try {
+    window.localStorage.setItem(DASHBOARD_LAST_ACTIVITY_KEY, String(value));
+    activityWriteFailed = false;
+  } catch { activityWriteFailed = true; }
 }
 
 export function clearLastActivity() {
   memoryActivity = 0;
+  activityWriteFailed = false;
   if (typeof window === "undefined") return;
   try { window.localStorage.removeItem(DASHBOARD_LAST_ACTIVITY_KEY); } catch {}
 }

@@ -66,8 +66,9 @@ function moduleSnapshots(){
   for(const [name,global]of [['channel','HensemLiveChannelStatus'],['daily','HensemLiveDailyComparison'],['submission','HensemSubmissionAnalysis']]){
    const create=c[global].create;
    c[global].create=config=>{
-    const api=create(config),capture=api.capture,restore=api.restore;
-    api.capture=()=>{const value=capture();value.navigationTestOwner=c.state.page;captured.push({name,page:c.state.page});return value};
+    const api=create(config),restore=api.restore;
+    api.capture=()=>{throw Error('navigation must never copy full page results');};
+    if(api.captureControls){const controls=api.captureControls;api.captureControls=()=>{captured.push({name,page:c.state.page});return {...controls(),navigationTestOwner:c.state.page};};}
     api.restore=value=>{restored.push({name,page:c.state.page,owner:value?.navigationTestOwner??null});return restore(value)};
     return api;
    };
@@ -76,19 +77,18 @@ function moduleSnapshots(){
  return {captured,restored,options:{submission:true,extraModules:['live-channel-status.js','live-daily-comparison.js'],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true,beforeLive}};
 }
 
-test('large channel, daily and submission snapshots belong only to their consuming tabs across repeated navigation',async()=>{
+test('channel and daily tabs capture controls only and no financial snapshot survives navigation',async()=>{
  const snapshots=moduleSnapshots(),h=await ready(snapshots.options),before=h.calls.length;
  for(const page of ['channel_status','daily_comparison','events','providers'])h.c.setPage(page);
  h.c.setPage('workorder_workload');
- assert.deepEqual(snapshots.captured.map(({name,page})=>[name,page]),[['channel','channel_status'],['daily','daily_comparison'],['submission','events'],['submission','providers']]);
+ assert.deepEqual(snapshots.captured.map(({name,page})=>[name,page]),[['channel','channel_status'],['daily','daily_comparison']]);
  const copies=snapshots.captured.length;
  for(let i=0;i<30;i++)for(const page of ['time','amount','rates','workorder_workload'])h.c.setPage(page);
  assert.equal(snapshots.captured.length,copies,'unrelated tabs never deep-copy complete independent results');
  for(const page of ['channel_status','daily_comparison','events','providers'])h.c.setPage(page);
  assert(snapshots.restored.some(x=>x.name==='channel'&&x.page==='channel_status'&&x.owner==='channel_status'));
  assert(snapshots.restored.some(x=>x.name==='daily'&&x.page==='daily_comparison'&&x.owner==='daily_comparison'));
- assert(snapshots.restored.some(x=>x.name==='submission'&&x.page==='events'&&x.owner==='events'));
- assert(snapshots.restored.some(x=>x.name==='submission'&&x.page==='providers'&&x.owner==='providers'));
+ assert(snapshots.restored.filter(x=>x.name==='submission').every(x=>x.owner===null));
  assert(snapshots.captured.every(x=>x.name==='channel'?x.page==='channel_status':x.name==='daily'?x.page==='daily_comparison':['events','providers'].includes(x.page)));
  assert.equal(h.calls.length,before,'snapshot ownership never initiates a business read');
 });
@@ -155,12 +155,12 @@ test('navigation paints once while destination queries are still pending and doe
  assert.equal(pageWrites(h),afterOrders,'the old aggregate cannot repaint the new page');assert.doesNotMatch(h.html(),/987,654|98,765,400/);assert.equal(h.L.loading,false);
 });
 
-test('an already queried overview tab restores immediately without business or auxiliary reads',async()=>{
+test('reopening a queried overview clears previous values before one new read',async()=>{
  const h=await ready();assert.equal(h.L.overviewQueried,false);assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
  await h.c.liveQuery();await settle();const result=h.L.results;assert.equal(h.L.overviewQueried,true);assert(result.length>0);
  h.c.setPage('provider_payout');await settle();const calls=h.calls.length,before=pageWrites(h);
- h.c.setPage('overview');assert.equal(h.c.state.page,'overview');assert.equal(h.L.overviewQueried,true);assert.equal(h.L.dirty,false);assert.equal(h.L.loading,false);assert.equal(pageWrites(h)-before,1);assert.equal(h.L.results,result);assert.match(h.html(),/代收经营总数据/);
- await settle();assert.equal(h.calls.length,calls,'returning to a completed tab only restores data');assert.equal(pageWrites(h)-before,1);
+ h.c.setPage('overview');assert.equal(h.c.state.page,'overview');assert.equal(h.L.results.length,0);assert.equal(pageWrites(h)-before,1);
+ await settle();assert(h.calls.length>calls);assert.notEqual(h.L.results,result);assert.equal(h.L.overviewQueried,true);assert.match(h.html(),/代收经营总数据/);
  h.c.liveClosePage('overview');h.c.setPage('overview');await settle();assert.equal(h.L.overviewQueried,false);assert.equal(h.L.dirty,true);assert.match(h.html(),/点击查询/);
 });
 
@@ -353,13 +353,13 @@ test('overview and deposits keep two primary workers while payout stays serial; 
 });
 
 
-test('tabs isolate filters, controls, result references and both scroll axes past the request cache TTL',async()=>{
+test('tabs isolate filter controls and scroll position while discarding results and row expansions',async()=>{
  const h=await ready({observe:true});await h.c.liveQuery();await settle();
  h.L.multi.team=['TEAM A'];h.L.team='TEAM A';h.L.multiSearch={platform:'saved search'};h.L.providerExpanded={saved:true};h.L.tablePages={sample:3};h.L.tableSizes={sample:50};h.L.localPage=3;
  const result=h.L.results,child={scrollLeft:124,scrollTop:43};h.nodes.get('page').querySelectorAll=()=>[child];h.c.scrollX=19;h.c.scrollY=480;
  h.c.setPage('time');await settle();h.L.multi.team=['TEAM B'];h.L.team='TEAM B';h.L.multiSearch.platform='other';h.L.providerExpanded.saved=false;h.L.tablePages.sample=1;h.L.localPage=1;child.scrollLeft=0;child.scrollTop=0;
  h.setNow('2026-09-23T12:02:00Z');const reads=h.calls.length;h.c.setPage('overview');await settle();
- assert.equal(h.calls.length,reads);assert.equal(h.L.results,result);assert.equal(h.L.team,'TEAM A');assert.deepEqual([...h.L.multi.team],['TEAM A']);assert.equal(h.L.multiSearch.platform,'saved search');assert.equal(h.L.providerExpanded.saved,true);assert.equal(h.L.tablePages.sample,3);assert.equal(h.L.tableSizes.sample,50);assert.equal(h.L.localPage,3);assert.equal(h.c.scrollX,19);assert.equal(h.c.scrollY,480);assert.equal(child.scrollLeft,124);assert.equal(child.scrollTop,43);
+ assert.notEqual(h.L.results,result);assert.equal(h.L.team,'TEAM A');assert.deepEqual([...h.L.multi.team],['TEAM A']);assert.equal(h.L.multiSearch.platform,'saved search');assert.equal(h.L.providerExpanded?.saved,undefined);assert.equal(h.L.tablePages.sample,undefined);assert.equal(h.L.tableSizes.sample,50);assert.equal(h.L.localPage,1);assert.equal(h.c.scrollX,19);assert.equal(h.c.scrollY,480);assert.equal(child.scrollLeft,124);assert.equal(child.scrollTop,43);
  const restoredReads=h.calls.length;for(const callback of h.observations)callback([{isIntersecting:true,target:{hasAttribute:()=>true}}]);await settle();assert.equal(h.calls.length,restoredReads,'old overview observers must not resume lazy reads after a tab restore');
  h.c.setPage('time');assert.equal(h.L.team,'TEAM B');assert.equal(h.L.multiSearch.platform,'other');assert.equal(h.L.localPage,1);
 });
@@ -372,15 +372,15 @@ test('closing tabs releases their navigation state and the final tab returns to 
  h.c.liveClosePage('overview');assert.equal(h.c.state.page,'overview');assert.equal(h.L.overviewQueried,false);assert.equal(h.calls.length,reads);
 });
 
-test('returning to an unfinished risk tab waits for manual resume of only missing platforms and rejects the old response',async()=>{
+test('returning to an unfinished risk query rereads all scoped platforms and rejects late results',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222'},old=deferred(),resumed=deferred();let attempt=0;
  const h=harness({page:'risk',handler:q=>q.action==='catalog'?{platforms:[P,p2]}:q.action==='rates'?{rows:[],total:0}:q.action==='aggregate'&&q.platformId===p2.id?(++attempt===1?old.promise:resumed.promise):completeAggregate(P,17,9)});
  await settle();h.c.liveQuery();await settle();assert.equal(h.L.loading,true);assert.equal(h.L.results.length,1);const first=h.L.results[0];
  h.c.setPage('workorder_workload');h.c.setPage('risk');await settle();
- assert.equal(h.L.queryRetrying,false);assert.equal(h.L.queryPaused,true);assert.match(h.html(),/继续查询/);const beforeResume=h.calls.length;h.c.render();await settle();assert.equal(h.calls.length,beforeResume);h.c.liveRetryFailed(true);await settle();assert.equal(h.L.queryRetrying,true);assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.results[0],first);assert.match(h.html(),/正在继续读取剩余平台/);assert.doesNotMatch(h.html(),/切换页面后已暂停读取|部分平台读取失败/);
+ assert.equal(h.L.queryRetrying,false);assert.equal(h.L.queryPaused,false);assert.equal(h.L.loading,true);assert.notEqual(h.L.results[0],first);assert.equal(attempt,2);
  const reads=h.calls.length;old.resolve(completeAggregate(p2,987654,900000));await settle();assert.equal(h.calls.length,reads);assert.equal(h.L.results.length,1);assert.doesNotMatch(h.html(),/987,654/);
- resumed.resolve(completeAggregate(p2,19,10));await settle();assert.equal(h.L.queryRetrying,false);assert.equal(h.L.results.length,2);assert.equal(h.L.queryFailures.length,0);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,3,'only the uncompleted platform is resumed');
- const completeReads=h.calls.length;h.c.setPage('workorder_workload');h.c.setPage('risk');await settle();assert.equal(h.calls.length,completeReads,'a completed tab is restored without another query');
+ resumed.resolve(completeAggregate(p2,19,10));await settle();assert.equal(h.L.queryRetrying,false);assert.equal(h.L.results.length,2);assert.equal(h.L.queryFailures.length,0);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,4,'both platforms reread once');
+ const completeReads=h.calls.length;h.c.setPage('workorder_workload');h.c.setPage('risk');await settle();assert(h.calls.length>completeReads,'completed tabs reread on reentry');
 });
 
 test('risk retry handles real failures, while changed filters prevent resuming the old scope',async()=>{
@@ -487,14 +487,14 @@ test('collection summary keeps the verified KB completion-time basis in compact 
  h.c.providerSummaryBasis();assert.match(h.drawers.at(-1).html,/KB成功按成功状态＋源订单完成时间统计/);assert.match(h.drawers.at(-1).html,/不代表银行到账时效/);assert.equal(h.calls.length,calls);
 });
 
-test('restored submission-only tab waits for a manual continuation without rereading completed platforms',async()=>{
+test('restored submission-only tab rereads every scoped platform',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222'},pending=deferred();let interrupted=true;
  const h=harness({page:'events',submission:true,handler:q=>{
   if(q.action==='catalog')return {platforms:[P,p2]};if(q.action==='rates')return {rows:[],total:0};
   if(q.action==='submissionAnalysis'){const value={platform:q.platformId===p2.id?p2:P,startAt:q.startAt,endAt:q.endAt,version:3,exemptCount:0,thresholdComparison:'gt',basis:'platform_local_day_all_providers_zero_success_whole_day_over_threshold',metrics:[10,15,20,30,50,100].map(threshold=>({provider:null,threshold,qualified_member_count:0,qualified_member_days:0,member_count:0,member_days:0,invalid_count:0,invalid_amount:'0',l0_members:0,new_members:0,funded_members:0,unknown_members:0})),coverage:{missingMemberCount:0}};return q.platformId===p2.id&&interrupted?pending.promise.then(()=>value):value;}
   return completeAggregate(P);
- }});await settle();h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,2);assert.match(h.html(),/已读取 1 \/ 2 平台/,'the completed v3 response must be accepted before testing cache restoration');assert.doesNotMatch(h.html(),/部分统计待核对|响应不完整/);h.c.setPage('workorder_workload');interrupted=false;h.c.setPage('events');await settle();assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,2);assert.match(h.html(),/读取已暂停/);h.c.liveSubmissionRetry();await settle();
- assert.deepEqual(h.calls.filter(q=>q.action==='submissionAnalysis').map(q=>q.platformId),[P.id,p2.id,p2.id]);assert.match(h.html(),/已读取 2 \/ 2 平台/);assert.doesNotMatch(h.html(),/读取已暂停/);
+ }});await settle();h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,2);assert.match(h.html(),/已读取 1 \/ 2 平台/,'the completed v3 response must be accepted before testing cache restoration');assert.doesNotMatch(h.html(),/部分统计待核对|响应不完整/);h.c.setPage('workorder_workload');interrupted=false;h.c.setPage('events');await settle();assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,4);
+ assert.deepEqual(h.calls.filter(q=>q.action==='submissionAnalysis').map(q=>q.platformId),[P.id,p2.id,P.id,p2.id]);assert.match(h.html(),/已读取 2 \/ 2 平台/);assert.doesNotMatch(h.html(),/读取已暂停/);
  const html=h.html();pending.resolve();await settle();assert.equal(h.html(),html);
 });
 
@@ -587,18 +587,18 @@ test('split totals keep null and absent capability unknown rather than inventing
 });
 
 
-test('complete fee snapshots expire only on an explicit query and country changes require the matching scoped directory',async()=>{
+test('each query and tab reentry reads its scoped fee directory once',async()=>{
  const indonesia={...P,id:'22222222-2222-4222-8222-222222222222',name:'Synthetic Indonesia',country:'印尼',currency:'IDR',scopeGroup:'ID',timezone:'Asia/Jakarta'};
  const h=await ready({page:'providers',platforms:[P,indonesia]});
  const feeCount=()=>h.calls.filter(q=>q.action==='rates').length;
  assert.equal(feeCount(),1);assert.deepEqual(Array.from(h.L.feeLookupRows),[]);
- await h.c.liveQuery(false);await settle();assert.equal(feeCount(),1,'successful empty directory is reusable');
- h.setNow('2026-09-23T12:04:59Z');h.c.liveSet('country','印尼');await h.c.liveQuery(false);await settle();assert.equal(feeCount(),2,'the IN snapshot cannot satisfy a different native ID directory');
- h.setNow('2026-09-23T12:05:00Z');h.c.render();h.c.providerSummarySort('all_count');h.c.livePage(1,'local');h.c.setPage('amount');h.c.setPage('providers');await settle();assert.equal(feeCount(),2,'expiry alone cannot launch reads while painting, paginating or restoring a tab');
- await h.c.liveQuery(false);await settle();assert.equal(feeCount(),2,'the new country directory keeps its own original five-minute read time');
- await h.c.liveQuery(true);await settle();assert.equal(feeCount(),3,'force always reads rates again');
- h.setNow('2026-09-23T12:04:00Z');await h.c.liveQuery(false);await settle();assert.equal(feeCount(),4,'clock rollback cannot make a snapshot fresh');
- assert.deepEqual(h.calls.filter(q=>q.action==='rates').map(q=>q.country),['IN','ID','ID','ID']);assert(h.calls.filter(q=>q.action==='rates').every(q=>q.scopeType==='all'&&!q.provider&&!q.platform&&!q.platformId),'country and platform records and raw provider aliases are retained');
+ await h.c.liveQuery(false);await settle();assert.equal(feeCount(),2,'a successful empty directory also needs a new read');
+ h.setNow('2026-09-23T12:04:59Z');h.c.liveSet('country','印尼');await h.c.liveQuery(false);await settle();assert.equal(feeCount(),3,'the IN snapshot cannot satisfy a different native ID directory');
+ h.setNow('2026-09-23T12:05:00Z');h.c.render();h.c.providerSummarySort('all_count');h.c.livePage(1,'local');h.c.setPage('amount');h.c.setPage('providers');await settle();assert.equal(feeCount(),4,'one read on query reentry');
+ await h.c.liveQuery(false);await settle();assert.equal(feeCount(),5,'the next query reads the new country directory again');
+ await h.c.liveQuery(true);await settle();assert.equal(feeCount(),6,'force always reads rates again');
+ h.setNow('2026-09-23T12:04:00Z');await h.c.liveQuery(false);await settle();assert.equal(feeCount(),7,'clock rollback cannot make a snapshot fresh');
+ assert.deepEqual(h.calls.filter(q=>q.action==='rates').map(q=>q.country),['IN','IN','ID','ID','ID','ID','ID']);assert(h.calls.filter(q=>q.action==='rates').every(q=>q.scopeType==='all'&&!q.provider&&!q.platform&&!q.platformId),'country and platform records and raw provider aliases are retained');
 });
 
 test('filter edits abort a forced paginated fee read; paints cannot restart it and next query reads once',async()=>{
@@ -635,15 +635,15 @@ test('expired-query cancellation cannot restore an old fee snapshot and partial 
  h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(count++,Promise.resolve({rows:[],total:1})):request(q,options);await h.c.liveQuery(false);await settle();assert.equal(count,2);assert.equal(h.L.feeLookupRows,null);assert.match(h.L.feeLookupError,/不完整/);
 });
 
-test('daily comparison explicit queries share the same fee TTL and force contract',async()=>{
+test('daily comparison explicit queries each reread fees and the inline action reads once',async()=>{
  const h=await ready({extraModules:['live-statistic-windows.js','live-prepared-aggregates.js','live-daily-comparison.js'],platforms:[{...P,sourceName:P.name}],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});h.c.setPage('daily_comparison');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T23:59:59';
  const count=()=>h.calls.filter(q=>q.action==='rates').length;
- await h.c.liveQuery(false);await settle();assert.equal(count(),1);await h.c.liveQuery(false);await settle();assert.equal(count(),1);
- h.setNow('2026-09-23T12:05:01Z');h.c.render();assert.equal(count(),1);await h.c.liveQuery(false);await settle();assert.equal(count(),2);
- await h.c.liveQuery(true);await settle();assert.equal(count(),3);
- await h.c.liveDailyQuery();await settle();assert.equal(count(),4,'inline daily query uses the same force preparation');
- h.setNow('2026-09-23T12:10:02Z');await h.c.liveDailyContinue();await settle();assert.equal(count(),5,'inline continue expires the fee snapshot on this explicit query');
- for(const field of ['from','successFrom'])h.c.liveMetricTimeSet(field,'2026-09-21T00:00:00');for(const field of ['to','successTo'])h.c.liveMetricTimeSet(field,'2026-09-21T23:59:59');await h.c.liveDailyWorkorderQuery();await settle();assert.equal(count(),6,'inline query from a changed scope shares the same preparation');
+ await h.c.liveQuery(false);await settle();assert.equal(count(),1);await h.c.liveQuery(false);await settle();assert.equal(count(),2);
+ h.setNow('2026-09-23T12:05:01Z');h.c.render();assert.equal(count(),2);await h.c.liveQuery(false);await settle();assert.equal(count(),3);
+ await h.c.liveQuery(true);await settle();assert.equal(count(),4);
+ await h.c.liveDailyQuery();await settle();assert.equal(count(),5,'inline daily query uses the same force preparation');
+ h.setNow('2026-09-23T12:10:02Z');await h.c.liveDailyContinue();await settle();assert.equal(count(),6,'inline continue expires the fee snapshot on this explicit query');
+ for(const field of ['from','successFrom'])h.c.liveMetricTimeSet(field,'2026-09-21T00:00:00');for(const field of ['to','successTo'])h.c.liveMetricTimeSet(field,'2026-09-21T23:59:59');await h.c.liveDailyWorkorderQuery();await settle();assert.equal(count(),7,'inline query from a changed scope shares the same preparation');
 });
 
 
@@ -719,11 +719,11 @@ test('selected-provider daily entry points share the directory prepared for band
  const read=h.c.hensemLiveRequest;h.c.hensemLiveRequest=async(q,...args)=>{const response=await read(q,...args);return q.action==='aggregatePrepared'?{...response,version:2,items:response.items.map(item=>({...item,result:{...item.result,version:1},publication:{...item.publication,freshness:'fresh',refreshState:'idle'}}))}:response;};
  h.c.setPage('providers');h.c.liveSet('provider','Synthetic provider');await h.c.liveQuery(false);await settle();assert.equal(h.L.results.length,1);const count=()=>h.calls.filter(q=>q.action==='rates').length;assert.equal(count(),1);
  h.c.setPage('daily_comparison');h.c.liveSet('provider','Synthetic provider');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T23:59:59';
- await h.c.liveQuery(false);await settle();assert.equal(count(),1,'daily reuses the same actor-wide complete directory');await h.c.liveDailyQuery();await settle();assert.equal(count(),2,'inline force query rereads once');await h.c.liveDailyContinue();await settle();assert.equal(count(),2);await h.c.liveRetryFeeLookup();await settle();assert.equal(count(),3,'explicit fee retry reads one replacement');
+ await h.c.liveQuery(false);await settle();assert.equal(count(),2,'daily reads its own fresh directory');await h.c.liveDailyQuery();await settle();assert.equal(count(),3,'inline force query rereads once');await h.c.liveDailyContinue();await settle();assert.equal(count(),3);await h.c.liveRetryFeeLookup();await settle();assert.equal(count(),4,'explicit fee retry reads one replacement');
  const before=h.calls.length;h.c.liveDailySort('all_amount');h.c.render();assert.equal(h.calls.length,before);
 });
 
-test('events never sends an unauthorized rates read and uses only a fresh authorized snapshot or country bands',async()=>{
+test('events uses country bands without reusing a fee directory from another page',async()=>{
  for(const cached of [false,true]){
   const h=await ready({extraModules:['live-amount-bands.js'],submission:true,roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});
   h.setHandler(q=>q.action==='submissionAnalysis'?{version:3,platform:P,basis:'platform_local_day_all_providers_zero_success_whole_day_over_threshold',startAt:q.startAt,endAt:q.endAt,exemptCount:0,thresholdComparison:'gt',coverage:{missingMemberCount:0,unknownStatusCount:0,orderSequenceUncertainCount:0},metrics:[10,15,20,30,50,100].map(threshold=>({provider:null,threshold,qualified_member_count:1,qualified_member_days:1,member_count:1,member_days:1,invalid_count:20,l0_members:0,new_members:0,funded_members:0,unknown_members:1}))}:aggregate(P));
@@ -732,7 +732,7 @@ test('events never sends an unauthorized rates read and uses only a fresh author
   h.c.setPage('events');h.c.liveSet('provider','Synthetic provider');
   await assert.rejects(h.c.hensemLiveRequest({action:'rates',scopeType:'all',offset:0,limit:500},{signal:new AbortController().signal}),/当前角色没有/,'the real bridge catalog does not authorize events rates');
   const count=transport.rates().length;await h.c.liveQuery(true);await settle();assert.equal(transport.rates().length,count,'band preparation must not attempt the rejected standalone reader');
-  const request=h.calls.findLast(q=>q.action==='submissionAnalysis');assert(request);assert.equal(request.amountBands.charge[0],cached?250:100);assert.equal(request.amountBands.charge[10],cached?25000:50000);assert.equal(h.L.amountBandProfiles.charge.source,cached?'所选三方限额':'国家参考范围');assert.deepEqual(Array.from(request.providers),['Synthetic provider']);
+  const request=h.calls.findLast(q=>q.action==='submissionAnalysis');assert(request);assert.equal(request.amountBands.charge[0],100);assert.equal(request.amountBands.charge[10],50000);assert.equal(h.L.amountBandProfiles.charge.source,'国家参考范围');assert.deepEqual(Array.from(request.providers),['Synthetic provider']);
   h.setNow('2026-09-23T12:05:01Z');await h.c.liveQuery(true);await settle();assert.equal(transport.rates().length,count);assert.equal(h.L.amountBandProfiles.charge.source,'国家参考范围','an expired directory cannot silently define new event-query limits');
  }
 });

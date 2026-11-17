@@ -88,11 +88,14 @@ function harness(overrides = {}) {
     assert.equal(url.origin, "https://sheets.googleapis.com", "no unexpected external target");
     assert.equal(init.headers.Authorization, "Bearer synthetic-google-token");
     assert.equal(init.method, "GET"); state.reads.push(url);
+    assert.equal(url.searchParams.get("prettyPrint"), "false");
     if (state.failGoogle) throw new Error(PRIVATE);
     if (state.hangGoogle) return new Promise((resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error(PRIVATE)), { once: true }));
     if (url.pathname.includes("/values/")) return Response.json({ values: state.values });
     if (!url.searchParams.has("ranges")) return Response.json(state.metadata);
     const range = url.searchParams.get("ranges");
+    assert.match(url.searchParams.get("fields"), /effectiveValue\(numberValue,boolValue\)/);
+    assert.doesNotMatch(url.searchParams.get("fields"), /stringValue|hyperlink|numberFormat/);
     const sheet = state.metadata.sheets.find(s => range.startsWith("'" + s.properties.title.replace(/'/g, "''") + "'!"));
     assert.ok(sheet, "grid range must use an exact metadata title");
     const grid = structuredClone(state.grid); grid.sheets[0].properties = structuredClone(sheet.properties);
@@ -194,7 +197,7 @@ test('oversize allocated grids fail explicitly, never silently truncate or publi
 });
 test('each staged page has an explicit 8 MiB cap, never truncating a large native cell', async () => {
   const h = harness(); h.state.grid.sheets[0].data[0].rowData[1].values[0].formattedValue = 'x'.repeat(8 * 1024 * 1024);
-  const response = await h.run(); assert.equal(response.status, 413); assert.equal((await response.json()).code, 'source_payload_too_large'); assert.equal(h.state.stages.length, 0); assert.equal(h.state.publication, 'old-published-run');
+  const response = await h.run(); assert.equal(response.status, 413); assert.equal((await response.json()).code, 'snapshot_payload_too_large'); assert.equal(h.state.stages.length, 0); assert.equal(h.state.publication, 'old-published-run');
 });
 test('source/env configuration is private, fixed, and cannot point requests at arbitrary origins', async () => {
   for (const env of [{ GOOGLE_PRIVATE_KEY: '' }, { SUPABASE_SERVICE_ROLE_KEY: '' }, { SUPABASE_URL: 'https://attacker.invalid' }, { SUPABASE_URL: 'http://synthetic-project.supabase.co' }, { THIRD_PARTY_RATE_SHEET_ID: 'https://attacker.invalid/spreadsheets/d/source_id_12345/edit' }]) {

@@ -9,7 +9,6 @@ body.live-admin .live-business-filters .live-metric-window{display:flex;align-it
 .live-admin .live-metric-endpoint>span{font-size:10px;white-space:nowrap;color:#647a9b}
 .live-admin .live-metric-endpoint input{width:192px;max-width:100%;min-width:0;height:32px;box-sizing:border-box;border:1px solid #d5def0;border-radius:5px;padding:4px 7px;color:#284166;background:#fff;font:inherit;font-size:11px}
 .live-admin .live-metric-zone{font-size:10px;color:#647a9b;white-space:nowrap;align-self:center}
-.live-admin .live-retained-result{margin:0}
 body.live-admin .live-business-filters:has(.live-metric-windows)>.live-search-row{flex-basis:100%}
 /* Preserve form ancestry for validation and this.form; only flatten layout.
    Selectors then flow together instead of sharing hard-coded grid cells. */

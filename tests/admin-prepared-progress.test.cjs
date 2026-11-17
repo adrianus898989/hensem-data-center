@@ -8,13 +8,17 @@ const pageWrites=h=>h.writes.filter(write=>write.id==='page').length;
 function frames(h){let next=0;const pending=new Map();h.c.requestAnimationFrame=fn=>{pending.set(++next,fn);return next;};h.c.cancelAnimationFrame=id=>pending.delete(id);return {pending,flush(){const work=[...pending.values()];pending.clear();for(const fn of work)fn();}};}
 async function partialRead(){
  const h=await ready(),missing=new Set(platforms.slice(15).map(p=>p.id));
- h.override(q=>{if(q.action!=='aggregatePrepared')return;const response=packed(q);for(const item of response.items)if(missing.has(item.request.platformId))delete item.providerReuse;return response;});
+ h.override(q=>q.action==='aggregatePrepared'?packed(q):undefined);
  await provider(h,'');const before=h.calls.length,frame=frames(h),held=[];
- h.override(q=>q.action==='aggregatePrepared'?new Promise((resolve,reject)=>held.push({q,resolve,reject})):undefined);
+ h.override(q=>{
+  if(q.action!=='aggregatePrepared')return;
+  if(q.requests.some(request=>missing.has(request.platformId)))return new Promise((resolve,reject)=>held.push({q,resolve,reject}));
+  return packed(q);
+ });
  h.c.liveProvider('TukPay');const run=h.c.liveQuery();await settle();
- assert.equal(h.L.results.length,15);assert.equal(h.L.loading,true);assert.equal(frame.pending.size,1,'all cached completions share one animation frame');
+ assert.equal(h.L.results.length,15);assert.equal(h.L.loading,true);assert.equal(frame.pending.size,1,'all new partial replies share one animation frame');
  const remote=h.calls.slice(before).filter(q=>q.action==='aggregatePrepared').flatMap(q=>q.requests);
- assert.equal(remote.length,3);assert(remote.every(q=>missing.has(q.platformId)));
+ assert.equal(remote.length,18);assert.equal(new Set(remote.map(q=>q.platformId)).size,18);assert.equal(held.flatMap(item=>item.q.requests).length,3);
  return {h,frame,held,run,finish:async()=>{h.override(q=>q.action==='aggregatePrepared'?packed(q):undefined);for(const item of held)item.resolve(packed(item.q));await run;await settle();}};
 }
 test('prepared partial results render 15 of 18 while three exact reads are pending, without declaring a full total',async()=>{

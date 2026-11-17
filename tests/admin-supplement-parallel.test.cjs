@@ -32,21 +32,23 @@ test('same-account token renewal does not cancel or duplicate any independent su
  const {h,run}=await start('merchants'),serial=h.L.serial;h.c.hensemAccessToken='synthetic-rotated-token';await finish(h,run);
  assert.equal(h.L.serial,serial);assert.equal(h.L.results.length,3);assert.equal(h.L.error,'');assert.equal(h.history.filter(q=>q.action==='memberDaily').length,3);assert.equal(h.history.filter(q=>q.action==='rates').length,1);assert.equal(h.controls.ready(),true);
 });
-test('member denial for a replaced native platform cannot cancel the current phase or erase main data',async()=>{
- const {h,run}=await start('merchants'),serial=h.L.serial,main=JSON.stringify(h.L.results);h.L.catalog=h.L.catalog.map(p=>p.id===platforms[0].id?{...p,sourceName:'Synthetic replacement native'}:p);
+test('a replaced native platform clears former main facts and rejects the late member denial',async()=>{
+ const {h,run}=await start('merchants'),serial=h.L.serial;h.L.catalog=h.L.catalog.map(p=>p.id===platforms[0].id?{...p,sourceName:'Synthetic replacement native'}:p);
  await advanceAction(h,'memberDaily',Object.assign(Error('obsolete native denial'),{code:'ADMIN_LIVE_PERMISSION_DENIED'}));await finish(h,run);
- assert.equal(h.L.serial,serial);assert.equal(JSON.stringify(h.L.results),main);assert.equal(h.L.error,'');assert.equal(h.controls.ready(),true);
+ assert.equal(h.L.serial,serial+1);assert.equal(h.L.results.length,0);assert.equal(h.L.error,'');assert.equal(h.L.dirty,true);assert.equal(h.controls.ready(),false);assert.equal(h.active(),0);
 });
 
 for(const field of ['sourceName','name'])for(const outcome of ['ADMIN_LIVE_PERMISSION_DENIED','ADMIN_LIVE_CANCELLED'])test('old country-wide workorder '+outcome+' after same-ID '+field+' change cannot clear or continue the current owner',async()=>{
  const {h,run}=await start('provider_payout'),serial=h.L.serial,main=JSON.stringify(h.L.results),calls=h.history.length;
  h.L.catalog=h.L.catalog.map(p=>p.id===platforms[0].id?{...p,[field]:'Synthetic native replacement'}:p);
  await advanceAction(h,'workorders',Object.assign(Error('obsolete directory request'),{code:outcome}));await finish(h,run);
- assert.equal(h.L.serial,serial);assert.equal(JSON.stringify(h.L.results),main);assert.equal(h.L.error,'');assert.equal(h.history.length,calls,'obsolete phase cannot dispatch the remaining modules');assert.equal(h.controls.ready(),true);
+ assert.equal(h.history.length,calls,'obsolete phase cannot dispatch remaining modules');assert.equal(h.L.dirty,true);assert.equal(h.L.error,'');assert.equal(h.active(),0);
+ if(field==='sourceName'){assert.equal(h.L.serial,serial+1);assert.equal(h.L.results.length,0);assert.equal(h.controls.ready(),false);}
+ else {assert.equal(h.L.serial,serial);assert.equal(JSON.stringify(h.L.results),main);assert.equal(h.controls.ready(),true);}
 });
-test('old country-wide intake denial after same-ID native change cannot clear current main facts',async()=>{
+test('old country-wide intake denial after native replacement cannot expose former main facts',async()=>{
  const {h,run}=await start('providers');await advanceAction(h,'rates');await advanceAction(h,'workorders');for(let i=0;i<3;i++)await advanceAction(h,'aggregate');assert(h.waiting.some(e=>e.q.action==='intakeCoverage'));
- const serial=h.L.serial,main=JSON.stringify(h.L.results);h.L.catalog=h.L.catalog.map(p=>p.id===platforms[0].id?{...p,sourceName:'Synthetic native replacement'}:p);
+ const serial=h.L.serial;h.L.catalog=h.L.catalog.map(p=>p.id===platforms[0].id?{...p,sourceName:'Synthetic native replacement'}:p);
  await advanceAction(h,'intakeCoverage',Object.assign(Error('obsolete intake denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'}));await finish(h,run);
- assert.equal(h.L.serial,serial);assert.equal(JSON.stringify(h.L.results),main);assert.equal(h.L.error,'');assert.equal(h.controls.ready(),true);
+ assert.equal(h.L.serial,serial+1);assert.equal(h.L.results.length,0);assert.equal(h.L.error,'');assert.equal(h.L.dirty,true);assert.equal(h.controls.ready(),false);assert.equal(h.active(),0);
 });

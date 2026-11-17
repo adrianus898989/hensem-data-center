@@ -37,7 +37,7 @@ test('explicit retry invalidates all same-scope page caches; errors cannot reviv
 });
 test('cancellation clears cached snapshots and ignores outstanding old responses',async()=>{
  const h=fixture();h.ctx.withdrawReasons(0);h.page.cancel();h.respond(7);await settle();assert.equal(h.page.state.reason,null);
- h.page.state.data={rows:[{country:'巴西',platform:'SYNTHETIC'}]};h.ctx.withdrawReasons(0);assert.equal(h.requests.length,2);h.respond(7);await settle();h.page.pause();h.ctx.withdrawReasonSize(50);assert.equal(h.requests.length,3);
+ h.page.state.data={rows:[{country:'巴西',platform:'SYNTHETIC'}]};h.ctx.withdrawReasons(0);assert.equal(h.requests.length,2);h.respond(7);await settle();h.page.pause();h.ctx.withdrawReasonSize(50);assert.equal(h.requests.length,2);assert.equal(h.page.state.reasonData,null);
 });
 test('unknown, mismatched and explicitly partial totals do not become complete snapshots',async()=>{
  for(const overrides of [{total:null},{total:false},{total:''},{total:'bad'},{total:8},{partial:true},{hasMore:true},{error:'partial failure'},{complete:false},{available:false}]){

@@ -8,12 +8,12 @@ function result(empty=false,p=KB){const r=aggregate(p,10);r.capabilities=p.capab
 // Match Query's scope synchronization before injecting a complete fee result.
 function show(h,empty=false,p=KB){h.c.render();Object.assign(h.L,{results:[result(empty,p)],queryPlatforms:[p],pageQueried:true,overviewQueried:true,dirty:false,loading:false,comparisonStatus:'idle',loadedView:'full',feeLookupRows:[],feeLookupLoading:false,feeLookupError:''});h.c.render();}
 
-test('real KB Query preserves authorized complete fees across paints and repeat queries while success capability stays unknown',async()=>{
+test('real KB Query reads fresh authorized fees on repeat queries while success capability stays unknown',async()=>{
  const p={...KB,capabilities:{...KB.capabilities,successTimeAvailable:false,chargeSuccessTimeAvailable:false,withdrawSuccessTimeAvailable:false}},h=harness({platforms:[p]});await settle();scope(h);
  h.setHandler(q=>{if(q.action==='rates')return {rows:[{id:'synthetic-complete-rate',scopeType:'country',country:'印度',provider:'Synthetic provider',collectFee:'4%',payoutFee:'3%'}],total:1};if(q.action==='aggregate')return {...result(true,p),startAt:q.startAt,endAt:q.endAt,successStartAt:q.successStartAt,successEndAt:q.successEndAt};return {};});
  const run=h.c.liveQuery();await settle();await run;assert.equal(h.L.feeLookupError,'');assert.equal(h.L.feeLookupRows?.length,1);assert.match(h.html(),/成功时间口径未提供/);const snapshot=h.L.feeLookupRows,count=()=>h.calls.filter(q=>q.action==='rates').length,n=count();assert.equal(n,1);
- h.c.render();h.c.livePage(1,'local');assert.equal(h.L.feeLookupRows,snapshot);assert.equal(count(),n);await h.c.liveQuery();await settle();assert.equal(h.L.feeLookupRows,snapshot);assert.equal(count(),n);
- await h.c.liveRefresh();await settle();assert.equal(count(),n+1);assert.notEqual(h.L.feeLookupRows,snapshot);assert.equal(h.L.feeLookupRows?.length,1);assert.equal(h.L.feeLookupError,'');assert.match(h.html(),/成功时间口径未提供/);
+ h.c.render();h.c.livePage(1,'local');assert.equal(h.L.feeLookupRows,snapshot);assert.equal(count(),n);await h.c.liveQuery();await settle();assert.notEqual(h.L.feeLookupRows,snapshot);assert.deepEqual(h.L.feeLookupRows,snapshot);assert.equal(count(),n+1);
+ await h.c.liveRefresh();await settle();assert.equal(count(),n+2);assert.notEqual(h.L.feeLookupRows,snapshot);assert.equal(h.L.feeLookupRows?.length,1);assert.equal(h.L.feeLookupError,'');assert.match(h.html(),/成功时间口径未提供/);
 });
 
 test('KB native query carries its real UUID and India day; system and searchable fields respect catalog capabilities',async()=>{

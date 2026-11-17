@@ -29,8 +29,8 @@ test('missing/empty/invalid/withheld/stale never display retained text; no field
 test('shared reason lifecycle ignores late closed/denied responses, and repeated exact query reuses only its own scope',async()=>{
  let resolve;const f=fixture(()=>new Promise(r=>resolve=r));f.root.withdrawReasons(0,'blocking');await settle();f.root.withdrawReasonClose();resolve(base);await settle();assert.equal(f.page.state.reason,null);assert.doesNotMatch(f.html(),/id="withdraw-reasons"/);
  f.root.withdrawReasons(0,'blocking');await settle();f.root.hensemRoleAccess={canView:false};resolve(base);await settle();assert.equal(f.page.state.data,null);assert.equal(f.page.state.reasonData,null);
- const h=fixture();h.root.withdrawReasons(0,'blocking');await settle();h.root.withdrawReasonClose();h.root.withdrawReasons(0,'blocking');await settle();assert.equal(h.calls.length,1);
- h.root.withdrawReasonDate('2026-10-14');await settle();assert.equal(h.calls.length,2);assert.equal(h.calls.at(-1).date,'2026-10-14');
+ const h=fixture();h.root.withdrawReasons(0,'blocking');await settle();h.root.withdrawReasonClose();h.root.withdrawReasons(0,'blocking');await settle();assert.equal(h.calls.length,2);
+ h.root.withdrawReasonDate('2026-10-14');await settle();assert.equal(h.calls.length,3);assert.equal(h.calls.at(-1).date,'2026-10-14');
 });
 test('replaced message branch is gone while non-Duoli source handling remains unchanged',()=>{
  const f=fixture();f.page.state.reason=null;f.page.state.data.rows=[{country:'印尼',platform:'UANG',source:'OTHER',reasonAvailable:false},{country:'印尼',platform:'55FIVE',source:'AR',reasonAvailable:true}];f.draw();assert.match(f.html(),/当前采集未提供原因/);assert.match(f.html(),/>自动出款原因</);assert.match(f.html(),/>驳回原因</);assert.doesNotMatch(f.html(),/>源备注</);
