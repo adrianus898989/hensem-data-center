@@ -7,6 +7,30 @@ const names=(profile,q)=>profile==='time-v1'?['hourly','provider']:profile==='am
 function full(q){const r=ready(q);if(q.durationVersion)r.result.durationVersion=q.durationVersion;for(const k of ['amount_range','matrix_range','latency_thresholds'])r.result.groups[k]=[];r.result.latencySummary=[{direction:'charge',precise:'9007199254740993.0000001',mean_seconds:null}];return r;}
 function compact(q,profile){const r=full(q),groups=names(profile,q);r.result.groups=Object.fromEntries(groups.map(k=>[k,r.result.groups[k]]));r.resultGroups={contract:'prepared-result-groups-v1',profile,groups};return r;}
 const handler=p=>envelope(p.requests,q=>p.responseProfile?compact(q,p.responseProfile):full(q));
+test('only a complete amount aggregate drops the native order-list cursor from its returned copy', async () => {
+ const request=q({view:'full'});
+ for(const [profile,legacy,coverage,keepCursor] of [
+  ['amount-v1',false,{},false], ['amount-v1',true,{},false], ['time-v1',false,{},true],
+  ['amount-v1',false,{pandaCoverage:{reason:'verified_created_prefix_only'}},true],
+  ['amount-v1',false,{coverage:{requestedComplete:false}},true]
+ ]){
+  let original;
+  const h=harness({handler:p=>envelope(p.requests,q=>{
+   const item=legacy?full(q):compact(q,profile);
+   original=item.result;
+   Object.assign(original,coverage,{hasMore:true});
+   delete original.complete;
+   return item;
+  })});
+  for(let i=0;i<2;i++){
+   const result=await h.manager.read(request,{responseProfile:profile});
+   assert.equal(result.hasMore,keepCursor?true:undefined);
+   assert.equal(result.complete,undefined);
+   assert.equal(original.hasMore,true);
+  }
+  assert.equal(h.calls.length,1);
+ }
+});
 for(const [profile,patch]of [['time-v1',{}],['amount-v1',{}],['amount-v1',{amountBands:{charge:[100,200,300]}}],['latency-v1',{durationVersion:2}]])test(profile+' validates exact groups and preserves metadata/nulls/decimal strings',async()=>{
  const request=q({view:'full',...patch}),h=harness({handler});const result=await h.manager.read(request,{responseProfile:profile}),body=h.calls[0].payload;
  assert.deepEqual(body.requests,[request]);assert.equal(body.responseProfile,profile);assert.deepEqual(Object.keys(result.groups).sort(),names(profile,request));assert.deepEqual(clone(result._preparedResultGroups),{contract:'prepared-result-groups-v1',profile,groups:names(profile,request)});assert.equal(result.summary[0].all_amount,'123.000000000000000001');assert.equal(result.summary[0].success_amount,null);assert.equal(result.latencySummary[0].precise,'9007199254740993.0000001');assert.equal(result._preparedPublication.sourceComplete,false);assert.equal(result._preparedPublication.freshness,'refresh_due');
