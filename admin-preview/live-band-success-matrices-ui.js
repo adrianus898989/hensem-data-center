@@ -74,8 +74,10 @@
         columns.map(col => rateCell(row.cells[col.key], false)).join('') + rateCell(row.total, partial, true) + '</tr>';
     }).join('');
     const notice = matrix.note || (matrix.partial ? '部分来源尚未读齐，已读小计以 * 标示。' : '');
-    const empty = '<tr><td class="band-success-empty" colspan="' + (columns.length + (withType ? 3 : 2)) + '">' +
-      (matrix.partial ? '暂无可核验的' + dimension + '数据' : '所选范围没有' + kinds[kind] + dimension + '数据') + '</td></tr>';
+    let emptyText = '所选范围没有' + kinds[kind] + dimension + '数据';
+    if (matrix.loading) emptyText = '正在读取' + kinds[kind] + dimension + '数据…';
+    else if (matrix.partial) emptyText = '暂无可核验的' + dimension + '数据';
+    const empty = '<tr><td class="band-success-empty" colspan="' + (columns.length + (withType ? 3 : 2)) + '">' + emptyText + '</td></tr>';
     const manual = matrix.excluded?.manual || [], unidentified = matrix.excluded?.unidentified || [];
     const excluded = kind === 'provider' && (manual.length || unidentified.length)
       ? '<details class="success-analysis-other"><summary>商户汇总另含 ' + (manual.length + unidentified.length) +

@@ -78,6 +78,9 @@ test('uses text for source labels and preserves a missing source as incomplete',
   assert.match(empty, /商户分金额段成功率/);
   assert.match(empty, /暂无可核验的分金额段数据/);
   assert.doesNotMatch(empty, /分时/);
+  const loading = matrixHtml(ui, {...data, merchant: {...data.merchant, loading: true}}, 'amount', 'merchant');
+  assert.match(loading, /正在读取商户分金额段数据/);
+  assert.doesNotMatch(loading, /暂无可核验/);
 });
 
 test('provider scope disclosure identifies extra merchant groups and safely displays their names', () => {

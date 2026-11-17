@@ -175,7 +175,7 @@
       total:[...published.values()].reduce((n,r)=>count(n+r.all_count),0),
       summary:main.summary,groups:{[dim.group]:rows(buckets,false),[dim.cross]:rows(providers,true)}};
   }
-  function providerTotals(rows,country,scope) {
+  function providerTotals(rows,country,scope,fields=rateFields) {
     // Main-page results may contain multiple raw names for one displayed provider.
     const totals=new Map();
     for(const row of rows){
@@ -184,7 +184,9 @@
          scope.direction!=='all'&&row.direction!==scope.direction) mismatch();
       const name=String(root.HensemProviderNames?.canonical(row.provider,country)??row.provider??'').trim();
       const key=JSON.stringify([row.direction,row.currency,name]),total=totals.get(key)||empty();
-      for(const field of rateFields)total[field]=count(total[field]+count(row[field]));
+      for(const field of fields)total[field]=count(total[field]+count(row[field]));
+      if(fields===createdFields && (count(row.created_success_count)!==count(row.success_count) ||
+          count(row.success_count)>count(row.all_count))) mismatch();
       totals.set(key,total);
     }
     return totals;
@@ -205,7 +207,22 @@
     }
     return {query:{...query,direction},main:project(main),parts:parts.map(project),directions};
   }
-  function verifyAmount(query,main,result) {
+  function currentAmountWindow(query,platform,readAt) {
+    if(!Number.isFinite(readAt)||!platform?.timezone||platform.id!==query.platformId||
+        query.providerAmountMatrix!==true||query.status!=='all'||query.direction!=='all'||
+        query.successBasis!=='created'||query.successStartAt!==undefined||query.successEndAt!==undefined||
+        !validWindow(query.startAt,query.endAt))return false;
+    const start=Date.parse(query.startAt),end=Date.parse(query.endAt);
+    if(start>readAt)return false;
+    const day=new Intl.DateTimeFormat('en-CA',{timeZone:platform.timezone,year:'numeric',month:'2-digit',day:'2-digit'});
+    return day.format(start)===day.format(readAt)&&day.format(end-1)===day.format(readAt);
+  }
+  function incomplete(r) {
+    return !r||r.complete===false||r.hasMore===true||r.partial||r.available===false||r.error||
+      r.meta?.partial===true||r.coverage?.calculationComplete===false||
+      r.pandaCoverage?.reason==='verified_created_prefix_only';
+  }
+  function verifyAmount(query,main,result,{platform,readAt}={}) {
     const created=query.successBasis==='created',fields=created?createdFields:rateFields;
     // After independent legs have been joined the numerators and denominators
     // belong to different cohorts. Counts in each bucket must match the main page.
@@ -215,17 +232,45 @@
     const providers=index(groups?.provider_amount_range,'provider_amount_range',query,fields);
     verifyCounts(fold(providers,3,fields),buckets,fields);
     verifyCounts(fold(buckets,2,fields),summary,fields);
-    if (!main || main.platform?.id!==query.platformId || main.complete===false || main.hasMore===true ||
-        main.partial || main.available===false || main.error || main.coverage?.calculationComplete===false ||
-        main.pandaCoverage?.reason==='verified_created_prefix_only' ||
+    if (incomplete(main)||incomplete(result)||main.platform?.id!==query.platformId||
+        (main._parts&&(!Array.isArray(main._parts)||!main._parts.length||main._parts.some(incomplete)))||
         !equalInstant(main.startAt,query.startAt) || !equalInstant(main.endAt,query.endAt) ||
         (main.successBasis??null)!==(query.successBasis??null) ||
         (query.successBasis==='success' && (!equalInstant(main.successStartAt,query.successStartAt) ||
           !equalInstant(main.successEndAt,query.successEndAt))) ||
-        !sameBands(result.amountBands,query.amountBands)) mismatch();
-    verifyCounts(index(main.summary,'summary',query),summary);
+        !sameBands(result.amountBands,query.amountBands)||
+        (main.amountBands||main.groups?.amount_range)&&!sameBands(main.amountBands,query.amountBands)) mismatch();
+    const mainSummary=index(main.summary,'summary',query);
+    if(currentAmountWindow(query,platform,readAt)){
+      // Orders on an open local day can change between the overview and this
+      // read. The RPC produces all four groupings in one database statement.
+      if(result.platform?.id!==platform.id||result.providerAmountMatrix!==true||
+          result.complete!==true||result.hasMore!==false||result.successBasis!=='created'||
+          result.successStartAt!=null||result.successEndAt!=null||
+          !equalInstant(result.startAt,query.startAt)||!equalInstant(result.endAt,query.endAt)||
+          main.successStartAt!=null||main.successEndAt!=null||!Array.isArray(groups.provider))mismatch();
+      if(main._preparedResultGroups&&main._preparedResultGroups.profile!=='amount-v1')mismatch();
+      for(const part of main._parts||[main]){
+        if(part.platform?.id!==platform.id||part.successBasis!=='created'||part.successStartAt!=null||
+            part.successEndAt!=null||part.coverage?.complete===false&&part.coverage?.calculationComplete!==true||
+            (part.amountBands||part.groups?.amount_range)&&!sameBands(part.amountBands,query.amountBands))mismatch();
+      }
+      for(const key of ['source','sourceName','currency','country','timezone']){
+        if([main.platform,result.platform].some(p=>p[key]&&platform[key]&&p[key]!==platform[key]))mismatch();
+      }
+      if(Array.isArray(main.groups?.amount_range))
+        verifyCounts(fold(index(main.groups.amount_range,'amount_range',query),2),mainSummary);
+      if(Array.isArray(main.groups?.provider))
+        verifyCounts(fold(providerTotals(main.groups.provider,platform.country,query),2),mainSummary);
+      const country=platform.country,summaryCount=[...summary.values()].reduce((n,r)=>count(n+r.all_count),0);
+      if(count(result.total)!==summaryCount)mismatch();
+      verifyCounts(providerTotals(groups.provider,country,query,fields),
+        providerTotals(groups.provider_amount_range,country,query,fields),fields);
+      const asOf=Date.parse(result.asOf);
+      return {...result,_matrixReadAt:Number.isFinite(asOf)?asOf:readAt};
+    }
+    verifyCounts(mainSummary,summary);
     if (Array.isArray(main.groups?.amount_range)) {
-      if (!sameBands(main.amountBands,query.amountBands)) mismatch();
       verifyCounts(index(main.groups.amount_range,'amount_range',query),buckets);
     }
     if(Array.isArray(main.groups?.provider)){

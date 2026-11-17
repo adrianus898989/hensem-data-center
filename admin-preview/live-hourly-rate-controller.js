@@ -111,7 +111,8 @@
      const q=inputs.query,reads=inputs.parts;
      result=slices?windows.combineCreatedDay(q,inputs.main,reads):reads.length===1?reads[0]:windows.combine(q,inputs.main,reads[0],reads[1]);
      if(base.providerAmountMatrix===true){
-      windows.verifyAmount(q,inputs.main,result);
+      result=windows.verifyAmount(q,inputs.main,result,
+       !slices&&reads.length===1?{platform,readAt:Date.now()}:undefined);
       result={...result,_matrixDirections:inputs.directions};
       // Equal explicit windows share one default-clock RPC. Restore the original
       // window metadata after its counts have reconciled with the main query.
@@ -159,8 +160,19 @@
    }
    const detail=failed.length?'<details><summary>查看未完成原因</summary>'+failed.map(f=>'<div>'+E(f.name)+'：'+E(f.message)+'</div>').join('')+'</details>':'';
    if(c.canDrill()&&!s.controller&&!L.loading&&!L.queryRetrying&&remaining.length>failed.length)schedule(s);
-   const tables=models.map(model=>root.HensemBandSuccessMatricesUI.render(model,c.page(),selected)).join('');
-   return '<div data-hourly-rate-region><p class="analysis-note">沿用页顶查询范围，'+(isAmount()?'按'+E(L.currency)+'金额档分组':'按各商户当地时间分组')+'；总成功率按总笔数加权。</p>'+(status?'<div class="analysis-status" role="status">'+status+detail+'</div>':'')+tables+'</div>';
+   const loading=c.canDrill()&&(L.loading||L.queryRetrying||!!s.controller||remaining.length>failed.length);
+   const tables=models.map(model=>{
+    model[selected].loading=loading&&model[selected].ready.size===0;
+    return root.HensemBandSuccessMatricesUI.render(model,c.page(),selected);
+   }).join('');
+   const times=[...s.values.values()].map(r=>r._matrixReadAt).filter(Number.isFinite);
+   let freshness='';
+   if(isAmount()&&times.length){
+    const zones=new Set(platforms.map(p=>p.timezone)),zone=zones.size===1?platforms[0].timezone:'UTC';
+    const stamp=new Intl.DateTimeFormat('zh-CN',{timeZone:zone,hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(Math.max(...times));
+    freshness='当日分档按商户分别读取，最近读取 '+E(stamp)+'（'+E(zone)+'）；上方汇总使用主表查询时的数据。';
+   }
+   return '<div data-hourly-rate-region><p class="analysis-note">沿用页顶查询范围，'+(isAmount()?'按'+E(L.currency)+'金额档分组':'按各商户当地时间分组')+'；总成功率按总笔数加权。'+freshness+'</p>'+(status?'<div class="analysis-status" role="status">'+status+detail+'</div>':'')+tables+'</div>';
   }
   root.HensemHourlyMatrixActions={load};
   return {html,pause,cancel,kind};
