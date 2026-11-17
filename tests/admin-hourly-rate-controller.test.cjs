@@ -251,3 +251,106 @@ for(const page of ['time','amount'])test(page+' renders different charge and pay
  }
  h.app.cancel();
 });
+
+function indiaDayWindow(offsetDays=0){
+ const day=24*60*60*1000,indiaOffset=5.5*60*60*1000;
+ const start=(Math.floor((Date.now()+indiaOffset)/day)+offsetDays)*day-indiaOffset;
+ return {startAt:new Date(start).toISOString(),endAt:new Date(start+day).toISOString()};
+}
+function amountSnapshot(charge,payout){
+ const summary=[['charge',charge],['withdraw',payout]].map(([direction,[success_count,all_count]])=>
+  ({direction,currency:'INR',all_count,success_count,created_success_count:success_count}));
+ const amount_range=summary.map((r,i)=>({...r,bucket:'band:'+i}));
+ return {
+  total:summary.reduce((n,r)=>n+r.all_count,0),summary,
+  groups:{amount_range,provider:summary.map(r=>({...r,provider:'Pay'})),
+   provider_amount_range:amount_range.map(r=>({...r,provider:'Pay'}))}
+ };
+}
+function liveAmountDay({offsetDays=0,natives=1,explicitSuccess=false}={}){
+ const h=setupAmount(),window=indiaDayWindow(offsetDays);
+ const clock=explicitSuccess?{successBasis:'success',successStartAt:window.startAt,successEndAt:window.endAt}:{successBasis:'created'};
+ const platforms=h.L.results.slice(0,natives).map(r=>r.platform);
+ h.ctx.platforms=()=>platforms;
+ Object.assign(h.L,{from:window.startAt,to:window.endAt,...clock});
+ for(const r of h.L.results){
+  const snapshot=amountSnapshot([3,4],[2,10]);
+  delete snapshot.groups.provider_amount_range;
+  Object.assign(r,window,clock,snapshot);
+ }
+ const originalQuery=h.ctx.query;h.ctx.query=p=>({...originalQuery(p),...window,...clock});
+ const reply=call=>({...h.reply(call),successBasis:call.q.successBasis,...amountSnapshot([5,8],[7,12])});
+ return {...h,reply};
+}
+
+test('open India day displays one internally reconciled newer read in both amount tabs and both directions',async()=>{
+ const h=liveAmountDay({natives:2}),action=h.win.HensemHourlyMatrixActions;
+ const before=h.L.results[0].summary;
+ const run=action.load();assert.equal(h.calls.length,2);
+ h.calls[0].resolve(h.reply(h.calls[0]));await wait();
+ let html=h.app.html();
+ for(const [direction,success,count] of [['charge',5,8],['withdraw',7,12]]){
+  const m=h.rendered(direction).provider;
+  assert.equal(m.ready.size,1);assert.equal(m.partial,true);
+  assert.equal(m.rows[0].total.successCount,success);assert.equal(m.rows[0].total.totalCount,count);
+ }
+ assert.match(html,/1\s*\/\s*2/);
+ h.L.view='amount-merchant';h.app.html();
+ assert.equal(h.rendered('charge').merchant.rows[0].total.successCount,5);
+ assert.equal(h.rendered('withdraw').merchant.rows[0].total.totalCount,12);
+ assert.equal(h.calls.length,2);
+ h.calls[1].resolve(h.reply(h.calls[1]));await run;
+ for(const kind of ['provider','merchant','provider']){
+  h.L.view='amount-'+kind;html=h.app.html();
+  assert.ok(html.indexOf('amount/charge/'+kind)<html.indexOf('amount/withdraw/'+kind));
+  for(const [direction,success,count,bucket] of [['charge',5,8,'band:0'],['withdraw',7,12,'band:1']]){
+   const m=h.rendered(direction)[kind];assert.equal(m.ready.size,2);assert.equal(m.partial,false);
+   const multiplier=kind==='provider'?2:1;
+   for(const row of m.rows){
+    assert.equal(row.total.successCount,multiplier*success);assert.equal(row.total.totalCount,multiplier*count);
+    assert.equal(row.cells[bucket].successCount,row.total.successCount);
+    assert.equal(row.cells[bucket].totalCount,row.total.totalCount);
+   }
+  }
+  await action.load();assert.equal(h.calls.length,2);
+ }
+ assert.deepEqual(before.map(r=>[r.success_count,r.all_count]),[[3,4],[2,10]]);
+ assert.equal(h.L.results[0].summary,before);
+ h.app.cancel();
+});
+
+for(const [why,options,invalidate] of [
+ ['closed Indian day',{offsetDays:-1},()=>{}],
+ ['explicit success window',{explicitSuccess:true},()=>{}],
+ ['mismatched provider totals',{},r=>{r.groups.provider[0].provider='another';}],
+ ['mismatched amount-bucket totals',{},r=>{r.groups.amount_range[0].bucket='band:2';}],
+ ['mismatched daily total',{},r=>{r.total++;}],
+ ['incomplete response',{},r=>{r.complete=false;}],
+ ['mismatched native scope',{},r=>{r.platform.id='another';}],
+ ['mismatched date',{},r=>{r.startAt=indiaDayWindow(-1).startAt;}],
+ ['mismatched band profile',{},r=>{r.amountBands={...r.amountBands,charge:amountEdges.map(x=>x+1)};}]
+]){
+ test('later amount read never supplies drifting or unverified rows for '+why,async()=>{
+  const h=liveAmountDay(options),run=h.win.HensemHourlyMatrixActions.load();
+  assert.equal(h.calls.length,1);const c=h.calls[0],r=h.reply(c);invalidate(r);c.resolve(r);
+  await run;const html=h.app.html();
+  for(const d of ['charge','withdraw']){
+   assert.equal(h.rendered(d).provider.ready.size,0);assert.equal(h.rendered(d).provider.rows.length,0);
+  }
+  assert.match(html,/重试未完成商户/);assert.equal(h.calls.length,1);h.app.cancel();
+ });
+}
+
+test('permission denial clears verified current-day amount rows and ignores later responses',async()=>{
+ const h=liveAmountDay({natives:3}),run=h.win.HensemHourlyMatrixActions.load();
+ h.calls[0].resolve(h.reply(h.calls[0]));await wait();h.app.html();
+ assert.equal(h.rendered('charge').provider.ready.size,1);
+ h.calls[1].reject(Object.assign(Error('denied'),{code:'42501'}));await wait();
+ assert(h.calls[2].o.signal.aborted);
+ h.calls[2].resolve(h.reply(h.calls[2]));await run;
+ for(const kind of ['provider','merchant']){
+  h.L.view='amount-'+kind;const html=h.app.html();
+  assert.match(html,/未获/);assert.doesNotMatch(html,/data-band-matrix/);
+ }
+ await h.win.HensemHourlyMatrixActions.load(true);assert.equal(h.calls.length,3);h.app.cancel();
+});

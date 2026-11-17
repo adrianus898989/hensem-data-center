@@ -97,7 +97,9 @@
    const main=bases.get(p.id),candidate=providerAmounts.get(p.id);
    const supplement=candidate&&successAvailable?.(p,candidate,direction)!==false?candidate:null;
    if(!valid||!samePlatform(p,main)||!usable(main)||successAvailable?.(p,main,direction)===false)continue;
-   const merchant=merchantBuckets(main,p,direction,currency,edges)??checkedSupplement(main,supplement,p,direction,currency,edges);
+   const merchant=Number.isFinite(supplement?._matrixReadAt)
+    ?merchantBuckets(supplement,p,direction,currency,edges)
+    :merchantBuckets(main,p,direction,currency,edges)??checkedSupplement(main,supplement,p,direction,currency,edges);
    if(!merchant)continue;
    amounts.set(p.id,merchant);merchantReady.add(p.id);
    for(const key of merchant.keys())if(!key.startsWith('band:'))special.add(key);
