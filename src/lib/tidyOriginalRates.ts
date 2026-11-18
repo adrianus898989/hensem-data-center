@@ -125,11 +125,37 @@ function columnHeading(grid: OriginalRateGrid, column: number, depth: number) {
   return { parts, label: parts.join(' / '), headerSourceRow };
 }
 
-/** All columns/rows stay in source order; compact is a column-visibility hint only. */
+function statusLegendColumns(grid: OriginalRateGrid, index: SourceIndex, headings: ReturnType<typeof columnHeading>[]): Set<number> {
+  const hidden = new Set<number>();
+  const notes: Record<string, string> = {
+    '开启': '运行中', '不支持': '盘口不支持接入', '暂时停': '暂时停用', '暂停': '暂时停用',
+    '备用': '三方都正常的情况下不开', '未接入': '盘口没有接入这个三方', '维护': '三方维护',
+  };
+  for (let column = 0; column + 1 < index.columns; column++) {
+    const left = headings[column], right = headings[column + 1];
+    if (clean(left.label) !== '状态' || clean(right.label) !== '状态备注内容' || left.headerSourceRow !== right.headerSourceRow) continue;
+    const statuses = new Set<string>();
+    let legend = true;
+    for (let row = left.headerSourceRow + 1; row < index.rows; row++) {
+      const status = clean(tidySourceCell(grid, row, column).text).replace(/\s*(?:🟢|🔴|🟡|⭕|⛔|⚠️?|🛠️?|⚒️?|✅|❌|✔️?|✖️?)\s*$/, '').trim();
+      const note = clean(tidySourceCell(grid, row, column + 1).text);
+      if (!status && !note) continue;
+      // The paired headers and repeated exact definitions identify a legend.
+      // A business status, new note or additional data keeps both source columns.
+      if (!notes[status] || notes[status] !== note || statuses.has(status)) { legend = false; break; }
+      statuses.add(status);
+    }
+    if (legend && statuses.size >= 2) { hidden.add(column); hidden.add(column + 1); }
+  }
+  return hidden;
+}
+
+/** Business coordinates stay in source order; compact only changes visibility. */
 export function buildTidyModel(grid: OriginalRateGrid): TidyModel {
   const index = sourceIndex(grid), headerRows = headerDepth(grid, index);
   const hiddenColumns = new Set(grid.hiddenColumns), hiddenRows = new Set(grid.hiddenRows);
   const headings = Array.from({ length: index.columns }, (_, column) => columnHeading(grid, column, headerRows));
+  const legends = statusLegendColumns(grid, index, headings);
   const samples = (column: number) => {
     const values: string[] = [];
     for (let row = headerRows; row < index.rows && values.length < 40; row++) {
@@ -157,7 +183,7 @@ export function buildTidyModel(grid: OriginalRateGrid): TidyModel {
   const columns: TidyColumn[] = [];
   let providerColumn: number | null = null, typeColumn: number | null = null;
   for (let sourceColumn = 0; sourceColumn < index.columns; sourceColumn++) {
-    if (hiddenColumns.has(sourceColumn)) continue;
+    if (hiddenColumns.has(sourceColumn) || legends.has(sourceColumn)) continue;
     const { label, parts, headerSourceRow } = headings[sourceColumn], leaf = parts.at(-1) ?? '';
     let group: TidyColumn['group'] = 'other', kind: TidyColumn['kind'] = 'other', compact = false;
     if (platform.has(sourceColumn)) { group = 'platform'; kind = 'status'; compact = true; }
@@ -193,6 +219,8 @@ export function buildTidyModel(grid: OriginalRateGrid): TidyModel {
   const rows: number[] = [];
   for (let row = 1; row < index.rows; row++) {
     if (hiddenRows.has(row)) continue;
+    if ([...legends].some(column => clean(tidySourceCell(grid, row, column).text)) &&
+        !columns.some(column => clean(tidyBodySourceCell(grid, row, column, headerRows).text))) continue;
     if (row >= headerRows || columns.some(column => {
       const cell = tidySourceCell(grid, row, column.sourceColumn);
       return cell.sourceRow > column.headerSourceRow && clean(cell.text) !== '';
