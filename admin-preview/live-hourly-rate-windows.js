@@ -207,7 +207,7 @@
     }
     return {query:{...query,direction},main:project(main),parts:parts.map(project),directions};
   }
-  function currentAmountWindow(query,platform,readAt) {
+  function createdAmountWindow(query,platform,readAt) {
     if(!Number.isFinite(readAt)||!platform?.timezone||platform.id!==query.platformId||
         query.providerAmountMatrix!==true||query.status!=='all'||query.direction!=='all'||
         query.successBasis!=='created'||query.successStartAt!==undefined||query.successEndAt!==undefined||
@@ -215,11 +215,12 @@
     const start=Date.parse(query.startAt),end=Date.parse(query.endAt);
     if(start>readAt)return false;
     const day=new Intl.DateTimeFormat('en-CA',{timeZone:platform.timezone,year:'numeric',month:'2-digit',day:'2-digit'});
-    return day.format(start)===day.format(readAt)&&day.format(end-1)===day.format(readAt);
+    return end<=readAt||day.format(end-1)===day.format(readAt);
   }
   function incomplete(r) {
     return !r||r.complete===false||r.hasMore===true||r.partial||r.available===false||r.error||
       r.meta?.partial===true||r.coverage?.calculationComplete===false||
+      r.coverage?.complete===false&&r.coverage?.calculationComplete!==true||
       r.pandaCoverage?.reason==='verified_created_prefix_only';
   }
   function verifyAmount(query,main,result,{platform,readAt}={}) {
@@ -241,9 +242,10 @@
         !sameBands(result.amountBands,query.amountBands)||
         (main.amountBands||main.groups?.amount_range)&&!sameBands(main.amountBands,query.amountBands)) mismatch();
     const mainSummary=index(main.summary,'summary',query);
-    if(currentAmountWindow(query,platform,readAt)){
-      // Orders on an open local day can change between the overview and this
-      // read. The RPC produces all four groupings in one database statement.
+    if(createdAmountWindow(query,platform,readAt)){
+      // Current stored status and its provider attribution can change after a
+      // creation day closes. Validate this read independently: the RPC produces
+      // its totals and all four groupings in one database statement.
       if(result.platform?.id!==platform.id||result.providerAmountMatrix!==true||
           result.complete!==true||result.hasMore!==false||result.successBasis!=='created'||
           result.successStartAt!=null||result.successEndAt!=null||
