@@ -2168,16 +2168,17 @@ const snapshots = [
   }
 ];
 
-test('all fifteen native header shapes preserve every visible column, order and original text', () => {
+test('all fifteen native header shapes preserve business columns, order and original text while excluding paired legends', () => {
   const expectedDepth = [1, 1, 1, 1, 1, 2, 2, 2, 2, 1, 2, 2, 2, 1, 1];
   const expectedProvider = [0, 4, 0, 1, 0, 1, 1, 1, 1, 0, 2, 1, 1, 0, 1];
+  const legends = [[], [38,39], [47,48], [6,7], [57,58], [23,24], [], [], [16,17], [43,44], [21,22], [18,19], [17,18], [], []];
   for (const [index, sample] of snapshots.entries()) {
     const grid = fixture(sample.rows, sample.columns, { merges: sample.merges });
     grid.sheet.title = sample.title;
     const before = JSON.stringify(grid), model = buildTidyModel(grid);
     assert.equal(model.headerRows, expectedDepth[index], sample.title);
     assert.equal(model.providerColumn, expectedProvider[index], sample.title);
-    assert.deepEqual(model.columns.map(column => column.sourceColumn), Array.from({ length: sample.columns }, (_, i) => i), sample.title);
+    assert.deepEqual(model.columns.map(column => column.sourceColumn), Array.from({ length: sample.columns }, (_, i) => i).filter(i=>!legends[index].includes(i)), sample.title);
     assert.equal(JSON.stringify(grid), before, sample.title);
     assert.equal(new Set(model.rows).size, model.rows.length, sample.title);
   }
@@ -2201,7 +2202,7 @@ test('India compact retains exact combined fee and platform cells but full retai
   const brazil = snapshots.find(sample => sample.title === '巴西盘口');
   const br = buildTidyModel(fixture(brazil.rows, brazil.columns));
   assert.deepEqual(br.columns.filter(column => column.label === '三方名称').map(column => column.sourceColumn), [0, 3]);
-  assert.deepEqual(br.columns.filter(column => column.label === '状态').map(column => column.sourceColumn), [15, 57]);
+  assert.deepEqual(br.columns.filter(column => column.label === '状态').map(column => column.sourceColumn), [15]);
   assert.equal(br.columns[55].label, '');
   assert.equal(br.columns[56].label, '');
   assert(br.platformColumns.includes(54), 'blank new POPMIU remains in platform band');

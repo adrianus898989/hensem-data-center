@@ -73,6 +73,17 @@ test('partial hours are independent of complete hours, including cross-day succe
   assert.deepEqual(pay.total,{...counts(3,1),partial:true});
 });
 
+test('English manual recharge keeps merchant hourly counts without becoming a provider', () => {
+  const results=[result(a,[row(8,7,14)],[row(null,7,14)])],before=JSON.stringify(results);
+  const providerHours=new Map([[a.id,{complete:true,rows:[row(8,3,10,'Pay'),row(8,4,4,'Manual Recharge')]}]]);
+  const {provider,merchant}=build({platforms:[a],results,providerHours});
+  assert.deepEqual(provider.rows.map(r=>r.name),['Pay']);
+  assert.deepEqual(provider.rows[0].total,counts(3,10));
+  assert.deepEqual(provider.excluded.manual,['Manual Recharge']);
+  assert.deepEqual(merchant.rows[0].total,counts(7,14));
+  assert.equal(provider.partial,false);assert.equal(JSON.stringify(results),before);
+});
+
 test('a missing segment in a split request, a mismatched native source or a read without a success clock cannot yield complete facts', () => {
   const good=result(a,[row(2,2,4)],[row(null,2,4)]);
   for(const changed of [

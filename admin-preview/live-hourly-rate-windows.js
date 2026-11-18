@@ -138,17 +138,14 @@
     return [0,6,12,18].map(hour=>({...query,
       startAt:new Date(start+hour*hourMs).toISOString(),endAt:new Date(start+(hour+6)*hourMs).toISOString()}));
   }
-  function combineCreatedDay(query,main,parts) {
-    const windows=closedIndiaDay(query,main,main.platform);
+  function combineCreatedDay(query,main,parts,{platform=main?.platform,readAt=Date.now()}={}) {
+    const windows=closedIndiaDay(query,main,platform,readAt);
     if (!windows || parts.length!==windows.length) mismatch();
-    const dim=shape(query),providers=new Map(),buckets=new Map();
-    function accumulate(target,values,i) {
+    const dim=shape(query),providers=new Map(),buckets=new Map(),summaries=new Map(),providerSummary=new Map();
+    const liveAmount=dim===amount&&createdAmountWindow(query,platform,readAt),readWindows=[];
+    let total=0;
+    function accumulate(target,values) {
       for (const [key,metrics] of values) {
-        if (dim===hourly) {
-          // Native local hours cannot occur in more than one six-hour slice.
-          const hour=JSON.parse(key)[2];
-          if (hour<i*6 || hour>=(i+1)*6) mismatch();
-        }
         const prior=target.get(key)||empty();
         for (const field of createdFields) prior[field]=count(prior[field]+metrics[field]);
         target.set(key,prior);
@@ -156,12 +153,29 @@
     }
     for (const [i,part] of parts.entries()) {
       const w=windows[i],group=leg(part,query,w.startAt,w.endAt,true);
-      accumulate(buckets,group.buckets,i);
-      accumulate(providers,group.providers,i);
+      if (liveAmount) {
+        // Each disjoint slice is its own current-status database read. Check its
+        // native identity, total and all four groupings before combining it.
+        const checked=verifyAmount(w,part,part,{platform,
+          readAt:Number.isFinite(part._matrixReceivedAt)?part._matrixReceivedAt:readAt});
+        if(!Number.isFinite(checked._matrixReadAt))mismatch();
+        readWindows.push({startAt:w.startAt,endAt:w.endAt,readAt:checked._matrixReadAt});
+        total=count(total+count(part.total));
+        accumulate(summaries,group.summary);
+        accumulate(providerSummary,providerTotals(part.groups.provider,platform.country,w,createdFields));
+      } else if (dim===hourly) {
+        // Native local hours cannot occur in more than one six-hour slice.
+        for(const key of [...group.buckets.keys(),...group.providers.keys()]){
+          const hour=JSON.parse(key)[2];
+          if(hour<i*6||hour>=(i+1)*6)mismatch();
+        }
+      }
+      accumulate(buckets,group.buckets);
+      accumulate(providers,group.providers);
     }
-    const published=index(main.summary,'summary',query,createdFields);
+    const published=liveAmount?summaries:index(main.summary,'summary',query,createdFields);
     verifyCounts(fold(buckets,2,createdFields),published,createdFields);
-    if (Array.isArray(main.groups?.[dim.group]))
+    if (!liveAmount&&Array.isArray(main.groups?.[dim.group]))
       verifyCounts(buckets,index(main.groups[dim.group],dim.group,query,createdFields),createdFields);
     function rows(cells,withProvider) {
       return [...cells].map(([key,metrics])=>{
@@ -169,11 +183,23 @@
         return {direction,currency,[dim.field]:slot,...(withProvider?{provider}:{}),...metrics};
       });
     }
-    return {platform:main.platform,capabilities:main.capabilities,complete:true,hasMore:false,
+    const summaryRows=cells=>[...cells].map(([key,metrics])=>{
+      const [direction,currency,provider]=JSON.parse(key);
+      return {direction,currency,...(provider===undefined?{}:{provider}),...metrics};
+    });
+    const result={platform:main.platform,capabilities:main.capabilities,complete:true,hasMore:false,
       [dim.marker]:true,...(dim===amount?{amountBands:query.amountBands}:{}),
       startAt:query.startAt,endAt:query.endAt,successBasis:'created',
       total:[...published.values()].reduce((n,r)=>count(n+r.all_count),0),
-      summary:main.summary,groups:{[dim.group]:rows(buckets,false),[dim.cross]:rows(providers,true)}};
+      summary:liveAmount?summaryRows(published):main.summary,
+      groups:{[dim.group]:rows(buckets,false),[dim.cross]:rows(providers,true)}};
+    if(liveAmount){
+      if(result.total!==total)mismatch();
+      result.groups.provider=summaryRows(providerSummary);
+      result._matrixReadWindows=readWindows;
+      result.asOf=new Date(Math.max(...readWindows.map(r=>r.readAt))).toISOString();
+    }
+    return result;
   }
   function providerTotals(rows,country,scope,fields=rateFields) {
     // Main-page results may contain multiple raw names for one displayed provider.
@@ -244,8 +270,9 @@
     const mainSummary=index(main.summary,'summary',query);
     if(createdAmountWindow(query,platform,readAt)){
       // Current stored status and its provider attribution can change after a
-      // creation day closes. Validate this read independently: the RPC produces
-      // its totals and all four groupings in one database statement.
+      // creation day closes. Validate this read independently: each native RPC
+      // produces its totals and all four groupings together. Timeout recovery
+      // checks each disjoint slice before adding the separately read results.
       if(result.platform?.id!==platform.id||result.providerAmountMatrix!==true||
           result.complete!==true||result.hasMore!==false||result.successBasis!=='created'||
           result.successStartAt!=null||result.successEndAt!=null||

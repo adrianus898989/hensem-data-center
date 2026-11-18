@@ -109,6 +109,31 @@ test('closed creation dates accept a self-consistent native reread after status 
   } finally { await db.exec('rollback'); }
 });
 
+test('closed-day four-slice recovery keeps native current-status controls after a stored order changes',async()=>{
+  const runtime={};vm.runInNewContext(read('admin-preview/live-hourly-rate-windows.js'),runtime);
+  const windows=runtime.HensemHourlyRateWindows,q=request({...marker,successBasis:'created'});
+  await db.exec('begin');
+  try{
+    const main=await drill(q),frozen=structuredClone(main);
+    await db.exec("update newar_detail_records set status_group='success',status_code='success',success_at='2026-09-20T06:00Z',provider='LaterPay' where source_id='second'");
+    const ranges=windows.closedIndiaDay(q,main,main.platform);assert.equal(ranges.length,4);
+    const parts=[];for(const range of ranges)parts.push(await drill(range));
+    const combined=windows.combineCreatedDay(q,main,parts,{platform:main.platform,readAt:Date.now()});
+    const checked=windows.verifyAmount(q,main,combined,{platform:main.platform,readAt:Date.now()});
+    const current=await drill(q),sorted=items=>Array.from(items,r=>JSON.stringify(
+      [r.direction,r.currency,r.bucket??null,r.provider??null,...counts(r)])).sort();
+    assert.equal(checked.total,current.total);assert.equal(checked.total,main.total);
+    assert.deepEqual(sorted(checked.summary),sorted(current.summary));
+    for(const key of ['provider','amount_range','provider_amount_range'])
+      assert.deepEqual(sorted(checked.groups[key]),sorted(current.groups[key]));
+    assert.equal(checked.summary.reduce((n,r)=>n+r.success_count,0),main.summary.reduce((n,r)=>n+r.success_count,0)+1);
+    assert.equal(checked._matrixReadWindows.length,4);
+    assert.deepEqual(main,frozen);
+    const broken=structuredClone(parts);broken[0].groups.provider[0].all_count++;
+    assert.throws(()=>windows.combineCreatedDay(q,main,broken),/未对齐/);
+  }finally{await db.exec('rollback');}
+});
+
 test('amount reader scans once for the created cohort, preserves the hourly result and rolls back exactly', async () => {
   const q = request({...marker,successBasis:'created'});
   await db.exec('begin');

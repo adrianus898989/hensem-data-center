@@ -283,6 +283,57 @@ function liveAmountDay({offsetDays=0,natives=1,explicitSuccess=false}={}){
  return {...h,reply};
 }
 
+test('closed amount timeout recovery independently verifies four newer native slices and shares both tabs without mutating the main head',async()=>{
+ const h=liveAmountDay({offsetDays:-1}),action=h.win.HensemHourlyMatrixActions;
+ const frozen=structuredClone(h.L.results),run=action.load();h.calls[0].reject(timeout());await wait();
+ const amounts=[[[2,2],[0,0]],[[2,2],[0,0]],[[0,0],[1,5]],[[0,0],[2,5]]];
+ for(let i=0;i<4;i++){
+  assert.equal(h.calls.length,i+2);const c=h.calls[i+1];
+  assert.equal(c.o.signal,h.calls[0].o.signal);
+  assert.equal(Date.parse(c.q.endAt)-Date.parse(c.q.startAt),6*3600000);
+  const r={...h.reply(c),...amountSnapshot(...amounts[i]),asOf:new Date(Date.now()+i).toISOString()};
+  if(i===1)for(const rows of [r.groups.provider,r.groups.provider_amount_range])
+   rows.forEach(row=>{row.provider='LaterPay';});
+  c.resolve(r);await wait();
+  if(i<3){h.app.html();assert.equal(h.rendered().provider.ready.size,0);}
+ }
+ await run;
+ for(const kind of ['provider','merchant','provider']){
+  h.L.view='amount-'+kind;const html=h.app.html();
+  assert.doesNotMatch(html,/未对齐|未读取|正在读取金额分档/);
+  assert.match(html,/上方汇总使用主表查询时的数据/);
+  for(const [direction,success,total] of [['charge',4,4],['withdraw',3,10]]){
+   const m=h.rendered(direction)[kind];assert.equal(m.ready.size,1);assert.equal(m.partial,false);
+   assert.equal(m.rows.reduce((n,r)=>n+r.total.successCount,0),success);
+   assert.equal(m.rows.reduce((n,r)=>n+r.total.totalCount,0),total);
+  }
+  await action.load();assert.equal(h.calls.length,5);
+ }
+ assert.deepEqual(h.L.results,frozen);h.app.cancel();
+});
+
+for(const [reason,stopAt] of [['corrupt totals',2],['timeout',2],['permission',2],['new query',2],['permission',4],['new query',4]])test('amount split recovery never publishes partial data after '+reason+' at slice '+stopAt,async()=>{
+ const h=liveAmountDay({offsetDays:-1}),run=h.win.HensemHourlyMatrixActions.load();
+ h.calls[0].reject(timeout());await wait();
+ for(let i=1;i<stopAt;i++){h.calls[i].resolve(h.reply(h.calls[i]));await wait();}
+ const c=h.calls[stopAt];
+ if(reason==='timeout')c.reject(timeout());
+ else if(reason==='permission')c.reject(Object.assign(Error('denied'),{code:'42501'}));
+ else if(reason==='new query'){
+  h.L.serial++;h.L.loading=true;h.app.html();c.resolve(h.reply(c));
+ }else{
+  // All four responses arrive, but one source total is corrupted.
+  c.resolve({...h.reply(c),total:999});await wait();
+  h.calls[3].resolve(h.reply(h.calls[3]));await wait();h.calls[4].resolve(h.reply(h.calls[4]));
+ }
+ await run;const html=h.app.html();
+ if(reason==='permission')assert.match(html,/未获/);
+ else for(const direction of ['charge','withdraw'])assert.equal(h.rendered(direction).provider.ready.size,0);
+ assert.equal(h.calls.length,reason==='corrupt totals'?5:stopAt+1);
+ if(['permission','new query'].includes(reason))assert(c.o.signal.aborted);
+ h.app.cancel();
+});
+
 for(const offsetDays of [0,-1,-7])test((offsetDays===0?'open':'closed '+Math.abs(offsetDays)+' days ago')+' India day displays one internally reconciled newer read in both amount tabs and both directions',async()=>{
  const h=liveAmountDay({natives:2,offsetDays}),action=h.win.HensemHourlyMatrixActions;
  const before=h.L.results[0].summary;

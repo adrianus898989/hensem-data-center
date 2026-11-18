@@ -157,11 +157,39 @@ test('staging payload preserves native displayed text/format, holes, zero, merge
   assert.deepEqual(data.cells[0][0].format.backgroundColor, { red: .8, green: .1, blue: .2 }); assert.equal(data.cells[0][0].format.textFormat.fontSize, 10); assert.equal(data.cells[0][0].format.textFormat.bold, true);
   assert.equal(data.cells[1][0].format.textFormat.bold, false); assert.equal(data.cells[1][0].format.borders.bottom.style, 'DOUBLE');
   assert.deepEqual(data.cells[1][1].runs, [{ startIndex: 0, format: { bold: true, foregroundColor: { red: .8, green: .1, blue: .2 } } }, { startIndex: 1, format: { italic: true } }]);
-  assert.deepEqual(data.rowHeights, [31, 42, 0, 25, 35]); assert.deepEqual(data.columnWidths, [145, 61, 90, 100, 100, 127]); assert.deepEqual(data.hiddenRows, [2, 3]); assert.deepEqual(data.hiddenColumns, [2, 5]);
+  assert.deepEqual(data.rowHeights, [31, 42, 0, 25, 35]); assert.deepEqual(data.columnWidths, [145, 61, 90, 100, 100, 127]); assert.deepEqual(data.hiddenRows, [2]); assert.deepEqual(data.hiddenColumns, [2]);
   assert.equal(data.merges.length, 2); assert.deepEqual(data.merges[0], { startRowIndex: 0, endRowIndex: 1, startColumnIndex: 1, endColumnIndex: 4 });
   assert.doesNotMatch(JSON.stringify(data), new RegExp(PRIVATE)); assert.doesNotMatch(JSON.stringify(data), /effectiveValue|formulaValue|hyperlink|"note"|userEnteredValue/);
   assert.equal(h.state.stages[1].collected_at, data.fetchedAt);
   const range = h.state.reads.filter(url => url.pathname.includes('/values/'))[1]; assert.match(decodeURIComponent(range.pathname), /'印度 O''Brien ! tab'!A1:AW1000$/);
+});
+test('GCASH/PINOYPAY source filters cannot hide BANK/PAYMAYA rates or filter-only columns in the published grid', async () => {
+  const exports = {};
+  const compiled = ts.transpileModule(fs.readFileSync(path.join(root, 'src/lib/tidyOriginalRates.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  new Function('exports', compiled)(exports);
+  const rows = [['三方名称', '类型', '代收合计%+单笔', '代付合计%+单笔', 'PLATFORM-A'],
+    ['PINOYPAY', 'GCASH', '1.2% + 2', '3%', '开启'], ['BankPay', 'BANK', '2%', '4%', '维护'],
+    ['MayaPay', 'PAYMAYA', '3%', '0%', '关闭'], ['ManualDraft', 'BANK', '9%', '9%', '未接入']];
+  let expected;
+  for (const selected of [null, 'GCASH', 'PINOYPAY']) {
+    const h = harness();
+    const properties = { sheetId: 256067290, title: '菲律宾盘口', index: 0, sheetType: 'GRID', gridProperties: { rowCount: 1000, columnCount: 5, frozenRowCount: 1, frozenColumnCount: 0 } };
+    const rowMetadata = rows.map((row, index) => ({ pixelSize: 25, hiddenByUser: index === 4, hiddenByFilter: selected !== null && index > 0 && !row.includes(selected) }));
+    h.state.metadata.sheets = [{ properties, merges: [] }]; h.state.values = rows;
+    h.state.grid = { sheets: [{ properties, merges: [], data: [{ startRow: 0, startColumn: 0,
+      rowData: rows.map(row => ({ values: row.map(formattedValue => ({ formattedValue })) })), rowMetadata,
+      columnMetadata: rows[0].map((_, index) => ({ pixelSize: 100, hiddenByFilter: selected !== null && index === 4 })) }] }] };
+    const original = structuredClone(h.state.grid);
+    const response = await h.run(); assert.equal(response.status, 200); assert.equal((await response.json()).ok, true);
+    const grid = h.state.stages[0].payload;
+    assert.deepEqual(grid.cells.map(row => row.map(cell => cell.text)), rows);
+    assert.deepEqual(grid.hiddenRows, [4]); assert.deepEqual(grid.hiddenColumns, []);
+    assert.deepEqual(exports.buildTidyModel(grid).rows, [1, 2, 3]);
+    assert.deepEqual(h.state.grid, original, 'source filter state is never changed');
+    assert.ok(h.state.calls.filter(call => call.url.origin === 'https://sheets.googleapis.com').every(call => call.init.method === 'GET'));
+    if (expected) assert.deepEqual(grid, expected, 'all source filter choices publish identical complete presentation data'); else expected = grid;
+    assert.deepEqual(h.state.rpc.map(call => call.name), ['original_rate_sync_claim', 'original_rate_sync_publish']);
+  }
 });
 test('Google assertion is RS256, readonly, nonextractable, and remains internal', async () => {
   const h = harness(); const response = await h.run(); const parts = h.state.assertion.split('.');

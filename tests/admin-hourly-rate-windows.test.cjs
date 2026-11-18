@@ -145,15 +145,43 @@ test('recovery sums the same provider and bucket across four disjoint slices and
     const direction=i===3?'withdraw':'charge',n=[1,2,1,2][i],s=[1,0,1,2][i],bucket=i===3?'above':'band:0';
     const summary=created(n,s,undefined,undefined,direction);
     return {platform:localPlatform,providerAmountMatrix:true,amountBands:q.amountBands,
-      startAt:slice.startAt,endAt:slice.endAt,successBasis:'created',complete:true,hasMore:false,
-      summary:[summary],groups:{amount_range:[{...summary,bucket}],provider_amount_range:[{...summary,bucket,provider:'Pay'}]}};
+      startAt:slice.startAt,endAt:slice.endAt,successBasis:'created',complete:true,hasMore:false,total:n,
+      summary:[summary],groups:{provider:[{...summary,provider:'Pay'}],amount_range:[{...summary,bucket}],provider_amount_range:[{...summary,bucket,provider:'Pay'}]}};
   });
   const merged=combineCreatedDay(q,main,parts);
   assert.deepEqual(merged.groups.amount_range,main.groups.amount_range);
   assert.deepEqual(merged.groups.provider_amount_range,main.groups.amount_range.map(r=>({...r,provider:'Pay'})));
   for(const broken of [
     {...parts[2],complete:false},
+    {...parts[2],total:2},
+    {...parts[2],coverage:{complete:false}},
+    {...parts[2],coverage:{complete:false,calculationComplete:false}},
+    {...parts[2],successStartAt:parts[2].startAt},
+    {...parts[2],platform:{...localPlatform,timezone:'UTC'}},
+    {...parts[2],startAt:parts[1].startAt},
+    {...parts[2],endAt:parts[3].endAt},
     {...parts[2],amountBands:{...q.amountBands,charge:[100,250,...amountBands.charge.slice(2)]}},
+    {...parts[2],groups:{...parts[2].groups,provider:[{...parts[2].groups.provider[0],provider:'Other'}]}},
     {...parts[2],groups:{...parts[2].groups,provider_amount_range:[]}}
   ]) assert.throws(()=>combineCreatedDay(q,main,[parts[0],parts[1],broken,parts[3]]));
+  for(const wrong of [parts.slice(1),[parts[0],parts[1],parts[1],parts[3]],parts.toReversed()])
+    assert.throws(()=>combineCreatedDay(q,main,wrong));
+  assert.doesNotThrow(()=>combineCreatedDay(q,main,parts.map(p=>({...p,coverage:{complete:false,calculationComplete:true},sourceComplete:false}))));
+
+  // The same creation orders can become successful and change provider after
+  // the main head was read. Only the four new, internally verified slices add up.
+  const changed=structuredClone(parts),frozen=structuredClone(main);
+  changed[1].summary[0].success_count=changed[1].summary[0].created_success_count=1;
+  for(const key of ['provider','amount_range','provider_amount_range']){
+    changed[1].groups[key][0].success_count=changed[1].groups[key][0].created_success_count=1;
+    if(key!=='amount_range')changed[1].groups[key][0].provider='NewPay';
+  }
+  changed.forEach((p,i)=>{p.asOf='2026-11-18T06:30:0'+i+'Z';});
+  const newer=combineCreatedDay(q,main,changed);
+  const confirmed=globalThis.HensemHourlyRateWindows.verifyAmount(q,main,newer,{platform:localPlatform,readAt:Date.now()});
+  assert.equal(confirmed.summary[0].success_count,3);assert.equal(confirmed.summary[0].all_count,4);
+  assert.equal(confirmed.groups.provider.find(r=>r.provider==='NewPay').all_count,2);
+  assert.equal(confirmed._matrixReadAt,Date.parse(changed[3].asOf));
+  assert.deepEqual(confirmed._matrixReadWindows.map(r=>r.readAt),changed.map(p=>Date.parse(p.asOf)));
+  assert.deepEqual(main,frozen);
 });

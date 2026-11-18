@@ -11,7 +11,10 @@
  const provider=(name,country)=>String(window.HensemProviderNames?.canonical(name,country)??name??'').trim()||'（三方未提供）';
  const unknownProviderNames=new Set(['（三方未提供）','未识别通道','未识别三方','未提供','未标记三方','USDT']);
  const nonProviderNames=new Set(['人工充值','人工确认','人工取消','无三方（驳回）','无三方(驳回)','提现转充值','无三方','manual','manualrecharge','manualconfirmation']);
- const providerKind=name=>unknownProviderNames.has(name)?'unidentified':nonProviderNames.has(name)||nonProviderNames.has(name.toLowerCase())?'manual':'provider';
+ const providerKind=name=>{
+  const label=String(name??'').trim(),key=label.toLowerCase().replace(/\s+/g,'');
+  return unknownProviderNames.has(label)?'unidentified':nonProviderNames.has(label)||nonProviderNames.has(key)?'manual':'provider';
+ };
  const positive=value=>(typeof value==='number'||typeof value==='string')&&String(value).trim()!==''&&Number.isFinite(Number(value))&&Number(value)>0;
  // Visibility follows this section's activity evidence, independently of
  // whether its success rate can be calculated. Amounts are never summed here.
