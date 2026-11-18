@@ -103,16 +103,18 @@
      const parts=[];
      for(const q of requests){
       if(!active(s)||controller.signal.aborted)return;
-      parts.push(verified(await c.request(q,{signal:controller.signal}),q));
+      const part=verified(await c.request(q,{signal:controller.signal}),q);
+      parts.push(slices?{...part,_matrixReceivedAt:Date.now()}:part);
      }
      const inputs=base.providerAmountMatrix===true
       ?windows.availableAmountDirections(base,main,parts,(r,d)=>c.successAvailable?.(platform,r,d))
       :{query:base,main,parts};
      const q=inputs.query,reads=inputs.parts;
-     result=slices?windows.combineCreatedDay(q,inputs.main,reads):reads.length===1?reads[0]:windows.combine(q,inputs.main,reads[0],reads[1]);
+     const readContext={platform,readAt:Date.now()};
+     result=slices?windows.combineCreatedDay(q,inputs.main,reads,readContext):reads.length===1?reads[0]:windows.combine(q,inputs.main,reads[0],reads[1]);
      if(base.providerAmountMatrix===true){
       result=windows.verifyAmount(q,inputs.main,result,
-       !slices&&reads.length===1?{platform,readAt:Date.now()}:undefined);
+       slices||reads.length===1?readContext:undefined);
       result={...result,_matrixDirections:inputs.directions};
       // Equal explicit windows share one default-clock RPC. Restore the original
       // window metadata after its counts have reconciled with the main query.
