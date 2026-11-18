@@ -172,12 +172,15 @@ export async function readOriginalGrid(read: GoogleRead, spreadsheetId: string, 
     for (const [offset, dimension] of (block.rowMetadata || []).entries()) {
       const index = startRow + offset; if (index >= rows) break;
       if (typeof dimension.pixelSize === "number" && Number.isFinite(dimension.pixelSize) && dimension.pixelSize >= 0) rowHeights[index] = dimension.pixelSize;
-      if (dimension.hiddenByUser === true || dimension.hiddenByFilter === true) hiddenRows.add(index);
+      // A collaborator's active filter is only a source-view choice. All cells
+      // are already read by exact range; never turn filtered rows into missing
+      // dashboard rates. Explicit manual hiding keeps its existing meaning.
+      if (dimension.hiddenByUser === true) hiddenRows.add(index);
     }
     for (const [offset, dimension] of (block.columnMetadata || []).entries()) {
       const index = startColumn + offset; if (index >= columns) break;
       if (typeof dimension.pixelSize === "number" && Number.isFinite(dimension.pixelSize) && dimension.pixelSize >= 0) columnWidths[index] = dimension.pixelSize;
-      if (dimension.hiddenByUser === true || dimension.hiddenByFilter === true) hiddenColumns.add(index);
+      if (dimension.hiddenByUser === true) hiddenColumns.add(index);
     }
   }
   return { sheet: currentSheet, cells, merges, rowHeights, columnWidths, hiddenRows: [...hiddenRows].sort((a, b) => a - b), hiddenColumns: [...hiddenColumns].sort((a, b) => a - b), fetchedAt: new Date(now()).toISOString(), rowCount: rows, columnCount: columns };

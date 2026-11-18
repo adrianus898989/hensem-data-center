@@ -78,6 +78,20 @@ test('payout uses its own requested edges, rows and weighted total', () => {
   assert.deepEqual(publicValue(item(merchant,b.id).total),counts(1,7));
 });
 
+test('native English manual recharge aliases are excluded only from provider amount rates', () => {
+  for (const name of ['Manual Recharge','MANUAL  RECHARGE','Manual\u00a0Recharge','人工充值']) {
+    const own=response(a,[charge('band:0','Pay',10,3),charge('band:0',name,4,4)]),before=JSON.stringify(own);
+    const {provider,merchant}=model({platforms:[a],results:[own],providerAmounts:new Map([[a.id,own]])});
+    assert.deepEqual(publicValue(provider.rows.map(r=>r.name)),['Pay']);
+    assert.deepEqual(publicValue(provider.rows[0].total),counts(3,10));
+    assert.deepEqual(publicValue(provider.excluded.manual),[name]);
+    assert.deepEqual(publicValue(merchant.rows[0].total),counts(7,14));
+    assert.equal(provider.partial,false);
+    assert.equal(JSON.stringify(own),before);
+  }
+  assert.equal(window.HensemLiveSuccessAnalysis.providerKind('Manual Recharge Pay'),'provider');
+});
+
 test('missing or unverified native range evidence leaves a merchant unknown and preserves the other verified native subtotal', () => {
   for (const changed of [
     {...second,groups:{hourly:second.groups.hourly,amount:[charge('100','Pay',7,5)]}},

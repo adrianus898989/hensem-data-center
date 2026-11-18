@@ -48,6 +48,14 @@ test('manual and unresolved labels never become provider rows while their native
  assert.equal(m.footers.charge[0].value,25);assert.equal(m.footers.charge[0].total,20);assert.equal(m.footers.charge[0].providerCount,1);assert.equal(m.footers.charge[0].providerCountPartial,true);assert.equal(m.footers.workorder[0].value,50);assert.equal(m.footers.workorder[0].total,10);
  assert.match(sections[0],/<th scope="row">Real failure<\/th>.*class="success-rate-low"[^>]*>0\.00%/);assert.doesNotMatch(html,/<th scope="row">(?:人工确认|无三方（驳回）|未标记三方|未识别通道)<\/th>/);assert.match(sections[0],/<details class="success-analysis-other">.*4 类非三方 \/ 未归属记录.*人工确认（已读提交 4 笔）.*不因收起这些记录而扣减/);assert.doesNotMatch(sections[1],/success-analysis-other/);assert.match(sections[2],/未标记三方（已读提交 2 笔）/);assert.equal(JSON.stringify(p),before);
 });
+test('English manual recharge is not a provider row or provider count in success analysis',()=>{
+ const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',10,3,'Pay'),row('charge',4,4,'Manual Recharge')],[row('charge',14,7)])],workorders:null}),before=JSON.stringify(p),m=a.buildModel(p),html=a.render(p);
+ assert.deepEqual(Array.from(a.rankedRows(m,'charge'),r=>r.provider),['Pay']);
+ assert.equal(m.footers.charge[0].providerCount,1);
+ assert.equal(m.footers.charge[0].total,14,'native merchant totals remain intact');
+ assert.doesNotMatch(html,/<th scope="row">Manual Recharge<\/th>/);
+ assert.equal(JSON.stringify(p),before);
+});
 test('activity visibility preserves real zero rates, cross-day successes and amount-only evidence without inventing zero for missing rates',()=>{
  const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',10,0,'FailedPay'),row('charge',0,2,'CrossDayPay'),{...row('charge',null,null,'AmountOnlyPay'),all_amount:25},row('charge',0,0,'DormantPay'),row('charge',null,null,'UnknownPay'),row('withdraw',99,80,'PayoutOnlyPay')],[row('charge',10,2)])],workorders:null}),m=a.buildModel(p),table=a.render(p).match(/<table[^>]*>.*?<\/table>/g)[0];
  assert.deepEqual(Array.from(a.rankedRows(m,'charge'),r=>r.provider),['FailedPay','CrossDayPay','AmountOnlyPay']);assert.equal(m.rows.find(r=>r.provider==='FailedPay').charge[0].value,0);assert.equal(m.rows.find(r=>r.provider==='CrossDayPay').charge[0].value,null);assert.equal(m.rows.find(r=>r.provider==='AmountOnlyPay').charge[0].value,null);assert.equal(m.footers.charge[0].value,20);
