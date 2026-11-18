@@ -5,7 +5,7 @@ const sheet=id=>({sheetId:id,title:'Synthetic Sheet '+id,index:id-1,rowCount:44,
 const metadata=(at='2026-10-01T00:00:00Z')=>({title:'Synthetic workbook',fetchedAt:at,sheets:[sheet(1),sheet(2)]});
 function grid(id=1,at='2026-10-01T00:00:00Z',fee='4% + 2/笔'){const rows=[['三方名称','类型 / 钱包','代收合计%+单笔','代付合计%+单笔','总计费率','备注','PLATFORM-A','PLATFORM-B']];for(let i=0;i<42;i++)rows.push(['Synthetic-'+i,i%2?'Wallet B':'Wallet A',fee,'2%','6% + 2/笔','REF-'+i,i%2?'暂停':'开启',i%2?'维护':'未接入']);return {sheet:sheet(id),fetchedAt:at,cells:rows.map(row=>row.map(text=>({text}))),rowCount:rows.length,columnCount:8,merges:[],hiddenRows:[],hiddenColumns:[]};}
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {resolve,promise};};
-function setup(options={}){const timers=new Map(),calls=[],flags={active:true,dirty:false,editing:false,restricted:options.restricted===true,identity:options.identity||'Synthetic Actor:IN'},scroller={scrollTop:0,scrollLeft:0};let id=0,handler=async q=>q.sheetId===undefined?metadata():grid(q.sheetId),focused=false,mounted=true;const host={clientWidth:1000,contains:()=>focused,querySelector:()=>scroller,innerHTML:''};const document={visibilityState:'visible',activeElement:null,getElementById:()=>mounted?host:null,querySelector:()=>null};const window={document,setTimeout:(f,ms)=>{timers.set(++id,{f,ms});return id},clearTimeout:id=>timers.delete(id)};const context={window,AbortController};for(const forbidden of ['fetch','XMLHttpRequest','localStorage'])Object.defineProperty(context,forbidden,{get(){throw Error('Unexpected '+forbidden)}});vm.createContext(context);vm.runInContext(source,context);const api=window.HensemLiveRatesRestored;api.configure({request:(q,opts)=>{calls.push(JSON.parse(JSON.stringify(q)));return handler(q,opts)},isActive:()=>flags.active,isDirty:()=>flags.dirty,isEditing:()=>flags.editing,isRestrictedScope:()=>flags.restricted,scopeKey:()=>flags.identity});return {api,calls,timers,flags,document,scroller,setHandler:f=>handler=f,setFocused:v=>focused=v,setMounted:v=>mounted=v,async tick(){const entry=[...timers.entries()][0];assert(entry,'scheduled timer exists');timers.delete(entry[0]);entry[1].f();for(let i=0;i<5;i++)await new Promise(r=>setImmediate(r));}};}
+function setup(options={}){const timers=new Map(),calls=[],flags={active:true,dirty:false,editing:false,restricted:options.restricted===true,identity:options.identity||'Synthetic Actor:IN'},scroller={scrollTop:0,scrollLeft:0},refreshNode={textContent:''};let id=0,handler=async q=>q.sheetId===undefined?metadata():grid(q.sheetId),focused=false,mounted=true;const host={clientWidth:1000,contains:()=>focused,querySelector:()=>scroller,querySelectorAll:()=>[refreshNode],innerHTML:''};const document={visibilityState:'visible',activeElement:null,getElementById:()=>mounted?host:null,querySelector:()=>null};const window={document,setTimeout:(f,ms)=>{timers.set(++id,{f,ms});return id},clearTimeout:id=>timers.delete(id)};const context={window,AbortController};for(const forbidden of ['fetch','XMLHttpRequest','localStorage'])Object.defineProperty(context,forbidden,{get(){throw Error('Unexpected '+forbidden)}});vm.createContext(context);vm.runInContext(source,context);const api=window.HensemLiveRatesRestored;api.configure({request:(q,opts)=>{calls.push(JSON.parse(JSON.stringify(q)));return handler(q,opts)},isActive:()=>flags.active,isDirty:()=>flags.dirty,isEditing:()=>flags.editing,isRestrictedScope:()=>flags.restricted,scopeKey:()=>flags.identity});return {api,calls,timers,flags,document,scroller,refreshNode,setHandler:f=>handler=f,setFocused:(v,element={tagName:'INPUT',type:'search'})=>{focused=v;document.activeElement=v?element:null;},setMounted:v=>mounted=v,async tick(){const entry=[...timers.entries()][0];assert(entry,'scheduled timer exists');timers.delete(entry[0]);entry[1].f();for(let i=0;i<5;i++)await new Promise(r=>setImmediate(r));}};}
 
 test('query stays in filter bar; original field search combines with wallet/platform/status',async()=>{const h=setup();assert.equal(h.calls.length,0);assert.equal(h.timers.size,0);await h.api.load();const html=h.api.render();assert.doesNotMatch(html,/授权范围费率/);assert.match(html,/<form class="original-rates-filters"[^]*original-rates-filter-actions[^]*<button type="button" onclick="HensemLiveRatesRestored.load\(\)"[^>]*>查询<\/button>/);h.api.set('query','REF-0');h.api.set('type','Wallet A');h.api.set('platform','6');h.api.set('status','good');assert.deepEqual([...h.api.model().rows],[1]);assert.equal(h.api.snapshot().filterDirty,true);assert.equal(h.calls.length,2);h.api.set('status','paused');assert.equal(h.api.model().rows.length,0);});
 
@@ -13,7 +13,44 @@ test('manual same-sheet refresh retains all filters, view, page, selected cell a
 
 test('automatic checks unchanged publication lightly; new publication refreshes same sheet without resetting view or page',async()=>{const h=setup();await h.api.load();h.api.page(2);assert.equal([...h.timers.values()][0].ms,60000);await h.tick();assert.deepEqual(h.calls.at(-1),{action:'ratesSheet'});assert.equal(h.calls.length,3);assert.equal(h.api.snapshot().page,2);h.setHandler(async q=>q.sheetId===undefined?metadata('2026-10-01T02:00:00Z'):grid(q.sheetId,'2026-10-01T02:00:00Z','7%'));await h.tick();assert.deepEqual(h.calls.slice(-2),[{action:'ratesSheet'},{action:'ratesSheet',sheetId:1}]);assert.equal(h.api.snapshot().page,2);assert.match(h.api.render(),/7%/);assert.equal(h.timers.size,1);});
 
-test('hidden, detached, inactive, dirty, editing, focused and selected-content states skip automatic reads',async()=>{const h=setup();await h.api.load();const checks=[()=>h.document.visibilityState='hidden',()=>h.setMounted(false),()=>h.flags.active=false,()=>h.flags.dirty=true,()=>h.flags.editing=true,()=>h.setFocused(true),()=>h.api.cell(1,0),()=>h.api.set('query','Synthetic')];for(const activate of checks){h.document.visibilityState='visible';h.setMounted(true);h.flags.active=true;h.flags.dirty=false;h.flags.editing=false;h.setFocused(false);h.api.cell();await h.api.load();activate();const n=h.calls.length;await h.tick();assert.equal(h.calls.length,n);} });
+test('hidden, detached, inactive, dirty and editable-focus states pause automatic reads',async()=>{const h=setup();await h.api.load();const checks=[()=>h.document.visibilityState='hidden',()=>h.setMounted(false),()=>h.flags.active=false,()=>h.flags.dirty=true,()=>h.flags.editing=true,()=>h.setFocused(true),()=>h.api.set('query','Synthetic')];for(const activate of checks){h.document.visibilityState='visible';h.setMounted(true);h.flags.active=true;h.flags.dirty=false;h.flags.editing=false;h.setFocused(false);h.api.cell();await h.api.load();activate();const n=h.calls.length;await h.tick();assert.equal(h.calls.length,n);} });
+
+test('button focus and readonly cells keep polling; a newer publication safely clears the selected coordinate and preserves view position',async()=>{
+ const h=setup();await h.api.load();h.api.page(2);h.scroller.scrollTop=90;h.scroller.scrollLeft=450;
+ h.setFocused(true,{tagName:'BUTTON'});let n=h.calls.length;await h.tick();assert.equal(h.calls.length,n+1);
+ assert.match(h.api.render(),/60s 自动刷新/);
+ h.api.cell(21,2);h.setFocused(true,{tagName:'TEXTAREA',readOnly:true});n=h.calls.length;
+ await h.tick();assert.equal(h.calls.length,n+1);assert.match(h.api.render(),/原单元格完整内容/);
+ h.setHandler(q=>q.sheetId===undefined?metadata('2026-11-18T07:39:15Z'):grid(1,'2026-11-18T07:39:15Z','7%'));
+ n=h.calls.length;await h.tick();assert.equal(h.calls.length,n+2);
+ assert.match(h.api.render(),/2026-11-18 07:39:15 UTC/);assert.match(h.api.render(),/7%/);
+ assert.doesNotMatch(h.api.render(),/原单元格完整内容|tidy-rate-selected"/);
+ assert.equal(h.api.snapshot().page,2);assert.deepEqual([h.scroller.scrollTop,h.scroller.scrollLeft],[90,450]);
+ h.setFocused(true,{tagName:'TD'});n=h.calls.length;await h.tick();assert.equal(h.calls.length,n+1);
+ h.api.clear();
+});
+
+test('focus status matches actual editable pause and blur resumes without repainting the input or manual refresh',async()=>{
+ const h=setup();await h.api.load();assert.match(h.api.render(),/onfocusin="HensemLiveRatesRestored.focusChanged\(\)"/);
+ for(const field of [{tagName:'INPUT',type:'search'},{tagName:'TEXTAREA'},{tagName:'SELECT'},{tagName:'DIV',isContentEditable:true}]){
+  h.setFocused(true,field);const dom=h.document.getElementById().innerHTML;
+  h.api.focusChanged();await Promise.resolve();assert.equal(h.refreshNode.textContent,'自动刷新暂停');
+  assert.equal(h.document.getElementById().innerHTML,dom);let n=h.calls.length;await h.tick();assert.equal(h.calls.length,n);
+  h.setFocused(false);h.api.focusChanged();await Promise.resolve();assert.equal(h.refreshNode.textContent,'60s 自动刷新');
+  await h.tick();assert.equal(h.calls.length,n+1);
+ }
+ h.api.clear();
+});
+
+test('readonly or button focus arriving during an automatic grid read does not discard the valid newer result',async()=>{
+ for(const field of [{tagName:'BUTTON'},{tagName:'TEXTAREA',readOnly:true},{tagName:'TD'}]){
+  const h=setup();await h.api.load();const pending=deferred();
+  h.setHandler(q=>q.sheetId===undefined?metadata('2026-11-18T07:40:15Z'):pending.promise);
+  await h.tick();h.setFocused(true,field);pending.resolve(grid(1,'2026-11-18T07:40:15Z','8%'));
+  for(let i=0;i<4;i++)await new Promise(r=>setImmediate(r));
+  assert.match(h.api.render(),/8%/);assert.match(h.api.render(),/60s 自动刷新/);h.api.clear();
+ }
+});
 
 test('draft changes or new focus during a poll prevent replacing the displayed grid',async()=>{const h=setup();await h.api.load();const newer=deferred();h.setHandler(q=>q.sheetId===undefined?Promise.resolve(metadata('2026-10-01T03:00:00Z')):newer.promise);await h.tick();assert.equal(h.api.snapshot().loading,true);h.api.set('query','REF-0');newer.resolve(grid(1,'2026-10-01T03:00:00Z','9%'));for(let i=0;i<4;i++)await new Promise(r=>setImmediate(r));assert.equal(h.api.snapshot().query,'REF-0');assert.equal(h.api.snapshot().filterDirty,true);assert.doesNotMatch(h.api.render(),/9%/);assert.doesNotMatch(h.api.render(),/4% \+ 2/);assert.equal(h.api.snapshot().hasGrid,false);});
 
@@ -33,6 +70,17 @@ test('restricted accounts use only server-projected rates, never read original m
 test('scoped searches and server pagination preserve the exact confirmed filters without faking local full-table totals',async()=>{const h=setup({restricted:true});h.setHandler(async q=>scoped(q));await h.api.load();h.api.set('query','ScopedPay');h.api.set('scopeType','platform');h.api.set('country','IN');h.api.set('platform','SyntheticAlpha');await h.api.load();assert.deepEqual(h.calls.at(-1),{action:'rates',scopeType:'platform',country:'IN',platform:'SyntheticAlpha',query:'ScopedPay',offset:0,limit:20});assert.match(h.api.render(),/共 21 条 · 当前 20 条/);await h.api.page(2);assert.deepEqual(h.calls.at(-1),{action:'rates',scopeType:'platform',country:'IN',platform:'SyntheticAlpha',query:'ScopedPay',offset:20,limit:20});assert.match(h.api.render(),/当前 1 条/);assert.equal(h.api.snapshot().page,2);h.api.set('query','ScopedPay-01');const n=h.calls.length;await h.api.page(1);assert.equal(h.calls.length,n);await h.api.load();assert.match(h.api.render(),/共 1 条/);const before=h.api.snapshot();h.api.set('country','PK');h.api.set('platform','FOREIGN');assert.equal(h.api.snapshot().platform,before.platform);assert.equal(h.api.snapshot().filterDirty,false);});
 
 test('scoped automatic refresh keeps the same page/filter request and drops unverified values after same-query failure; changed query never shows old values',async()=>{const h=setup({restricted:true});h.setHandler(async q=>scoped(q));await h.api.load();await h.api.page(2);await h.tick();assert.deepEqual(h.calls.at(-1),{action:'rates',scopeType:'all',offset:20,limit:20});assert.equal(h.api.snapshot().page,2);h.setHandler(async()=>{throw Error('Synthetic scoped timeout')});await h.api.load();assert.match(h.api.render(),/Synthetic scoped timeout/);assert.doesNotMatch(h.api.render(),/ScopedPay-20/);h.api.set('query','DifferentQuery');await h.api.load();assert.equal(h.api.snapshot().hasGrid,false);assert.doesNotMatch(h.api.render(),/ScopedPay-20/);assert.match(h.api.render(),/Synthetic scoped timeout/);assert.doesNotMatch(h.api.render(),/没有符合查询条件的记录/);});
+
+test('restricted rate pages share the corrected focus policy without widening scope or losing pagination',async()=>{
+ const h=setup({restricted:true});h.setHandler(q=>scoped(q));await h.api.load();await h.api.page(2);
+ h.setFocused(true,{tagName:'BUTTON'});let count=h.calls.length;await h.tick();assert.equal(h.calls.length,count+1);
+ assert.deepEqual(h.calls.at(-1),{action:'rates',scopeType:'all',offset:20,limit:20});
+ h.setFocused(true,{tagName:'INPUT',type:'search'});h.api.focusChanged();await Promise.resolve();
+ assert.equal(h.refreshNode.textContent,'自动刷新暂停');count=h.calls.length;await h.tick();assert.equal(h.calls.length,count);
+ h.setFocused(true,{tagName:'TEXTAREA',readOnly:true});h.api.focusChanged();await Promise.resolve();
+ assert.equal(h.refreshNode.textContent,'60s 自动刷新');await h.tick();assert.equal(h.calls.length,count+1);
+ assert.equal(h.api.snapshot().page,2);assert(h.calls.every(q=>q.action==='rates'));h.api.clear();
+});
 
 test('identity/scope changes immediately clear prior original or projected cache and reject in-flight older results',async()=>{const h=setup();await h.api.load();assert.match(h.api.render(),/Synthetic-0/);h.flags.restricted=true;h.flags.identity='Synthetic Actor:PK';assert.doesNotMatch(h.api.render(),/Synthetic-0|Synthetic Sheet/);assert.equal(h.api.snapshot().hasGrid,false);h.setHandler(async q=>scoped(q));await h.api.load();assert(h.calls.at(-1).action==='rates');const wait=deferred();h.setHandler(()=>wait.promise);const loading=h.api.load();h.flags.identity='Another Actor:IN';h.flags.restricted=false;assert.doesNotMatch(h.api.render(),/ScopedPay-/);wait.resolve(scoped({scopeType:'all',offset:0,limit:20}));await loading;assert.equal(h.api.snapshot().hasGrid,false);assert.equal(h.api.snapshot().sourceMode,'original');assert.equal(h.timers.size,0);});
 
