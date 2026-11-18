@@ -130,6 +130,7 @@ function statusLegendColumns(grid: OriginalRateGrid, index: SourceIndex, heading
   const notes: Record<string, string> = {
     '开启': '运行中', '不支持': '盘口不支持接入', '暂时停': '暂时停用', '暂停': '暂时停用',
     '备用': '三方都正常的情况下不开', '未接入': '盘口没有接入这个三方', '维护': '三方维护',
+    '停用': '已经不再使用', '对接中': '技术还在对接中', '维护中': '三方在维护中......',
   };
   for (let column = 0; column + 1 < index.columns; column++) {
     const left = headings[column], right = headings[column + 1];
@@ -137,7 +138,7 @@ function statusLegendColumns(grid: OriginalRateGrid, index: SourceIndex, heading
     const statuses = new Set<string>();
     let legend = true;
     for (let row = left.headerSourceRow + 1; row < index.rows; row++) {
-      const status = clean(tidySourceCell(grid, row, column).text).replace(/\s*(?:🟢|🔴|🟡|⭕|⛔|⚠️?|🛠️?|⚒️?|✅|❌|✔️?|✖️?)\s*$/, '').trim();
+      const status = clean(tidySourceCell(grid, row, column).text).replace(/\s*(?:🟢|🔴|🟡|⭕|⛔|⚠️?|🛠️?|⚒️?|🔄|✅|❌|✔️?|✖️?)\s*$/, '').trim();
       const note = clean(tidySourceCell(grid, row, column + 1).text);
       if (!status && !note) continue;
       // The paired headers and repeated exact definitions identify a legend.
@@ -145,7 +146,12 @@ function statusLegendColumns(grid: OriginalRateGrid, index: SourceIndex, heading
       if (!notes[status] || notes[status] !== note || statuses.has(status)) { legend = false; break; }
       statuses.add(status);
     }
-    if (legend && statuses.size >= 2) { hidden.add(column); hidden.add(column + 1); }
+    // A one-definition side legend needs a completely empty separating column
+    // and an actual provider table on its left; a single business status is kept.
+    const separated = statuses.size === 1 && column > 1 &&
+      headings.slice(0, column - 1).some(heading => providerHeader(heading.parts.at(-1) ?? '')) &&
+      Array.from({ length: index.rows }, (_, row) => row).every(row => !clean(tidySourceCell(grid, row, column - 1).text));
+    if (legend && (statuses.size >= 2 || separated)) { hidden.add(column); hidden.add(column + 1); }
   }
   return hidden;
 }

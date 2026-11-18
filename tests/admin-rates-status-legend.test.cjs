@@ -34,12 +34,28 @@ test('status headers alone, an ordinary business note or additional data never c
  for(const change of [
   g=>{g.cells[0][18].text='业务备注';},
   g=>{g.cells[3][18].text='本三方只暂停代付';},
-  g=>{for(let row=2;row<7;row++){g.cells[row][17].text='';g.cells[row][18].text='';}},
+  g=>{for(let row=2;row<7;row++){g.cells[row][17].text='';g.cells[row][18].text='';}g.cells[0][16].text='业务说明';},
   g=>{g.cells.push(Array.from({length:19},(_,i)=>({text:i===17?'自定义业务状态':i===18?'须保留':''})));g.rowCount++;g.sheet.rowCount++;}
  ]){
   const input=grid();change(input);const model=direct.buildTidyModel(input);
   assert(model.columns.some(c=>c.sourceColumn===17));assert(model.columns.some(c=>c.sourceColumn===18));
  }
+});
+
+test('current production definitions include stopped, onboarding and maintenance while isolated one-definition legends need an empty separator',()=>{
+ const input=grid();
+ const extra=[['停用 ⛔','已经不再使用'],['对接中 🔄','技术还在对接中'],['维护中 🛠️','三方在维护中......']];
+ for(const pair of extra){input.cells.push(Array.from({length:19},(_,i)=>({text:i===17?pair[0]:i===18?pair[1]:''})));input.rowCount++;input.sheet.rowCount++;}
+ let m=direct.buildTidyModel(input);assert(!m.columns.some(c=>c.sourceColumn>=17));assert.deepEqual(m.rows,[1,2]);
+ const short=grid();for(let row=2;row<7;row++){short.cells[row][17].text='';short.cells[row][18].text='';}
+ m=direct.buildTidyModel(short);assert(!m.columns.some(c=>c.sourceColumn>=17));
+ assert(m.platformColumns.includes(15));assert.equal(short.cells[1][15].text,'开启');
+ for(const change of [
+  g=>{g.cells[3][16].text='业务数据';},
+  g=>{g.cells[0][0].text='说明';},
+  g=>{g.cells[1][18].text='该三方已经开启';},
+  g=>{g.merges=[{startRowIndex:0,endRowIndex:1,startColumnIndex:15,endColumnIndex:17}];}
+ ]){const g=structuredClone(short);change(g);const kept=direct.buildTidyModel(g);assert(kept.columns.some(c=>c.sourceColumn===17));assert(kept.columns.some(c=>c.sourceColumn===18));}
 });
 
 test('country tabs, both display modes, search and the rendered export table share the legend-free business rows',async()=>{
