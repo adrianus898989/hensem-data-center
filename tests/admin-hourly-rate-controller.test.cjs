@@ -283,8 +283,8 @@ function liveAmountDay({offsetDays=0,natives=1,explicitSuccess=false}={}){
  return {...h,reply};
 }
 
-test('open India day displays one internally reconciled newer read in both amount tabs and both directions',async()=>{
- const h=liveAmountDay({natives:2}),action=h.win.HensemHourlyMatrixActions;
+for(const offsetDays of [0,-1,-7])test((offsetDays===0?'open':'closed '+Math.abs(offsetDays)+' days ago')+' India day displays one internally reconciled newer read in both amount tabs and both directions',async()=>{
+ const h=liveAmountDay({natives:2,offsetDays}),action=h.win.HensemHourlyMatrixActions;
  const before=h.L.results[0].summary;
  const run=action.load();assert.equal(h.calls.length,2);
  h.calls[0].resolve(h.reply(h.calls[0]));await wait();
@@ -320,12 +320,14 @@ test('open India day displays one internally reconciled newer read in both amoun
 });
 
 for(const [why,options,invalidate] of [
- ['closed Indian day',{offsetDays:-1},()=>{}],
+ ['future Indian day',{offsetDays:1},()=>{}],
  ['explicit success window',{explicitSuccess:true},()=>{}],
  ['mismatched provider totals',{},r=>{r.groups.provider[0].provider='another';}],
  ['mismatched amount-bucket totals',{},r=>{r.groups.amount_range[0].bucket='band:2';}],
  ['mismatched daily total',{},r=>{r.total++;}],
  ['incomplete response',{},r=>{r.complete=false;}],
+ ['unconfirmed closed-day coverage',{offsetDays:-1},r=>{r.coverage={complete:false};}],
+ ['partial closed-day calculation',{offsetDays:-1},r=>{r.coverage={complete:false,calculationComplete:false};}],
  ['mismatched native scope',{},r=>{r.platform.id='another';}],
  ['mismatched date',{},r=>{r.startAt=indiaDayWindow(-1).startAt;}],
  ['mismatched band profile',{},r=>{r.amountBands={...r.amountBands,charge:amountEdges.map(x=>x+1)};}]
@@ -340,6 +342,42 @@ for(const [why,options,invalidate] of [
   assert.match(html,/重试未完成商户/);assert.equal(h.calls.length,1);h.app.cancel();
  });
 }
+
+test('a closed-day provider reclassification updates both matrices while retaining the independently read main summary',async()=>{
+ const h=liveAmountDay({offsetDays:-1}),main=h.L.results[0],before=structuredClone(main);
+ main.groups.provider[0].provider='Unidentified';
+ const run=h.win.HensemHourlyMatrixActions.load(),call=h.calls[0];
+ const response={...h.reply(call),...amountSnapshot([3,4],[2,10]),asOf:new Date().toISOString(),
+  coverage:{complete:false,calculationComplete:true,sourceComplete:false}};
+ main.coverage={complete:false,calculationComplete:true,sourceComplete:false};
+ response.groups.provider[0].provider='Reclassified';
+ response.groups.provider_amount_range[0].provider='Reclassified';
+ call.resolve(response);await run;
+ for(const kind of ['provider','merchant']){
+  h.L.view='amount-'+kind;const html=h.app.html();
+  assert.doesNotMatch(html,/重试未完成商户|当日分档/);assert.match(html,/最近读取/);
+  const rows=h.rendered('charge')[kind];
+  assert.equal(rows.ready.size,1);assert.equal(rows.partial,false);
+  if(kind==='provider')assert.equal(rows.rows[0].name,'Reclassified');
+  assert.equal(rows.rows[0].total.successCount,3);assert.equal(rows.rows[0].total.totalCount,4);
+ }
+ assert.deepEqual(main.summary,before.summary);assert.equal(main.groups.provider[0].provider,'Unidentified');
+ assert.equal(h.calls.length,1);h.app.cancel();
+});
+
+test('a replacement prepared head discards a late closed-day matrix before another read can publish it',async()=>{
+ const h=liveAmountDay({offsetDays:-1}),main=h.L.results[0];
+ main._preparedPublication={id:'head-before',generation:1};
+ const old=h.win.HensemHourlyMatrixActions.load(),first=h.calls[0];
+ main._preparedPublication={id:'head-after',generation:2};h.L.loading=true;h.app.html();
+ assert(first.o.signal.aborted);
+ first.resolve(h.reply(first));await old;h.app.html();
+ assert.equal(h.rendered('charge').provider.ready.size,0);assert.equal(h.calls.length,1);
+ h.L.loading=false;const current=h.win.HensemHourlyMatrixActions.load(),latest=h.calls[1];
+ latest.resolve(h.reply(latest));await current;h.app.html();
+ assert.equal(h.rendered('charge').provider.ready.size,1);assert.equal(h.calls.length,2);
+ h.app.cancel();
+});
 
 test('permission denial clears verified current-day amount rows and ignores later responses',async()=>{
  const h=liveAmountDay({natives:3}),run=h.win.HensemHourlyMatrixActions.load();

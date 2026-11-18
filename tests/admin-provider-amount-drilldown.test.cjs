@@ -83,6 +83,32 @@ test('matrix rejects conflicting dimensions, missing boundaries, denied scopes a
   assert.deepEqual(empty.summary,[]); assert.deepEqual(empty.groups.provider_amount_range,[]);
 });
 
+test('closed creation dates accept a self-consistent native reread after status and provider updates', async () => {
+  const runtime = {};
+  vm.runInNewContext(read('admin-preview/live-hourly-rate-windows.js'), runtime);
+  const verify = runtime.HensemHourlyRateWindows.verifyAmount;
+  const q = request({...marker,successBasis:'created'});
+  await db.exec('begin');
+  try {
+    const main = await drill(q);
+    assert(Date.parse(main.endAt) < Date.now());
+    await db.exec("update newar_detail_records set status_group='success',status_code='success',success_at='2026-09-20T06:00Z',provider='LaterPay' where source_id='second'");
+    const latest = await drill(q);
+    assert.equal(latest.total,main.total);
+    const count = (data,key) => data.summary.reduce((n,row)=>n+Number(row[key]),0);
+    assert.equal(count(latest,'all_count'),count(main,'all_count'));
+    assert.equal(count(latest,'success_count'),count(main,'success_count')+1);
+    assert(latest.groups.provider.some(row=>row.provider==='LaterPay'));
+    const confirmed = verify(q,main,latest,{platform:latest.platform,readAt:Date.now()});
+    assert.equal(confirmed._matrixReadAt,Date.parse(latest.asOf));
+    assert.deepEqual(confirmed.summary,latest.summary);
+    assert.notDeepEqual(confirmed.groups.provider,main.groups.provider);
+    const broken = structuredClone(latest);
+    broken.groups.provider_amount_range[0].all_count++;
+    assert.throws(()=>verify(q,main,broken,{platform:latest.platform,readAt:Date.now()}),/未对齐/);
+  } finally { await db.exec('rollback'); }
+});
+
 test('amount reader scans once for the created cohort, preserves the hourly result and rolls back exactly', async () => {
   const q = request({...marker,successBasis:'created'});
   await db.exec('begin');

@@ -170,7 +170,7 @@
    if(isAmount()&&times.length){
     const zones=new Set(platforms.map(p=>p.timezone)),zone=zones.size===1?platforms[0].timezone:'UTC';
     const stamp=new Intl.DateTimeFormat('zh-CN',{timeZone:zone,hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(Math.max(...times));
-    freshness='当日分档按商户分别读取，最近读取 '+E(stamp)+'（'+E(zone)+'）；上方汇总使用主表查询时的数据。';
+    freshness='分档按商户分别读取，最近读取 '+E(stamp)+'（'+E(zone)+'）；上方汇总使用主表查询时的数据。';
    }
    return '<div data-hourly-rate-region><p class="analysis-note">沿用页顶查询范围，'+(isAmount()?'按'+E(L.currency)+'金额档分组':'按各商户当地时间分组')+'；总成功率按总笔数加权。'+freshness+'</p>'+(status?'<div class="analysis-status" role="status">'+status+detail+'</div>':'')+tables+'</div>';
   }
