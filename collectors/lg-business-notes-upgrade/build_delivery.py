@@ -18,7 +18,7 @@ def replace_once(source, old, new):
     return source.replace(old, new, 1)
 
 
-def build(source):
+def build(source, with_refresh=False):
     if hashlib.sha256(source.encode('utf-8')).hexdigest() != BASELINE_SHA256:
         raise ValueError('LG_BUILD_BASELINE_HASH_MISMATCH')
     tree = ast.parse(source)
@@ -51,6 +51,45 @@ def build(source):
     source = replace_once(source,
         "VERSION = 'LG_RT_R8_1_20261003_PY39_COMPAT'",
         "VERSION = 'LG_RT_R8_2_20261012_BUSINESS_NOTES_PY39'")
+    if with_refresh:
+        source = replace_once(source,
+            '    result = lgd_parse_time(value,lgd_UTC)\n',
+            "    # Python 3.9 accepts fractional seconds only at 3 or 6 digits.\n"
+            "    # The strict UTC format check above has already accepted 1-6.\n"
+            "    value = re.sub(r'\\.(\\d{1,6})(?=Z|\\+00:00$)', lambda m: '.' + m.group(1).ljust(6, '0'), value)\n"
+            '    result = lgd_parse_time(value,lgd_UTC)\n')
+        helpers = Path(__file__).with_name('refresh.py.part').read_text(encoding='utf-8')
+        source = replace_once(source, 'def main(argv=None):\n', helpers.rstrip() + '\n\n\ndef main(argv=None):\n')
+        source = replace_once(source,
+            "choices=['realtime','backfill','check','hourly','daily']",
+            "choices=['realtime','backfill','refresh','check','hourly','daily']")
+        source = replace_once(source,
+            "    if args.then_realtime and args.mode != 'backfill':\n",
+            "    if args.mode == 'refresh' and (not args.start or not args.end):\n"
+            "        parser.error('refresh需要 --start YYYY-MM-DD --end YYYY-MM-DD')\n"
+            "    if args.then_realtime and args.mode != 'backfill':\n")
+        source = replace_once(source,
+            "    args.kinds = lgd_KINDS if args.third_biz == 'both' else (args.third_biz,)\n",
+            "    if args.mode == 'refresh' and any(date.fromisoformat(args.end) >= lgd_utc_now().astimezone(ZoneInfo(lgd_COUNTRY_ZONES[p['country_code']])).date() for p in platforms):\n"
+            "        parser.error('refresh仅补完整历史日；结束日期需早于所有所选平台的当地今天')\n"
+            "    args.kinds = lgd_KINDS if args.third_biz == 'both' else (args.third_biz,)\n")
+        source = replace_once(source,
+            "    if args.dry_run:\n        print(VERSION)\n",
+            "    if args.dry_run and args.mode == 'refresh':\n"
+            "        print(VERSION)\n"
+            "        print(f'独立补采完整历史日 {args.start} 至 {args.end}；单线程，live上传；今天由现有实时进程推进。')\n"
+            "        print('独立refresh状态与锁；已确认任务跳过，未确认脱敏缓存原样重传；不操作实时游标/租约/零点任务。')\n"
+            "        print('仅打印计划；未登录、未抓取、未上传、未写状态。')\n"
+            "        return 0\n"
+            "    if args.dry_run:\n        print(VERSION)\n")
+        source = replace_once(source,
+            "        root = Path(args.state_dir)\n        with contextlib.ExitStack() as stack:\n",
+            "        if args.mode == 'refresh':\n"
+            "            return run_refresh(config, args)\n"
+            "        root = Path(args.state_dir)\n        with contextlib.ExitStack() as stack:\n")
+        source = replace_once(source,
+            "VERSION = 'LG_RT_R8_2_20261012_BUSINESS_NOTES_PY39'",
+            "VERSION = 'LG_RT_R8_3_20261012_REFRESH_CANDIDATE_PY39'")
     ast.parse(source, feature_version=(3, 9))
     return source
 
@@ -59,10 +98,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--with-refresh', action='store_true', help='Build the isolated refresh candidate')
     args = parser.parse_args()
     if args.source.resolve() == args.output.resolve():
         parser.error('Source and output must be different files')
-    result = build(args.source.read_text(encoding='utf-8'))
+    result = build(args.source.read_text(encoding='utf-8'), with_refresh=args.with_refresh)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(result, encoding='utf-8')
     args.output.chmod(0o600)
