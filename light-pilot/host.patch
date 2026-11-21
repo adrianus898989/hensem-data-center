@@ -1,0 +1,66 @@
+--- a/src/components/OfficialDashboard.tsx
++++ b/src/components/OfficialDashboard.tsx
+@@ -3,6 +3,7 @@
+ import { useEffect, useRef, useState } from "react";
+ import { useDashboardAuth } from "./DashboardAuthGate";
+ import OwnerAdminPreview from "./OwnerAdminPreview";
++import LightPilotGate from "@/lib/lightPilot/LightPilotGate";
+ import { adminPreviewPageFromHash } from "@/lib/adminLiveBridge";
+ import { canOpenAdminCenter, dashboardViewSession, normalizedManagementPermissions } from "@/lib/dashboardAuthClient";
+ import { OWNER_PREVIEW_HOST_CSS, mountOwnerPreviewHostShell } from "@/lib/ownerPreviewShell";
+@@ -58,7 +59,10 @@
+   }, [allowed, accountId, canManage]);
+
+   if (allowed && route?.accountId === accountId && session && profile) {
+-    return <OwnerAdminPreview key={boundary.current.version + ":" + route.page + ":" + route.revision} session={session} profile={profile} canView={allowed} onLogout={logout} />;
++    return <LightPilotGate key={boundary.current.version + ":" + route.page + ":" + route.revision}
++      profile={profile} sessionId={session.user.id}>
++      {presentation => <OwnerAdminPreview session={session} profile={profile} canView={allowed} onLogout={logout} presentation={presentation} />}
++    </LightPilotGate>;
+   }
+   return <section className="owner-preview-shell" aria-label="数据中控后台">
+     <style>{OWNER_PREVIEW_HOST_CSS}</style>
+--- a/src/components/OwnerAdminPreview.tsx
++++ b/src/components/OwnerAdminPreview.tsx
+@@ -19,11 +19,13 @@
+ import { dashboardScopeIdentity, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
+ import { installDashboardReleaseCheck } from "@/lib/dashboardRelease";
+
+-type Props = { canView:boolean; session: DashboardSession; profile: DashboardProfile; onLogout: () => void };
++import type { PilotPresentation } from "@/lib/lightPilot/presentation";
++
++type Props = { presentation: PilotPresentation; canView:boolean; session: DashboardSession; profile: DashboardProfile; onLogout: () => void };
+ type AccountView = "accounts" | "workorder" | "roles";
+ type AccountBounds = {top:number;left:number;width:number};
+ type AccountWorkspace = {identity:string;bounds:AccountBounds;visited:AccountView[];versions:Record<AccountView,number>};
+-export default function OwnerAdminPreview({session,profile,onLogout,canView}: Props) {
++export default function OwnerAdminPreview({session,profile,onLogout,canView,presentation}: Props) {
+   const frame=useRef<HTMLIFrameElement>(null),channel=useRef("");
+   const sessionRef=useRef(session);sessionRef.current=session;
+   const accountId=profile.auth_user_id;
+@@ -142,7 +144,7 @@
+         retrying=false;suspendedRef.current=false;setSuspended(false);roleAccessRef.current=result.policy;retainedViewPolicy.current=result.policy;setRoleAccess(result.policy);setVerificationStatus("");setError("");
+         publishedPolicy=JSON.stringify(result.policy);
+         if(result.html!==null)publishedSource=result.html;
+-        if(html!==null){published=true;setDocumentHtml(html)}
++        if(html!==null){published=true;setDocumentHtml(presentation.frame(html))}
+       } catch(e) {if(!obsolete(mine)){
+         if(staleAuthority()){retrying=false;void request(check);return;}
+         if(ownerPreviewRetryable(e)){suspendPreview();retrying=false;setVerificationStatus("");setError(published?"连接暂时不可用，页面状态已保留，正在等待重新验证。":"后台验证连接暂时不可用，恢复连接后会自动重试。")}else fail(e);
+@@ -164,7 +166,7 @@
+     window.addEventListener("online",verify);
+     const focused=()=>{if(document.visibilityState==="visible")verify()};document.addEventListener("visibilitychange",focused);
+     return()=>{cancelled=true;accessDeniedRef.current=null;reconnectRef.current=null;stopBridges();controller.abort();window.clearInterval(timer);window.removeEventListener("online",verify);document.removeEventListener("visibilitychange",focused)};
+-  },[allowed,accountId,reload,readDrafts,owner,scopeIdentity]);
++  },[allowed,accountId,reload,readDrafts,owner,scopeIdentity,presentation]);
+   useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{if(suspendedRef.current||!roleAccessRef.current)return;const data=event.data;const activity=ownerPreviewActivityTime(event,frame.current?.contentWindow,channel.current);if(activity!==null){recordDashboardActivity(activity);return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){visitAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);if(accountPage.active)rememberAccountPage(accountPage.bounds);return}const securityPage=ownerPreviewSecurityPage(event,frame.current?.contentWindow,channel.current);if(securityPage){setSecurityBounds(securityPage.active?securityPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,canManageAccounts,owner]);
+   const hasDocument=Boolean(documentHtml);
+   // Restore the visible directory when a verified frame retains its geometry.
+@@ -182,6 +184,7 @@
+   useEffect(()=>{if(!allowed||!hasDocument||suspended)return;const stop=installDashboardPresenceBridge({source:()=>frame.current?.contentWindow,channel:()=>channel.current,accountId:()=>sessionRef.current.user.id,canViewAccounts:()=>!!roleAccessRef.current&&(roleAccessRef.current.mode!=="assigned"||dashboardRoleAllows(roleAccessRef.current,"access"))});presenceStopRef.current=stop;return()=>{if(presenceStopRef.current===stop)presenceStopRef.current=null;stop()}},[allowed,documentHtml,accountId,suspended]);
+   return <section className="owner-preview-shell" aria-label="数据中控后台">
+     <style>{OWNER_PREVIEW_HOST_CSS}</style>
++    {allowed&&hasDocument&&!suspended&&<style>{presentation.hostCss}</style>}
+     {allowed&&hasDocument&&!suspended&&releaseAvailable&&<div role="status" style={{position:"fixed",right:16,bottom:16,zIndex:10000,display:"flex",gap:12,alignItems:"center",padding:"10px 14px",border:"1px solid #cbd7ff",borderRadius:8,background:"#fff",boxShadow:"0 4px 18px #182d4c20",color:"#24365c",fontSize:13}}>
+       <span>页面已更新</span><button type="button" className="owner-preview-shell-return" onClick={()=>window.location.reload()}>重新加载</button>
+     </div>}

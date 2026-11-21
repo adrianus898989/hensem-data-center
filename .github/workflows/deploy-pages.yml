@@ -54,7 +54,11 @@ jobs:
       - run: pnpm test:withdraw-duration
       - run: pnpm test:detail-page-coverage
       - run: pnpm test:lg-business-notes
-      - run: pnpm build
+      - name: Build the dashboard and its isolated account pilot
+        run: |
+          node --test light-pilot/*.test.cjs
+          pnpm build
+          node light-pilot/build.mjs
         env:
           PAGES_BASE_PATH: /hensem-data-center
           NEXT_PUBLIC_SUPABASE_URL: https://gmfyfzsxpxmaqtuuwgxb.supabase.co
