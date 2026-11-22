@@ -1,4 +1,4 @@
-// Inject both strings only into an authorized pilot report document.
+// Inject both strings only into an authorized dashboard document.
 export const LIGHT_PILOT_REPORT_STYLES = `
 html[data-m8-report-pilot] {
   --rp-ink: #30354a;

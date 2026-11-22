@@ -4,6 +4,7 @@ import { dashboardBootstrapReadUrl, normalizedManagementPermissions, type Dashbo
 import { makeOwnerPreviewDocument, OWNER_PREVIEW_DRAFT_KEYS, ownerPreviewDraftAllowed } from "@/lib/ownerPreviewDocument";
 
 import { restoreApprovedAdmin } from "@/lib/adminPreviewRestore";
+import { presentation } from "@/lib/dashboardLight/presentation";
 import { ownerPreviewVerificationDiagnostic, type OwnerPreviewVerificationStage, ownerPreviewRetryable, ownerPreviewTransportRead, ownerPreviewVerificationAttempt, retryOwnerPreviewVerification } from "@/lib/ownerPreviewVerification";
 import { adminPreviewRequest } from "@/lib/adminPreviewClient";
 import AdminControlCenter from "./AdminControlCenter";
@@ -137,7 +138,8 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
           clearPreview();
           channel.current=crypto.randomUUID();
         }
-        const html=result.html===null||unchanged?null:makeOwnerPreviewDocument(makeOwnerPreviewShellDocument(makeDashboardPresenceDocument(makeAdminLiveDocument(restoreApprovedAdmin(result.html),channel.current,result.policy,{mode:dataScope.mode,identity:scopeIdentity}),channel.current,window.location.origin),channel.current,owner),readDrafts(),channel.current);
+        const verifiedFrame=result.html===null||unchanged?null:makeOwnerPreviewDocument(makeOwnerPreviewShellDocument(makeDashboardPresenceDocument(makeAdminLiveDocument(restoreApprovedAdmin(result.html),channel.current,result.policy,{mode:dataScope.mode,identity:scopeIdentity}),channel.current,window.location.origin),channel.current,owner),readDrafts(),channel.current);
+        const html=verifiedFrame===null?null:presentation.frame(verifiedFrame);
         if(obsolete(mine))return;if(staleAuthority())throw abandon();
         retrying=false;suspendedRef.current=false;setSuspended(false);roleAccessRef.current=result.policy;retainedViewPolicy.current=result.policy;setRoleAccess(result.policy);setVerificationStatus("");setError("");
         publishedPolicy=JSON.stringify(result.policy);
@@ -182,6 +184,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   useEffect(()=>{if(!allowed||!hasDocument||suspended)return;const stop=installDashboardPresenceBridge({source:()=>frame.current?.contentWindow,channel:()=>channel.current,accountId:()=>sessionRef.current.user.id,canViewAccounts:()=>!!roleAccessRef.current&&(roleAccessRef.current.mode!=="assigned"||dashboardRoleAllows(roleAccessRef.current,"access"))});presenceStopRef.current=stop;return()=>{if(presenceStopRef.current===stop)presenceStopRef.current=null;stop()}},[allowed,documentHtml,accountId,suspended]);
   return <section className="owner-preview-shell" aria-label="数据中控后台">
     <style>{OWNER_PREVIEW_HOST_CSS}</style>
+    {allowed&&hasDocument&&!suspended&&<style>{presentation.hostCss}</style>}
     {allowed&&hasDocument&&!suspended&&releaseAvailable&&<div role="status" style={{position:"fixed",right:16,bottom:16,zIndex:10000,display:"flex",gap:12,alignItems:"center",padding:"10px 14px",border:"1px solid #cbd7ff",borderRadius:8,background:"#fff",boxShadow:"0 4px 18px #182d4c20",color:"#24365c",fontSize:13}}>
       <span>页面已更新</span><button type="button" className="owner-preview-shell-return" onClick={()=>window.location.reload()}>重新加载</button>
     </div>}

@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M8 数据中控台</title>
+  <script>
+    const target = new URL(location.href);
+    target.pathname = target.pathname.replace(/\/light-pilot(?:\/(?:index\.html)?)?$/, "/");
+    if (target.href !== location.href) location.replace(target.href);
+  </script>
+</head>
+<body><a href="/hensem-data-center/">进入 M8 数据中控台</a></body>
+</html>

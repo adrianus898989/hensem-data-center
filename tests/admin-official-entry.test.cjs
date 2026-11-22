@@ -4,6 +4,7 @@ const repo=path.resolve(__dirname,'..');
 const compile=file=>ts.transpileModule(fs.readFileSync(path.join(repo,file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
 const bridge={exports:{}};vm.runInNewContext(compile('src/lib/adminLiveBridge.ts'),{module:bridge,exports:bridge.exports,require:()=>({})});
 const source=compile('src/components/OfficialDashboard.tsx');
+const appearance=require('./load-typescript.cjs').loadTs(path.join(repo,'src/lib/dashboardLight/presentation.ts'));
 const scopeModule={exports:{}}, authModule={exports:{}};
 const displayModule={exports:{}};
 vm.runInNewContext(compile('src/lib/platformDisplayCountry.ts'),{module:displayModule,exports:displayModule.exports});
@@ -98,7 +99,7 @@ test('old module links and hash changes redirect to safe formal pages without le
 // but no HTML may mount until both role and protected-document checks succeed.
 function previewHarness(options={}){
  let slots=[],cursor=0,pending=[],dirty=true,tree,disposed=false,seq=0;const timers=new Map(),intervals=new Map(),warnings=[],calls=[],bridgeStops=[];
- let props={canView:true,session:{user:{id:'account-a'},access_token:'synthetic'},profile:{active:true,role:'viewer',auth_user_id:'account-a'},onLogout(){}};
+ let props={canView:true,session:{user:{id:'account-a'},access_token:'synthetic'},profile:{active:true,role:options.profileRole||'viewer',auth_user_id:'account-a'},onLogout(){}};
  const react={useRef(value){const i=cursor++;return slots[i]||(slots[i]={current:value})},useState(value){const i=cursor++;if(!slots[i])slots[i]={value};return[slots[i].value,next=>{const value=typeof next==='function'?next(slots[i].value):next;if(!Object.is(value,slots[i].value)){slots[i].value=value;dirty=true}}]},useCallback(fn,deps){const i=cursor++,old=slots[i];if(!old||deps.some((v,j)=>!Object.is(v,old.deps[j])))slots[i]={deps,fn};return slots[i].fn},useEffect(fn,deps){const i=cursor++,old=slots[i];if(!old||deps.some((v,j)=>!Object.is(v,old.deps[j]))){slots[i]={deps,cleanup:old?.cleanup};pending.push(()=>{slots[i].cleanup?.();slots[i].cleanup=fn()})}}};
  const timer=(fn,ms)=>{timers.set(++seq,{fn,ms});return seq};
  const verification={exports:{}};vm.runInNewContext(compile('src/lib/ownerPreviewVerification.ts'),{module:verification,exports:verification.exports,AbortController,Error,setTimeout:timer,clearTimeout:id=>timers.delete(id)});
@@ -106,6 +107,7 @@ function previewHarness(options={}){
  const box={exports:{}};vm.runInNewContext(compile('src/components/OwnerAdminPreview.tsx'),{module:box,exports:box.exports,AbortController,Error,Date,crypto:{randomUUID:()=>String(++seq)},localStorage:{getItem:()=>null,setItem(){},removeItem(){}},process:{env:{}},console:{warn:(...args)=>warnings.push(args)},window:{location:{origin:'https://fixture.invalid'},setInterval(fn,ms){intervals.set(++seq,{fn,ms});return seq},clearInterval:id=>intervals.delete(id),addEventListener(){},removeEventListener(){}},document:{visibilityState:'visible',addEventListener(){},removeEventListener(){}},require(name){
   if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props,key)=>({type,props,key}),jsxs:(type,props,key)=>({type,props,key})};
   if(name.endsWith('/dashboardAuthClient'))return{normalizedManagementPermissions:()=>({}),dashboardBootstrapReadUrl:kind=>options.bootstrap?'/api/dashboard-'+kind:null};
+  if(name==='@/lib/dashboardLight/presentation')return appearance;
   if(name.endsWith('/ownerPreviewVerification'))return verification.exports;
   if(name.endsWith('/ownerPreviewDocument'))return{makeOwnerPreviewDocument:identity,OWNER_PREVIEW_DRAFT_KEYS:[],ownerPreviewDraftAllowed:()=>false};
   if(name.endsWith('/adminPreviewRestore'))return{restoreApprovedAdmin:identity};
@@ -131,13 +133,43 @@ test('real preview mounts no HTML until both role and protected document have pa
  const role=deferred(),body=deferred(),h=previewHarness({role:()=>role.promise,preview:async()=>({text:()=>body.promise})});
  try{await flush();assert.equal(h.frame(),undefined);assert.equal(h.calls.length,1);role.resolve({canView:true,mode:'all'});await flush();assert.equal(h.frame(),undefined);assert.deepEqual(h.calls.map(c=>c.stage),['role','preview-request']);body.resolve('<html>authorized</html>');await flush();assert.equal(h.frame().props.srcDoc,'<html>authorized</html>');assert.equal(h.calls.length,2);assert.equal(h.warnings.length,0);}finally{h.dispose()}
 });
+const hasLightHostStyle = h => nodes(h.render()).some(n => n.type === 'style' && n.props.children === appearance.presentation.hostCss);
+
+test('all authorized account roles see the light presentation on the ordinary entry after authorization',async()=>{
+ const html='<html><body><main>授权报表</main></body></html>';
+ const expected=appearance.presentation.frame(html);
+ assert.notEqual(expected,html,'the production presentation actually decorates a complete document');
+ assert.match(expected,/<style\b/);
+ assert.match(expected,/<script\b/);
+ assert.ok(appearance.presentation.hostCss.trim());
+ for(const [profileRole,mode] of [['owner','owner'],['admin','legacy'],['viewer','assigned']]){
+  const ordinary=harness({role:profileRole,hash:'#admin/auto_withdraw'});
+  const body=deferred();
+  const h=previewHarness({profileRole,role:async()=>({canView:true,mode,roleId:mode==='assigned'?'fixture-role':null,roleName:null,version:1,permissions:mode==='assigned'?['auto_withdraw.view']:[]}),preview:async()=>({text:()=>body.promise})});
+  try{
+   assert.ok(ordinary.frame());
+   assert.equal(ordinary.location.pathname,'/app/');
+   assert.equal(ordinary.location.hash,'#admin/auto_withdraw');
+   await flush();
+   assert.equal(h.frame(),undefined);
+   assert.equal(hasLightHostStyle(h),false);
+   body.resolve(html);
+   await flush();
+   assert.deepEqual(h.calls.map(call=>call.stage),['role','preview-request']);
+   assert.equal(h.frame().props.srcDoc,expected);
+   assert.equal(h.frame().props.sandbox,'allow-scripts allow-downloads');
+   assert.ok(hasLightHostStyle(h));
+  } finally {body.resolve(html);h.dispose();ordinary.dispose();}
+ }
+});
+
 test('real preview rejects role denial, protected-document denial and malformed periodic access responses',async()=>{
- for(const stage of ['role','preview']){const h=previewHarness(stage==='role'?{role:async()=>({canView:false})}:{preview:async()=>{throw Object.assign(Error('secret response not for log'),{status:403,code:'preview_denied'})}});try{await flush();assert.equal(h.frame(),undefined);assert.equal(h.timers.size,0);h.tick();await flush();assert.equal(h.calls.length,stage==='role'?1:2);assert.doesNotMatch(JSON.stringify(h.warnings),/secret/);}finally{h.dispose()}}
+ for(const stage of ['role','preview']){const h=previewHarness(stage==='role'?{role:async()=>({canView:false})}:{preview:async()=>{throw Object.assign(Error('secret response not for log'),{status:403,code:'preview_denied'})}});try{await flush();assert.equal(h.frame(),undefined);assert.equal(h.timers.size,0);h.tick();await flush();assert.equal(h.calls.length,stage==='role'?1:2);assert.equal(hasLightHostStyle(h),false);assert.doesNotMatch(JSON.stringify(h.warnings),/secret/);}finally{h.dispose()}}
  const h=previewHarness({preview:async(_s,q)=>q?{json:async()=>({ok:true,canView:false,canManage:false})}:{text:async()=>'<html>ok</html>'}});try{await flush();assert(h.frame());h.tick();await flush();assert.equal(h.frame(),undefined);assert.equal(h.timers.size,0)}finally{h.dispose()}
 });
 test('periodic transport failure still hides the frame and stops bridges until full verified recovery',async()=>{
  let failure=false;const h=previewHarness({preview:async(_s,q)=>{if(failure)throw Object.assign(Error('hidden response'),{status:503});return{text:async()=>'<html>same</html>',json:async()=>({ok:true,canView:true,canManage:false})}}});
- try{await flush();const original=h.frame();assert(original);failure=true;h.tick();await flush();assert.equal(h.frame().props['aria-hidden'],true);assert.equal(h.frame().props.style.display,'none');assert(h.bridgeStops.length>=2);const diagnostic=warningDiagnostic(h.warnings[0]);assert.equal(diagnostic.stage,'preview-request');assert.equal(diagnostic.code,'http_503');failure=false;h.fire(500);await flush();assert.equal(h.frame().props['aria-hidden'],undefined);assert.equal(h.frame().key,original.key);assert.equal(h.calls.at(-1).q,'','recovery reads protected HTML, not only quick access');}finally{h.dispose()}
+ try{await flush();const original=h.frame();assert(original);failure=true;h.tick();await flush();assert.equal(h.frame().props['aria-hidden'],true);assert.equal(h.frame().props.style.display,'none');assert.equal(hasLightHostStyle(h),false);assert(h.bridgeStops.length>=2);const diagnostic=warningDiagnostic(h.warnings[0]);assert.equal(diagnostic.stage,'preview-request');assert.equal(diagnostic.code,'http_503');failure=false;h.fire(500);await flush();assert.equal(h.frame().props['aria-hidden'],undefined);assert.equal(h.frame().key,original.key);assert.equal(h.calls.at(-1).q,'','recovery reads protected HTML, not only quick access');}finally{h.dispose()}
 });
 test('body deadline diagnoses its phase and cancellation ignores late private HTML',async()=>{
  for(const bootstrap of [false,true]){

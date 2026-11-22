@@ -6,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 function payload(file, constant) {
-  const source = fs.readFileSync(path.join(__dirname, 'src', file),'utf8').replace(/export const /g,'const ');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'dashboardLight', file),'utf8').replace(/export const /g,'const ');
   return vm.runInNewContext(source+'\n'+constant);
 }
 const controls = payload('lightPilotControls.ts','LIGHT_PILOT_CONTROLS');
