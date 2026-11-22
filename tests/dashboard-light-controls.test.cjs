@@ -86,14 +86,14 @@ test('original presets stay inline and usable while the native date picker is cl
 test('withdrawal presets and the optional success range retain form ownership on every mount',()=>{
   const f=fixture(false);
   const toolbar=f.elem('withdraw toolbar'),form=f.elem('form'),windows=f.elem('windows');
-  const presets='.withdraw-toolbar > .withdraw-shortcuts';
+  const commands=f.elem('command row'),presets='.withdraw-command-row .withdraw-shortcuts';
   const pair='.withdraw-toolbar form .live-metric-window';
   const group=f.elem('withdraw presets',{selectors:[presets]});
   const range=f.elem('withdraw success range',{selectors:[pair]});
   const from=f.elem('input',{name:'successFrom',value:''}),to=f.elem('input',{name:'successTo',value:''});
   const today=f.elem('today'),yesterday=f.elem('yesterday');
-  f.results.append(toolbar);toolbar.append(form,group);group.append(today,yesterday);
-  form.append(windows);windows.append(range);range.append(from,to);
+  f.results.append(toolbar);toolbar.append(form);form.append(windows,commands);commands.append(group);group.append(today,yesterday);
+  windows.append(range);range.append(from,to);
   f.results.rows[presets]=toolbar.rows[presets]=[group];
   f.results.rows[pair]=toolbar.rows[pair]=[range];
   range.rows['input,select,textarea,button']=[from,to];
@@ -102,7 +102,8 @@ test('withdrawal presets and the optional success range retain form ownership on
     to.value=value;
     f.notify([{type:'childList',target:f.results,addedNodes:[toolbar]}]);
     assert.equal(range.parentNode,windows);
-    assert.deepEqual(toolbar.children,[form,group]);
+    assert.deepEqual(form.children,[windows,commands]);
+    assert.equal(group.parentNode,commands);
     assert.deepEqual(group.children,[today,yesterday]);
     assert.deepEqual(range.children,[from,to]);
     assert.equal(to.value,value);

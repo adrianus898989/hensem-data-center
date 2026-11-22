@@ -14,6 +14,15 @@ function fixture(rows,options={}){
  if(options.daily)page.state.daily=true;
  return{page,root,L,calls,data,tables,html:()=>html,draw:()=>{html=page.render();return html},cards:()=>html.split('<div class="withdraw-kpis">')[1]?.split('</section>')[0]||'',card:key=>{const labels={total:'总笔数',autoCount:'自动出款',manualCount:'人工处理',success:'创建订单成功',rejected:'驳回'};return html.match(new RegExp('<div class="withdraw-kpi"><label>'+labels[key]+'</label>(.*?)</div>','s'))?.[1]||'';}};
 }
+test('idle withdrawal reports explain invalid filters or missing catalog without reading data',()=>{
+ const f=fixture([row('A')]);f.L.successFrom='2026-10-13T09:30:00';
+ assert.match(f.draw(),/成功开始时间和结束时间须同时填写/);
+ f.L.successFrom='';f.L.country='';assert.match(f.draw(),/请选择具体国家/);
+ f.L.country='印度';f.L.catalog=[];assert.match(f.draw(),/没有可读取的出款平台/);
+ f.L.catalogReady=false;f.L.catalogLoading=true;assert.match(f.draw(),/正在读取平台目录/);
+ f.L.catalogError='目录错误 <fixture>';assert.match(f.draw(),/role="alert"[^>]*>平台目录读取失败。目录错误 &lt;fixture&gt;/);
+ assert.doesNotMatch(f.draw(),/withdrawQueryForm|liveExport/);assert.equal(f.calls.length,0);
+});
 test('17 current / 18 previous uses all 17 paired platform rows, never the global previous total',async()=>{
  const rows=Array.from({length:17},(_,i)=>row('P'+i)),h=fixture(rows),before=clone(h.data);await h.page.load();assert.equal(h.calls.length,1);assert.equal(h.page.state.localSnapshot,true);
  assert.match(h.card('total'),/<strong>1870<\/strong>/);assert.match(h.card('total'),/较昨日 .*\+10\.00%/);assert.match(h.card('total'),/同 17 平台/);assert.match(h.card('total'),/当期 1870 笔，昨日 1700 笔/);assert.doesNotMatch(h.card('total'),/50000|暂不计算涨跌/);
@@ -86,7 +95,7 @@ test('DUOLI source-description change excludes other sources and automatic-repor
 test('Vietnam automatic report keeps unclassified facts and native scope while clearing only redundant report chrome',async()=>{
  const h=fixture([row('SYNTHETIC-VN',{country:'越南',unclassifiedCount:7,autoCount:40,manualCount:63})],{country:'越南',timezone:'Asia/Ho_Chi_Minh',data:{sourceComplete:false}});await h.page.load();
  assert.equal(h.calls.length,1);assert.equal(h.calls[0].country,'越南');assert.equal(h.calls[0].view,'auto');assert.equal(h.calls[0].startAt,'2026-10-13T00:00:00.000Z');assert.equal(h.calls[0].endAt,'2026-10-13T23:59:59.000Z');
- assert.match(h.html(),/data-withdraw-publication="subtotal"/);assert.match(h.html(),/Asia\/Ho_Chi_Minh/);assert.doesNotMatch(h.html(),/自动出款日报|withdraw-scope-details|<summary>数据说明/);assert.match(h.html(),/onclick="liveExport\(\)">导出当前表/);assert.equal(h.page.canExport(),true);
+ assert.match(h.html(),/data-withdraw-publication="subtotal"/);assert.match(h.html(),/Asia\/Ho_Chi_Minh/);assert.doesNotMatch(h.html(),/自动出款日报|withdraw-scope-details|<summary>数据说明/);assert.doesNotMatch(h.html(),/liveExport\(/);assert.equal(h.page.canExport(),true);
  assert.match(h.card('total'),/<strong>110<\/strong>/);assert.match(h.card('autoCount'),/<strong>40<\/strong>/);assert.match(h.card('manualCount'),/<strong>63<\/strong>/);assert.match(h.tables.at(-1).rows[0][1],/未分类 7 笔/);assert.match(h.card('total'),/<small title="未分处理方式 7 笔 · 6\.36%">日均 110<\/small>/);
  assert.match(h.card('total'),/较昨日/);assert(h.page.exportMeta().some(r=>r[0]==='来源完整性'&&r[1]==='已入库小计，不能作为全天完整总计'));
 });

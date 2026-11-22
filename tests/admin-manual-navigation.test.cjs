@@ -26,8 +26,11 @@ test('platform order links prefill the chosen scope without querying, including 
 });
 test('withdrawal quick dates, reset, sort and page size never initiate an unsubmitted query',async()=>{
  for(const page of ['auto_withdraw','withdraw_operators']){
-  const h=harness({page});await settle();const n=h.calls.length;assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/正在准备|正在读取/);
+  const h=harness({page});await settle();const n=h.calls.length;
+  assert.match(h.html(),/<button[^>]+onclick="withdrawQueryForm\(this.form\)"[^>]*>查询<\/button>/);
+  assert.doesNotMatch(h.html(),/请选择筛选条件，点击查询。|withdraw-draft-notice|正在准备|正在读取/);
   for(const mode of ['today','yesterday','before','week','lastweek','month','lastmonth'])h.c.withdrawPeriod(mode);
+  assert.match(h.html(),/筛选条件已修改，点击查询更新/);assert.doesNotMatch(h.html(),/上次成功查询结果/);
   h.c.withdrawShift(-1);h.c.withdrawShift(1);h.c.withdrawReset();h.c.withdrawSort('total');h.c.withdrawSize(50);await settle();assert.equal(h.calls.length,n,page);assert.match(h.html(),/查询/);
   await h.c.liveQuery();await settle();assert(h.calls.length>n,page+' explicit Query starts reading');
  }

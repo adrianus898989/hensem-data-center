@@ -23,6 +23,35 @@ test('export is absent and its callable handler cannot create a download without
  const h=harness(options(['providers.view','providers.query']));await settle();h.c.render();
  assert.doesNotMatch(h.nodes.get('.title-actions').innerHTML,/导出/);h.c.liveExport();assert.equal(h.blobs.length,0);
 });
+test('withdraw reports provide exactly one authorized export and retain meaningful result states',async()=>{
+ for(const page of ['auto_withdraw','withdraw_operators']){
+  for(const canExport of [true,false]){
+   const grants=[page+'.view',page+'.query',...(canExport?[page+'.export']:[])];
+   const h=harness(options(grants,page));await settle();
+   const exports=()=>((h.nodes.get('.title-actions').innerHTML+h.html()).match(/onclick="liveExport\(\)"/g)||[]).length;
+   assert.equal(exports(),Number(canExport));
+   assert.match(h.html(),/withdrawQueryForm\(this.form\)/);
+   assert.doesNotMatch(h.html(),/请选择筛选条件，点击查询。|class="live-status"/);
+   assert.equal(h.calls.filter(q=>q.action==='autoWithdraw').length,0);
+   h.setHandler(()=>({prepared:{status:'ready',calculationComplete:true,sourceComplete:false},sourceComplete:false,
+    total:0,totals:{total:0,processed:0},rows:[],platforms:[],notes:[]}));
+   await h.c.withdrawLoad();
+   assert.equal(exports(),Number(canExport));
+   assert.match(h.html(),/当前筛选范围没有已入库记录/);
+   assert.match(h.html(),/data-withdraw-publication="subtotal"/);
+   // The harness stores the HTML string. Supply the visible empty table's footer to the CSV reader.
+   h.nodes.get('page').querySelectorAll=selector=>selector==='table'?[{querySelectorAll:()=>[{cells:[{innerText:'合计'},{innerText:'0'}]}]}]:[];
+   await h.c.liveExport();assert.equal(h.blobs.length,Number(canExport));
+   if(canExport)assert.match(await h.blobs[0].text(),/已入库小计/);
+   h.setHandler(()=>{throw Error('报表读取失败')});await h.c.withdrawLoad();
+   assert.match(h.html(),/role="alert"[^>]*>报表读取失败/);assert.match(h.html(),/withdrawLoad\(\)">重试/);
+  }
+  const denied=harness(options([page+'.view'],page));await settle();
+  assert.match(denied.html(),/当前角色没有此报表的查询权限/);
+  assert.doesNotMatch(denied.html(),/withdrawQueryForm|liveExport/);
+  await denied.c.withdrawLoad();assert.equal(denied.calls.filter(q=>q.action==='autoWithdraw').length,0);
+ }
+});
 test('a role with no granted directory renders an explicit denial without loading selection or order data',async()=>{
  const h=harness(options([]));await settle();assert.equal(h.calls.length,0);assert.match(h.nodes.get('page').textContent,/没有.*目录|无.*目录/);
 });
