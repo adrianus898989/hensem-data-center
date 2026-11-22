@@ -1,26 +1,16 @@
 // Inject both strings only into an authorized dashboard document.
 export const LIGHT_PILOT_REPORT_STYLES = `
 html[data-m8-report-pilot] {
-  --rp-ink: #30354a;
-  --rp-muted: #616a80;
-  --rp-line: #dfe3ec;
-  --rp-raised: #f7f8fb;
-  --rp-accent: #6655ce;
-  --rp-tint: #efedfc;
+  --rp-ink: #253b48;
+  --rp-muted: #526875;
+  --rp-line: #d4e0e5;
+  --rp-raised: #f3f7f8;
+  --rp-accent: #096a80;
+  --rp-tint: #e7f3f5;
 }
 html[data-m8-report-pilot] body.live-admin .withdraw-toolbar,
 html[data-m8-report-pilot] body.live-admin .wo-operations-filter {
   padding: 12px 16px; background: #fff; border: 1px solid var(--rp-line); border-radius: 9px;
-}
-html[data-m8-report-pilot] body.live-admin .withdraw-toolbar::before { content: none; }
-html[data-m8-report-pilot] body.live-admin .withdraw-toolbar {
-  gap: 8px 10px; align-items: end;
-}
-html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-field { order: 1; }
-html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-metric-endpoint { order: 2; }
-html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-actions { order: 5; gap: 6px; }
-html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-metric-zone {
-  order: 7; font-size: 11px; color: var(--rp-muted);
 }
 html[data-m8-report-pilot] body.live-admin :is(.withdraw-toolbar,.wo-operations-filter) :is(.btn,input,select),
 html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-multi summary,
@@ -34,24 +24,93 @@ html[data-m8-report-pilot] body.live-admin .withdraw-toolbar :is(input,select),
 html[data-m8-report-pilot] body.live-admin .wo-operations-filter :is(input,select) {
   color: var(--rp-ink); border-color: var(--rp-line); background-color: #fff;
 }
-html[data-m8-report-pilot] body.live-admin .rp-period-menu { order: 6; }
-html[data-m8-report-pilot] body.live-admin .rp-success-menu { order: 3; }
-html[data-m8-report-pilot] body.live-admin :is(.rp-period-menu,.rp-success-menu) {
-  max-width: 100%; font-size: 12px; color: var(--rp-muted);
+/* The source renderers own form fields, presets and action handlers. Keep them
+   visible in place, with a shared layout on aggregate, snapshot and withdrawal reports. */
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) {
+  display: grid; grid-template-columns: repeat(12,minmax(0,1fr));
+  align-items: end; gap: 9px 12px; padding: 12px 16px;
 }
-html[data-m8-report-pilot] body.live-admin :is(.rp-period-menu,.rp-success-menu)>summary {
-  width: max-content; max-width: 100%; line-height: 30px; padding: 0 8px;
-  cursor: pointer; border-radius: 6px;
+html[data-m8-report-pilot] #liveFilters .live-business-filters > .live-filter-fields {
+  display: grid; grid-column: 1 / -1; gap: 8px 12px;
+  grid-template-columns: repeat(auto-fit,minmax(min(130px,100%),1fr));
 }
-html[data-m8-report-pilot] body.live-admin :is(.rp-period-menu,.rp-success-menu)>summary:focus-visible {
+html[data-m8-report-pilot] #liveFilters .live-business-filters > .live-filter-fields > .live-field,
+html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-filters > .live-field {
+  width: auto; min-width: 0; max-width: none; margin: 0;
+}
+html[data-m8-report-pilot] body.live-admin .withdraw-toolbar::before { content: none; }
+html[data-m8-report-pilot] body.live-admin .withdraw-toolbar form,
+html[data-m8-report-pilot] body.live-admin .withdraw-toolbar form > .live-filters { display: contents; }
+html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-filters > .live-field {
+  order: 1; grid-column: span 2;
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) .live-metric-windows {
+  order: 2; grid-column: 1 / -1; display: flex; flex-wrap: wrap;
+  align-items: end; gap: 7px 12px; min-width: 0;
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) .live-metric-window {
+  display: flex; align-items: end; flex-wrap: wrap; flex: 1 1 340px;
+  gap: 6px 10px; min-width: 0; max-width: 540px;
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) .live-metric-endpoint {
+  flex: 1 1 155px; min-width: 0;
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) .live-metric-endpoint :is(input,select) {
+  width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) .live-metric-zone {
+  align-self: end; min-width: 0; max-width: 100%; white-space: normal;
+  order: 0; margin: 0; padding-bottom: 5px; color: var(--rp-muted); font-size: 11px;
+}
+html[data-m8-report-pilot] #liveFilters .live-business-filters > .live-filter-date {
+  grid-column: 1 / -1; width: min(100%,280px);
+}
+html[data-m8-report-pilot] #liveFilters .live-business-filters > .daily-date-extra {
+  order: 3; grid-column: span 3; display: grid; justify-self: start; gap: 4px;
+  color: var(--rp-muted); font-size: 11px;
+}
+html[data-m8-report-pilot] #liveFilters .live-business-filters > .daily-date-extra :is(input,select) {
+  max-width: 100%; min-width: 0; height: 32px; box-sizing: border-box;
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,.withdraw-toolbar > .withdraw-shortcuts) {
+  order: 4; grid-column: 1 / 7; justify-content: start; align-self: end;
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-query-actions,.withdraw-toolbar .live-actions) {
+  order: 5; grid-column: 7 / -1; justify-content: end; align-self: end;
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,#liveFilters .live-query-actions,.withdraw-toolbar > .withdraw-shortcuts,.withdraw-toolbar .live-actions) {
+  display: flex; flex-wrap: wrap; align-items: center; min-width: 0;
+  height: auto; min-height: 32px; gap: 5px; margin: 0; padding: 0;
+}
+html[data-m8-report-pilot] #liveFilters .live-search-row { grid-column: 1 / -1; order: 6; }
+html[data-m8-report-pilot] #liveFilters .live-business-filters > [data-wg-success-filter] { grid-column: 1 / -1; order: 7; }
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar,.wo-filter-actions) .btn {
+  min-height: 35px; padding-inline: 10px; border-radius: 6px; font-size: 13px;
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,.withdraw-toolbar > .withdraw-shortcuts) .btn {
+  color: var(--rp-ink); background: #fff; border: 1px solid var(--rp-line);
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,.withdraw-toolbar > .withdraw-shortcuts,.wo-filter-actions) .btn[aria-pressed="true"] {
+  color: #085c6d; background: var(--rp-tint); border-color: var(--rp-accent); font-weight: 650;
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-query-actions,.withdraw-toolbar .live-actions,.wo-filter-actions) .btn.primary:enabled:not(:hover) {
+  background-color: var(--rp-accent); border-color: var(--rp-accent); color: #fff;
+}
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar,.wo-filter-actions) .btn:focus-visible {
   outline: 2px solid var(--rp-accent); outline-offset: 2px;
 }
-html[data-m8-report-pilot] body.live-admin .rp-period-menu[open] .withdraw-shortcuts,
-html[data-m8-report-pilot] body.live-admin .rp-success-menu[open] .live-metric-window {
-  display: flex; flex-wrap: wrap; align-items: end; gap: 6px; margin: 4px 0;
+@media (max-width:1000px) {
+  html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-filters > .live-field { grid-column: span 3; }
 }
-html[data-m8-report-pilot] body.live-admin .rp-success-menu .live-metric-endpoint {
-  flex: 1 1 160px; min-width: min(160px,100%);
+@media (max-width:760px) {
+  html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) {
+    padding: 10px 12px; gap: 8px;
+  }
+  html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-filters > .live-field,
+  html[data-m8-report-pilot] #liveFilters .live-business-filters > .daily-date-extra { grid-column: span 6; }
+  html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,#liveFilters .live-query-actions,.withdraw-toolbar > .withdraw-shortcuts,.withdraw-toolbar .live-actions) {
+    grid-column: 1 / -1; justify-content: start;
+  }
 }
 html[data-m8-report-pilot] body.live-admin .withdraw-kpis {
   display: grid; grid-template-columns: repeat(auto-fit,minmax(min(158px,100%),1fr)); gap: 0;
@@ -87,11 +146,11 @@ html[data-m8-report-pilot] body.live-admin .daily-comparison .daily-toolbar {
   border-bottom: 1px solid var(--rp-line); padding-bottom: 5px; margin-bottom: 8px;
 }
 html[data-m8-report-pilot] body.live-admin .daily-comparison .daily-toolbar button.on {
-  color: #5143a9; background: var(--rp-tint); border-color: #d6d0ef;
+  color: #085c6d; background: var(--rp-tint); border-color: #b6d6db;
 }
 html[data-m8-report-pilot] body.live-admin .wo-operations-filter .wo-filter-grid { gap: 7px 10px; }
 html[data-m8-report-pilot] body.live-admin .wo-operations-filter .wo-filter-actions {
-  margin-top: 9px; border-top: 1px solid #edf0f5; padding-top: 8px;
+  margin-top: 9px; border-top: 1px solid #e4ecef; padding-top: 8px;
 }
 html[data-m8-report-pilot] body.live-admin .wo-operations-filter [hidden] { display: none; }
 html[data-m8-report-pilot] body.live-admin .wo-operations-results :is(.wo-log-table,.wo-records-table,.wo-deposit-ticket-table) {
@@ -106,7 +165,7 @@ html[data-m8-report-pilot] body.live-admin .live-payout-config .lpc-top h2[data-
 html[data-m8-report-pilot] body.live-admin .live-payout-config .lpc-top span { color: var(--rp-muted); }
 html[data-m8-report-pilot] body.live-admin .live-payout-config .lpc-tabs { gap: 4px; padding-bottom: 6px; }
 html[data-m8-report-pilot] body.live-admin .live-payout-config :is(.lpc-tabs,.lpc-platforms) button.active {
-  background-color: var(--rp-tint); border-color: #dcd8ef; color: #5143a9;
+  background-color: var(--rp-tint); border-color: #b6d6db; color: #085c6d;
 }
 html[data-m8-report-pilot] body.live-admin .live-payout-config .lpc-browser :is(aside,article) {
   border-radius: 9px; border-color: var(--rp-line);
@@ -151,12 +210,12 @@ html[data-m8-report-pilot] body.live-admin .live-payout-config .lpc-browser :is(
   /* Only the authorized, native deposit-ticket drawer contains .wo-ticket-section.
      Keep its original modal lifecycle and leave the visible ticket queue alongside. */
   html[data-m8-report-pilot] body.live-admin:has(.wo-deposit-ticket-table) #drawerBackdrop:has(> .drawer .wo-ticket-section) {
-    background: rgb(40 45 67 / .09);
+    background: rgb(35 52 62 / .09);
   }
   html[data-m8-report-pilot] body.live-admin:has(.wo-deposit-ticket-table) #drawerBackdrop > .drawer:has(.wo-ticket-section) {
     right: 0; left: auto; width: clamp(390px,36vw,590px); max-width: 46vw;
     box-sizing: border-box; background: #fff; color: var(--rp-ink);
-    border-left: 1px solid var(--rp-line); box-shadow: -8px 0 32px rgb(38 43 65 / .09);
+    border-left: 1px solid var(--rp-line); box-shadow: -8px 0 32px rgb(35 52 62 / .09);
   }
   html[data-m8-report-pilot] body.live-admin .drawer .wo-ticket-section dl {
     grid-template-columns: repeat(2,minmax(0,1fr)); background: #fff;
@@ -176,26 +235,8 @@ export const LIGHT_PILOT_REPORT_SCRIPT = String.raw`
   root.setAttribute('data-m8-report-pilot', '');
 
   const baseline = '.withdraw-auto-kpi-panel .withdraw-kpi [data-comparison-baseline="matched-platforms"]';
-  const shortcuts = '.withdraw-toolbar > .withdraw-shortcuts';
-  const successWindow = '.withdraw-toolbar form .live-metric-window';
   const configTitle = '.live-payout-config .lpc-top h2';
-  const selector = [baseline, shortcuts, successWindow, configTitle].join(',');
-  const openGroups = new Map();
-
-  function group(node, key, title, hasValue) {
-    if (node.parentElement?.classList.contains(key)) return;
-    const details = doc.createElement('details');
-    const summary = doc.createElement('summary');
-    details.className = key;
-    summary.textContent = title;
-    details.append(summary);
-    details.open = hasValue || openGroups.get(key) === true;
-    details.addEventListener('toggle', () => {
-      if (details.isConnected) openGroups.set(key, details.open);
-    });
-    node.before(details);
-    details.append(node);
-  }
+  const selector = [baseline, configTitle].join(',');
 
   function showBaseline(element) {
     // A matched-platform tooltip is produced only after the report validates the comparison.
@@ -216,14 +257,6 @@ export const LIGHT_PILOT_REPORT_SCRIPT = String.raw`
   function decorate(element) {
     if (element.matches(baseline)) {
       showBaseline(element);
-    } else if (element.matches(shortcuts)) {
-      group(element, 'rp-period-menu', '快捷日期', false);
-    } else if (element.matches(successWindow)) {
-      // Only this known pair may collapse. A mixed or new window stays visible.
-      const inputs = [...element.querySelectorAll('input,select,textarea,button')];
-      if (inputs.length !== 2 || !inputs.some(input => input.name === 'successFrom')
-          || !inputs.some(input => input.name === 'successTo')) return;
-      group(element, 'rp-success-menu', '成功时间（可选）', inputs.some(input => input.value !== ''));
     } else if (element.matches(configTitle)) {
       const heading = doc.getElementById('pageTitle');
       element.toggleAttribute('data-rp-repeat', !!heading && heading.textContent.trim() === element.textContent.trim());
