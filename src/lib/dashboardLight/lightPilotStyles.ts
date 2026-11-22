@@ -1,5 +1,5 @@
 // Installed only in an authorized iframe. The root marker keeps the rules inert until bootstrap.
-const page = 'html[data-m8-light-pilot="1"] body.live-admin';
+const page = 'html[data-m8-light-pilot="1"]:root body';
 const filterSelect = `${page} :is(.live-field,.live-filters,.wo-filter-grid,.live-pager,.daily-toolbar,.config-filters,.filterbar) select:not([multiple]):not([size])`;
 
 export const LIGHT_PILOT_STYLES = `

@@ -173,6 +173,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
       vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/'+relative+'.ts'),'utf8')),{...environment,module:helper,exports:helper.exports,require:requireStub});
       return helper.exports;
     }
+    if (name === '@/lib/dashboardLight/presentation') return require('./load-typescript.cjs').loadTs(path.join(repo,'src/lib/dashboardLight/presentation.ts'));
     if (name.endsWith('/dashboardIdle')) return {recordDashboardActivity:()=>true};
     if (name.endsWith('/dashboardRelease')) {const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/dashboardRelease.ts'),'utf8')),{...environment,module:helper,exports:helper.exports});return helper.exports;}
     throw Error('Unexpected component test import: ' + name);
