@@ -1,4 +1,6 @@
 // Inject both strings only into an authorized dashboard document.
+const withdraw = 'html[data-m8-report-pilot] body.live-admin .withdraw-toolbar';
+
 export const LIGHT_PILOT_REPORT_STYLES = `
 html[data-m8-report-pilot] {
   --rp-ink: #253b48;
@@ -26,7 +28,7 @@ html[data-m8-report-pilot] body.live-admin .wo-operations-filter :is(input,selec
 }
 /* The source renderers own form fields, presets and action handlers. Keep them
    visible in place, with a shared layout on aggregate, snapshot and withdrawal reports. */
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) {
+html[data-m8-report-pilot] body.live-admin #liveFilters .live-business-filters {
   display: grid; grid-template-columns: repeat(12,minmax(0,1fr));
   align-items: end; gap: 9px 12px; padding: 12px 16px;
 }
@@ -34,31 +36,24 @@ html[data-m8-report-pilot] #liveFilters .live-business-filters > .live-filter-fi
   display: grid; grid-column: 1 / -1; gap: 8px 12px;
   grid-template-columns: repeat(auto-fit,minmax(min(130px,100%),1fr));
 }
-html[data-m8-report-pilot] #liveFilters .live-business-filters > .live-filter-fields > .live-field,
-html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-filters > .live-field {
+html[data-m8-report-pilot] #liveFilters .live-business-filters > .live-filter-fields > .live-field {
   width: auto; min-width: 0; max-width: none; margin: 0;
 }
-html[data-m8-report-pilot] body.live-admin .withdraw-toolbar::before { content: none; }
-html[data-m8-report-pilot] body.live-admin .withdraw-toolbar form,
-html[data-m8-report-pilot] body.live-admin .withdraw-toolbar form > .live-filters { display: contents; }
-html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-filters > .live-field {
-  order: 1; grid-column: span 2;
-}
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) .live-metric-windows {
+html[data-m8-report-pilot] body.live-admin #liveFilters .live-business-filters .live-metric-windows {
   order: 2; grid-column: 1 / -1; display: flex; flex-wrap: wrap;
   align-items: end; gap: 7px 12px; min-width: 0;
 }
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) .live-metric-window {
+html[data-m8-report-pilot] body.live-admin #liveFilters .live-business-filters .live-metric-window {
   display: flex; align-items: end; flex-wrap: wrap; flex: 1 1 340px;
   gap: 6px 10px; min-width: 0; max-width: 540px;
 }
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) .live-metric-endpoint {
+html[data-m8-report-pilot] body.live-admin #liveFilters .live-business-filters .live-metric-endpoint {
   flex: 1 1 155px; min-width: 0;
 }
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) .live-metric-endpoint :is(input,select) {
+html[data-m8-report-pilot] body.live-admin #liveFilters .live-business-filters .live-metric-endpoint :is(input,select) {
   width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;
 }
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) .live-metric-zone {
+html[data-m8-report-pilot] body.live-admin #liveFilters .live-business-filters .live-metric-zone {
   align-self: end; min-width: 0; max-width: 100%; white-space: normal;
   order: 0; margin: 0; padding-bottom: 5px; color: var(--rp-muted); font-size: 11px;
 }
@@ -72,25 +67,25 @@ html[data-m8-report-pilot] #liveFilters .live-business-filters > .daily-date-ext
 html[data-m8-report-pilot] #liveFilters .live-business-filters > .daily-date-extra :is(input,select) {
   max-width: 100%; min-width: 0; height: 32px; box-sizing: border-box;
 }
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,.withdraw-toolbar > .withdraw-shortcuts) {
+html[data-m8-report-pilot] body.live-admin #liveFilters .live-date-shortcuts {
   order: 4; grid-column: 1 / 7; justify-content: start; align-self: end;
 }
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-query-actions,.withdraw-toolbar .live-actions) {
+html[data-m8-report-pilot] body.live-admin #liveFilters .live-query-actions {
   order: 5; grid-column: 7 / -1; justify-content: end; align-self: end;
 }
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,#liveFilters .live-query-actions,.withdraw-toolbar > .withdraw-shortcuts,.withdraw-toolbar .live-actions) {
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,#liveFilters .live-query-actions) {
   display: flex; flex-wrap: wrap; align-items: center; min-width: 0;
   height: auto; min-height: 32px; gap: 5px; margin: 0; padding: 0;
 }
 html[data-m8-report-pilot] #liveFilters .live-search-row { grid-column: 1 / -1; order: 6; }
 html[data-m8-report-pilot] #liveFilters .live-business-filters > [data-wg-success-filter] { grid-column: 1 / -1; order: 7; }
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar,.wo-filter-actions) .btn {
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.wo-filter-actions) .btn {
   min-height: 35px; padding-inline: 10px; border-radius: 6px; font-size: 13px;
 }
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,.withdraw-toolbar > .withdraw-shortcuts) .btn {
+html[data-m8-report-pilot] body.live-admin #liveFilters .live-date-shortcuts .btn {
   color: var(--rp-ink); background: #fff; border: 1px solid var(--rp-line);
 }
-html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,.withdraw-toolbar > .withdraw-shortcuts,.wo-filter-actions) .btn[aria-pressed="true"] {
+html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,.wo-filter-actions) .btn[aria-pressed="true"] {
   color: #085c6d; background: var(--rp-tint); border-color: var(--rp-accent); font-weight: 650;
 }
 html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-query-actions,.withdraw-toolbar .live-actions,.wo-filter-actions) .btn.primary:enabled:not(:hover) {
@@ -99,18 +94,80 @@ html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-query-actions,
 html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar,.wo-filter-actions) .btn:focus-visible {
   outline: 2px solid var(--rp-accent); outline-offset: 2px;
 }
-@media (max-width:1000px) {
-  html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-filters > .live-field { grid-column: span 3; }
-}
 @media (max-width:760px) {
-  html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-business-filters,.withdraw-toolbar) {
+  html[data-m8-report-pilot] body.live-admin #liveFilters .live-business-filters {
     padding: 10px 12px; gap: 8px;
   }
-  html[data-m8-report-pilot] body.live-admin .withdraw-toolbar .live-filters > .live-field,
   html[data-m8-report-pilot] #liveFilters .live-business-filters > .daily-date-extra { grid-column: span 6; }
-  html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,#liveFilters .live-query-actions,.withdraw-toolbar > .withdraw-shortcuts,.withdraw-toolbar .live-actions) {
+  html[data-m8-report-pilot] body.live-admin :is(#liveFilters .live-date-shortcuts,#liveFilters .live-query-actions) {
     grid-column: 1 / -1; justify-content: start;
   }
+}
+/* Scope, date pairs and commands wrap as groups. Keep full native date segments
+   visible, including seconds and the AM/PM field in 12-hour browser locales. */
+${withdraw} {
+  display: block; container-type: inline-size; container-name: withdraw-filters;
+  padding: 8px 12px;
+}
+${withdraw}::before { content: none; }
+${withdraw} .withdraw-filter-form {
+  display: flex; flex-wrap: wrap; align-items: end; gap: 7px 12px; margin: 0;
+}
+${withdraw} .withdraw-scope-fields {
+  display: flex; flex-wrap: wrap; align-items: end; gap: 5px 8px; max-width: 100%;
+}
+${withdraw} .withdraw-scope-fields > .live-field {
+  width: 110px; flex: 0 1 auto; min-width: 0; max-width: none; gap: 3px; margin: 0;
+}
+${withdraw} .withdraw-scope-fields > :is(.live-multi,.wide) { width: 142px; }
+${withdraw} .withdraw-scope-fields > .withdraw-record-source { width: 190px; }
+${withdraw} .live-metric-windows { display: contents; }
+${withdraw} .live-metric-window {
+  display: flex; align-items: end; gap: 8px; min-width: 0; max-width: 100%;
+}
+${withdraw} .live-metric-endpoint { width: 210px; max-width: 100%; min-width: 0; flex: 1 1 auto; gap: 3px; }
+${withdraw} .live-metric-endpoint input { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
+${withdraw} :is(.live-field > select,.live-field > input,.live-multi summary,.live-metric-endpoint input) {
+  height: 30px; min-height: 30px; padding-block: 2px; font-size: 12px;
+}
+${withdraw} .withdraw-command-row {
+  display: flex; flex: 1 1 510px; flex-wrap: wrap; align-items: center; gap: 5px 12px; min-width: 0;
+}
+${withdraw} :is(.withdraw-shortcuts,.live-actions) {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px; height: auto; min-height: 0; margin: 0; padding: 0;
+}
+${withdraw} .live-actions { order: 0; margin-inline-start: auto; }
+${withdraw} .live-metric-zone {
+  order: 0; margin: 0; padding: 0; flex: 0 1 auto; align-self: center; color: var(--rp-muted); font-size: 11px;
+}
+${withdraw} :is(.withdraw-shortcuts,.live-actions) .btn {
+  min-height: 29px; height: 29px; border-radius: 5px; padding: 2px 8px; font-size: 12px; white-space: nowrap;
+}
+${withdraw} .withdraw-shortcuts .btn { color: var(--rp-ink); background: #fff; border: 1px solid var(--rp-line); }
+${withdraw} .withdraw-shortcuts .btn[aria-pressed="true"] {
+  color: #085c6d; background: var(--rp-tint); border-color: var(--rp-accent); font-weight: 650;
+}
+@container withdraw-filters (max-width: 700px) {
+  ${withdraw} .withdraw-scope-fields { display: grid; width: 100%; grid-template-columns: repeat(auto-fit,minmax(min(125px,100%),1fr)); }
+  ${withdraw} .withdraw-scope-fields > .live-field { width: auto; }
+  ${withdraw} .withdraw-scope-fields > .withdraw-record-source { grid-column: 1 / -1; width: min(100%, 210px); }
+  ${withdraw} .live-metric-window { width: 100%; }
+  ${withdraw} .live-metric-endpoint { width: auto; flex: 1 1 0; }
+}
+@container withdraw-filters (max-width: 448px) {
+  ${withdraw} .withdraw-filter-form { gap: 7px; }
+  ${withdraw} .live-metric-window { display: grid; gap: 4px; }
+  ${withdraw} .live-metric-endpoint {
+    display: grid; grid-template-columns: minmax(0,1fr) minmax(min(204px,100%),2fr);
+    align-items: center; gap: 5px;
+  }
+  ${withdraw} .live-metric-endpoint > span { line-height: 1.25; white-space: normal; }
+  ${withdraw} .withdraw-command-row { gap: 6px 8px; }
+  ${withdraw} .withdraw-shortcuts { flex-basis: 100%; }
+  ${withdraw} :is(.withdraw-shortcuts,.live-actions) .btn { min-height: 34px; height: auto; }
+}
+@media (max-width: 800px) {
+  html[data-m8-report-pilot] body.live-admin:has(.withdraw-toolbar) .title-actions > .btn[onclick="liveExport()"] { display: inline-flex; }
 }
 html[data-m8-report-pilot] body.live-admin .withdraw-kpis {
   display: grid; grid-template-columns: repeat(auto-fit,minmax(min(158px,100%),1fr)); gap: 0;
