@@ -334,11 +334,21 @@
   function pagebar(total,page,size,reason=false){if(reason&&root.HensemWorkorderUI)return root.HensemWorkorderUI.pager(total,page,size,'withdrawReason',S.reasonBusy);const max=Math.max(1,Math.ceil(total/size)),fn=reason?'withdrawReasonPage':'withdrawPage';return '<div class="withdraw-pager"><span>共 '+C(total)+' 条'+(total?' · '+C((page-1)*size+1)+'–'+C(Math.min(page*size,total)):'')+'</span>'+(reason?'':'<select aria-label="每页行数" onchange="withdrawSize(this.value)">'+[20,30,50,100,500].map(n=>'<option value="'+n+'" '+(n===size?'selected':'')+'>'+n+' 条 / 页</option>').join('')+'</select>')+'<button class="btn small" '+(page<=1?'disabled':'')+' onclick="'+fn+'('+(page-1)+')">上一页</button><span>'+page+' / '+max+'</span><button class="btn small" '+(page>=max?'disabled':'')+' onclick="'+fn+'('+(page+1)+')">下一页</button></div>'}
   const catalog=()=>{const native=chosenWithdrawNative((L.catalog||[]).filter(p=>displayAllowed(p)&&!(String(p.source||'').toLowerCase()==='panda')).map(identity));return [...native,...(L.withdrawCatalog||[]).filter(displayAllowed).map(p=>{const row=identity(p),matches=isWg(row)?native.filter(n=>isWg(n)&&rawTarget(n)===rawTarget(row)&&requestPlatform(n)===requestPlatform(row)):[];if(matches.length===1){row.name=matches[0].name;row.sourceName=requestPlatform(matches[0]);if(['__unassigned__','__team_pending__'].includes(row.team))row.team=matches[0].team;}if(!['__unassigned__','__team_pending__'].includes(row.team))return row;const teams=[...new Set(native.filter(n=>rawTarget(n)===rawTarget(row)&&n.name===row.name).map(n=>n.team).filter(t=>!['__unassigned__','__team_pending__','__team_conflict__','归属待核对'].includes(t)))];return teams.length===1?{...row,team:teams[0]}:row})].filter(displayAllowed)};
   function windowControls(){metricWindows();const input=(key,label)=>'<label class="live-metric-endpoint"><span>'+label+'</span><input name="'+key+'"'+(['from','to'].includes(key)?' required':'')+' aria-label="'+label+'" type="datetime-local" step="1" value="'+E(L[key])+'" onchange="withdrawMetricTimeSet(\''+key+'\',this.value)"></label>';return '<div class="live-metric-windows" role="group" aria-label="统计时间范围"><div class="live-metric-window">'+input('from','创建开始时间')+input('to','创建结束时间')+'</div><div class="live-metric-window">'+input('successFrom','成功开始时间（可选）')+input('successTo','成功结束时间（可选）')+'</div><span class="live-metric-zone">各平台当地时间</span></div>';}
+  let lastDateShortcut='';
+  let shortcutFormatter,shortcutTimeZone;
+  const periodOptions=[['today','今天'],['yesterday','昨日'],['before','前日'],['week','本周'],['lastweek','上周'],['month','本月'],['lastmonth','上月']];
   function toolbar(){const all=catalog(),teams=[...new Set(all.map(p=>p.team))].filter(t=>!['__team_pending__','__team_conflict__','归属待核对'].includes(t)).sort(),chosen=activeTeams(),countries=[...new Set(all.filter(p=>!chosen.length||chosen.includes(p.team)).map(p=>p.country).filter(value=>value&&countrySelectable(value)))].sort();const list=scopeCatalog(),catalogPlatforms=list.map(p=>p.name),platforms=[...new Set([...(S.data?.scopeKey===selectionKey()?(S.data.platforms||[]).map(name=>{const names=[...new Set(list.filter(p=>isWg(p)&&requestPlatform(p)===name||!isWg(p)&&rawTarget(p)==='印度'&&platformKey(name)==='MAANWIN'&&platformKey(p.name)==='MAANWIN').map(p=>p.name))];return names.length===1?names[0]:name;}):[]),...catalogPlatforms,...S.platforms])].sort();
+   let today;
+   try{today=withdrawShortcutToday(list)}catch(error){if(error.name!=='RangeError')throw error}
+   const matchingPeriods=today?periodOptions.filter(([key])=>{
+    const {from,to}=withdrawPeriodBounds(key,today);
+    return from===L.from&&to===L.to;
+   }):[];
+   const activePeriod=(matchingPeriods.find(([key])=>key===lastDateShortcut)||matchingPeriods[0])?.[0];
    const preparing=['missing','building','stale'].includes(S.prepared?.status);
    const multi=root.HensemLiveFilters.multi({key:'withdrawPlatform',label:'盘口 / 平台',values:S.platforms,items:platforms.map(p=>[p,p]),open:S.open,search:S.search}).replaceAll('liveMulti','withdrawMulti').replaceAll('liveSetMultiOption','withdrawSetMultiOption');
    return '<section class="panel withdraw-toolbar"><form onsubmit="event.preventDefault();withdrawQueryForm(this)" onkeydown="withdrawFilterKey(event)">'+windowControls()+'<div class="live-filters"><div class="live-field"><label>所属团队</label><select onchange="withdrawTeam(this.value)"><option value="all" '+(!chosen.length?'selected':'')+'>全部</option>'+(chosen.length>1?'<option disabled selected>多个团队</option>':'')+teams.map(t=>'<option value="'+E(t)+'" '+(chosen.length===1&&chosen[0]===t?'selected':'')+'>'+E(t==='__unassigned__'?'待归类':t)+'</option>').join('')+'</select></div><div class="live-field"><label>国家 / 地区（必选）</label><select required onchange="withdrawCountry(this.value)">'+(!countrySelectable(L.country)||!countries.includes(displayCountry())?'<option value="" selected disabled>请选择国家</option>':'')+countries.map(c=>'<option '+(c===displayCountry()?'selected':'')+'>'+E(c)+'</option>').join('')+'</select></div>'+(baseScopeCatalog().some(historicalRow)?'<div class="live-field"><label>记录来源</label><select onchange="withdrawHistorical(this.value)"><option value="current" '+(!S.historical?'selected':'')+'>当前记录</option><option value="historical" '+(S.historical?'selected':'')+'>历史记录（2026-07-30）</option></select></div>':'')+multi+
-   '<div class="live-field"><label>显示统计</label><select aria-label="显示统计" onchange="withdrawMetricView(this.value)"><option value="created" '+(S.metricView==='created'?'selected':'')+'>创建订单</option><option value="secondary" '+(S.metricView==='secondary'?'selected':'')+(S.applied?.successWindowExplicit===true?'':' disabled')+'>独立成功窗'+(S.applied?.successWindowExplicit===true?'':'（手填时间后查询）')+'</option></select></div>'+(view()==='operators'?'<div class="live-field wide"><label>操作人账号</label><input value="'+E(S.account)+'" maxlength="200" placeholder="搜索操作人" oninput="withdrawAccount(this.value)"></div>':'')+'<div class="live-actions"><button type="button" class="btn primary" '+(S.loading||preparing?'disabled aria-disabled="true" ':'')+'onclick="withdrawQueryForm(this.form)">'+(preparing?'准备中…':S.loading?'正在读取…':'查询')+'</button><button type="button" class="btn" onclick="withdrawReset()">重置</button><button type="button" class="btn" onclick="withdrawShift(-1)">上一日</button><button type="button" class="btn" onclick="withdrawShift(1)">下一日</button><button type="button" class="btn" onclick="liveExport()">导出当前表</button></div></div></form><div class="withdraw-shortcuts">'+[['today','今天'],['yesterday','昨日'],['before','前日'],['week','本周'],['lastweek','上周'],['month','本月'],['lastmonth','上月']].map(([key,label])=>'<button class="btn small" onclick="withdrawPeriod(\''+key+'\')">'+label+'</button>').join('')+'</div></section>';
+   '<div class="live-field"><label>显示统计</label><select aria-label="显示统计" onchange="withdrawMetricView(this.value)"><option value="created" '+(S.metricView==='created'?'selected':'')+'>创建订单</option><option value="secondary" '+(S.metricView==='secondary'?'selected':'')+(S.applied?.successWindowExplicit===true?'':' disabled')+'>独立成功窗'+(S.applied?.successWindowExplicit===true?'':'（手填时间后查询）')+'</option></select></div>'+(view()==='operators'?'<div class="live-field wide"><label>操作人账号</label><input value="'+E(S.account)+'" maxlength="200" placeholder="搜索操作人" oninput="withdrawAccount(this.value)"></div>':'')+'<div class="live-actions"><button type="button" class="btn primary" '+(S.loading||preparing?'disabled aria-disabled="true" ':'')+'onclick="withdrawQueryForm(this.form)">'+(preparing?'准备中…':S.loading?'正在读取…':'查询')+'</button><button type="button" class="btn" onclick="withdrawReset()">重置</button><button type="button" class="btn" onclick="withdrawShift(-1)">上一日</button><button type="button" class="btn" onclick="withdrawShift(1)">下一日</button><button type="button" class="btn" onclick="liveExport()">导出当前表</button></div></div></form><div class="withdraw-shortcuts">'+periodOptions.map(([key,label])=>'<button class="btn small" aria-pressed="'+(key===activePeriod)+'" onclick="withdrawPeriod(\''+key+'\')">'+label+'</button>').join('')+'</div></section>';
   }
   const blockingKinds=['blocking','blockingVariants','blockingOrders'];
   const atomicGrouping='atomic_rules_v1';
@@ -694,7 +704,35 @@
   root.withdrawMultiClose=()=>{S.open=false;render()};
   root.withdrawReset=()=>{L.successFrom='';L.successTo='';L.successBasis='success';S.historical=false;S.platforms=[];S.rowCountry='';S.account='';S.daily=false;root.withdrawPeriod('yesterday')};
   root.withdrawShift=n=>{metricWindows();for(const key of ['from','to'])if(L[key])L[key]=addDay(L[key].slice(0,10),n)+L[key].slice(10);invalidate();render()};
-  root.withdrawPeriod=key=>{const zone=scopeCatalog().find(p=>p.timezone)?.timezone||(displayCountry()==='巴西'?'America/Sao_Paulo':'Asia/Kolkata'),today=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());let start=today,end=today;if(key==='yesterday')start=end=addDay(today,-1);if(key==='before')start=end=addDay(today,-2);if(key==='week'||key==='lastweek'){const day=new Date(today+'T00:00:00Z').getUTCDay();start=addDay(today,-((day+6)%7));if(key==='lastweek'){end=addDay(start,-1);start=addDay(start,-7)}}if(key==='month')start=today.slice(0,8)+'01';if(key==='lastmonth'){end=addDay(today.slice(0,8)+'01',-1);start=end.slice(0,8)+'01'}L.from=start+'T00:00:00';L.to=end+'T23:59:59';invalidate();render()};
+  // Both the selected button and a click use the platform-local reporting day.
+  function withdrawShortcutToday(list){
+   const zone=list.find(p=>p.timezone)?.timezone||(displayCountry()==='巴西'?'America/Sao_Paulo':'Asia/Kolkata');
+   if(zone!==shortcutTimeZone){
+    shortcutFormatter=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'});
+    shortcutTimeZone=zone;
+   }
+   const parts=Object.fromEntries(shortcutFormatter.formatToParts(new Date()).map(part=>[part.type,part.value]));
+   return parts.year+'-'+parts.month+'-'+parts.day;
+  }
+  function withdrawPeriodBounds(key,today){
+   let start=today,end=today;
+   if(key==='yesterday')start=end=addDay(today,-1);
+   if(key==='before')start=end=addDay(today,-2);
+   if(key==='week'||key==='lastweek'){
+    const weekday=new Date(today+'T00:00:00Z').getUTCDay();
+    start=addDay(today,-((weekday+6)%7));
+    if(key==='lastweek'){end=addDay(start,-1);start=addDay(start,-7);}
+   }
+   if(key==='month')start=today.slice(0,8)+'01';
+   if(key==='lastmonth'){end=addDay(today.slice(0,8)+'01',-1);start=end.slice(0,8)+'01';}
+   return {from:start+'T00:00:00',to:end+'T23:59:59'};
+  }
+  root.withdrawPeriod=key=>{
+   const today=withdrawShortcutToday(scopeCatalog());
+   const range=withdrawPeriodBounds(key,today);
+   lastDateShortcut=key;L.from=range.from;L.to=range.to;
+   invalidate();render();
+  };
   function readApplied(reset=false){if(!resultAllowed()||!S.applied)return load(reset);const query={...S.applied.query,sort:S.sort,ascending:S.asc,offset:reset?0:(S.page-1)*S.size,limit:S.size};return load(reset,{query,applied:S.applied});}
   root.withdrawPage=page=>{if(!Number.isInteger(page)||page<1)return;if(!localReady()&&S.data&&draftChanged()){render();return;}S.page=page;if(localReady()){S.page=Math.min(page,Math.max(1,Math.ceil(S.data.rows.length/S.size)));renderLocal();}else if(!draftChanged()&&S.data&&!S.loading)readApplied();else render()};
   root.withdrawSize=size=>{if(![20,30,50,100,500].includes(Number(size)))return;if(!localReady()&&S.data&&draftChanged()){render();return;}S.size=Number(size);S.page=1;if(localReady()||S.loading&&view()==='auto'&&!S.daily&&!S.serverPaging)renderLocal();else if(!draftChanged()&&S.data)readApplied(true);else render()};

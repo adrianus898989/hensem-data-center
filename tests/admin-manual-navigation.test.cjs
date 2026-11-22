@@ -49,3 +49,30 @@ test('configuration navigation stops queued snapshots and returning runs a fresh
  h.setHandler(async q=>{await gate;const target={platform:'PRIVATE_CONFIG',country_code:'IN'};return q.operation==='index'?{version:1,system:q.system,readOnly:true,targets:[target],summaries:[]}:{version:1,system:q.system,readOnly:true,target,snapshot:{configuration:{fields:[],groups:[]}}};});
  const pending=h.c.liveQuery();await settle();h.c.setPage('amount');release();await pending;await settle();assert.equal(h.calls.filter(q=>q.operation==='snapshot').length,0);assert.doesNotMatch(h.html(),/PRIVATE_CONFIG/);const n=h.calls.length;h.c.setPage('payout_config');await settle();const fresh=h.calls.slice(n);assert.equal(fresh.filter(q=>q.operation==='index').length,6);assert.equal(fresh.filter(q=>q.operation==='snapshot').length,6);assert.match(h.html(),/PRIVATE_CONFIG/);assert.equal(h.c.HensemLivePayoutConfig.state().snapshotStatus,'ready');
 });
+
+test('date presets highlight the actual creation window and keep a custom interval unselected',async()=>{
+ for(const page of ['teamops','overview','auto_withdraw']){
+  const h=harness({page,extraModules:['live-statistic-windows.js']});
+  await settle();
+  // On the first of the month, Today and Month can have identical bounds.
+  h.setNow('2026-10-01T12:00:00Z');
+  const withdraw=page==='auto_withdraw';
+  const choose=withdraw?h.c.withdrawPeriod:h.c.livePeriod;
+  const edit=withdraw?h.c.withdrawMetricTimeSet:h.c.liveMetricTimeSet;
+  const current=()=>{
+   const html=withdraw?h.html():h.nodes.get('liveFilters').innerHTML;
+   return [...html.matchAll(/<button\b[^>]*aria-pressed="true"[^>]*>([^<]+)<\/button>/g)].map(match=>match[1]);
+  };
+  const before=h.calls.length;
+  choose('month');
+  assert.deepEqual(current(),[withdraw?'本月':'近1个月'],page);
+  choose('today');
+  assert.deepEqual(current(),['今天'],page);
+  choose('yesterday');
+  assert.deepEqual(current(),['昨日'],page);
+  edit('from','2026-09-30T08:00');
+  h.c.render();
+  assert.deepEqual(current(),[],page);
+  assert.equal(h.calls.length,before,page);
+ }
+});
