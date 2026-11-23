@@ -490,3 +490,74 @@ test('an unverified main-page cursor or an unfinished native matrix never become
   assert.equal(h.calls.length,1);h.app.cancel();
  }
 });
+
+function exactSingleAmount(){
+ const h=setupAmount(),provider='CedarPayINR';
+ for(const name of ['live-provider-aliases','live-success-analysis'])vm.runInNewContext(readUi(name),{window:h.win});
+ h.ctx.selectedProviders=()=>[provider];
+ const original=h.ctx.query;
+ h.ctx.query=p=>({...original(p),action:'aggregate',providers:[provider]});
+ for(const [i,result] of h.L.results.entries()){
+  Object.assign(result.platform,{source:i%2?'newar':'ar',sourceName:'Native '+i,country:'印度'});
+  const n=i<2?0:10+i;
+  const count={direction:'withdraw',currency:'INR',all_count:n,success_count:n-1,created_success_count:n-1};
+  const part={platform:{...result.platform},version:1,rows:[],total:n,hasMore:n>0,
+   startAt:from,endAt:to,amountBands,amountBandsVersion:1,successBasis:'created',
+   capabilities:{successCohort:'created_at_current_stored_status',independentSuccessWindow:false},
+   _preparedPublication:{id:'artifact-'+i,generation:'4:12',status:'ready',calculationComplete:true,sourceComplete:false},
+   _preparedResultGroups:{contract:'prepared-result-groups-v1',profile:'amount-v1',groups:['amount','amount_range','provider']},
+   summary:n?[count]:[],groups:{amount:[],provider:n?[{...count,provider}]:[],amount_range:n?[{...count,bucket:'band:0'}]:[]}};
+  Object.assign(result,part,{_parts:[part]});delete result.complete;
+ }
+ return h;
+}
+test('a verified single-provider created cohort serves populated and known-empty merchant bands without another read',async()=>{
+ const h=exactSingleAmount();
+ h.app.html();await wait();await h.win.HensemHourlyMatrixActions.load();
+ assert.equal(h.calls.length,0);
+ assert.equal(h.rendered('charge').provider.ready.size,4);
+ assert.equal(h.rendered('charge').provider.rows.length,0);
+ const provider=h.rendered('withdraw').provider;
+ assert.equal(provider.ready.size,4);
+ assert.deepEqual([provider.rows[0].name,provider.rows[0].cells['band:0'].totalCount,provider.rows[0].cells['band:0'].successCount],['CedarPayINR',25,23]);
+ assert.equal(h.L.results[2]._parts[0]._preparedPublication.sourceComplete,false);
+ h.detail(false);h.app.html();
+ assert.equal(h.rendered('withdraw').provider.ready.size,0);assert.equal(h.calls.length,0);
+ h.app.cancel();
+});
+test('single-provider projection rejects mixed selections, stale evidence, bad counts and wrong windows or bands',()=>{
+ const h=exactSingleAmount(),api=h.win.HensemAmountRateData,r=h.L.results[2],p=r.platform,base=h.ctx.query(p);
+ const copy=x=>JSON.parse(JSON.stringify(x)),single=(r,q=base,name='CedarPayINR')=>api.singleProviderBands(p,r,q,name);
+ assert.ok(single(r));
+ for(const change of [
+  x=>x.groups.provider.push({...x.groups.provider[0],provider:'Other',all_count:0,created_success_count:0,success_count:0}),
+  x=>x.groups.provider[0].created_success_count--,
+  x=>x.groups.amount_range[0].all_count--,
+  x=>x.groups.amount_range.push({...x.groups.amount_range[0]}),
+  x=>x._preparedPublication.calculationComplete=false,
+  x=>x._preparedPublication.generation=' ',
+  x=>x._preparedResultGroups.profile='time-v1',
+  x=>x.pandaCoverage={reason:'verified_created_prefix_only'},
+  x=>x.platform.sourceName='other native',
+  x=>x.endAt=from,
+  x=>x.total++,
+  x=>x.capabilities.independentSuccessWindow=true,
+  x=>x.amountBands.charge[2]++,
+  x=>x.groups.provider[0].provider='未识别通道',
+ ]){const part=copy(r._parts[0]);change(part);assert.equal(single({...part,_parts:[part]}),null);}
+ for(const change of [{providers:['CedarPayINR','CedarPay']},{successEndAt:to},{status:'success'},{direction:'withdraw'}]){
+  assert.equal(single(r,{...base,...change}),null);
+ }
+ assert.equal(single(r,base,'无三方'),null);
+ h.app.cancel();
+});
+test('mixed provider/merchant matrix reads only the unproved platform and preserves the native cross-group fallback',async()=>{
+ const h=exactSingleAmount();
+ h.L.results[3]._parts[0].groups.provider[0].provider='Other';
+ h.app.html();await wait();assert.deepEqual(h.calls.map(c=>c.q.platformId),['p4']);
+ assert.equal(h.rendered('withdraw').provider.ready.size,3);
+ h.app.cancel();h.calls[0].reject(Error('fixture stopped'));await wait();
+ const m=exactSingleAmount();m.ctx.selectedProviders=()=>['CedarPayINR','Other'];
+ m.app.html();await wait();assert.equal(m.rendered('withdraw').provider.ready.size,0);assert.equal(m.calls.length,2);
+ m.app.cancel();m.calls.forEach(c=>c.reject(Error('fixture stopped')));await wait();
+});

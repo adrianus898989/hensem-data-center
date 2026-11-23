@@ -40,13 +40,16 @@
  }
  function renderMetrics(summary,options={}){
   const current=summary||{},previous=options.previous||{},label=options.label||'订单',money=options.money||defaultMoney,count=options.count||defaultCount,rate=options.rate||defaultRate;
+  const compare=!options.comparisonStatusOnce||options.comparisonStatus==='ready'&&!!options.previous;
   const groups=[['all','全部'+label+'金额','▤'],['success','成功金额','✓'],['pending',label==='代付'?'本期代付中金额':'处理中金额','◷'],['failed','失败金额','◇']];
   const cards=groups.map(([key,name,icon])=>{
+   const countText=count(current[key+'_count'])+' 笔',countFoot='<span class="live-reference-count">'+esc(countText)+'</span>';
+   if(!compare)return card(name,money(current[key+'_amount']),countFoot,key,icon,name+'；'+countText);
    const amountCompare=comparison(current[key+'_amount'],previous[key+'_amount'],options),countCompare=comparison(current[key+'_count'],previous[key+'_count'],options,false,'count');
-   const countText=count(current[key+'_count'])+' 笔',foot='<span class="live-reference-count">'+esc(countText)+'</span><span class="metric-comparisons"><span data-change="amount">'+compareHtml(amountCompare)+'</span><span data-change="count">'+compareHtml(countCompare)+'</span></span>';
+   const foot=countFoot+'<span class="metric-comparisons"><span data-change="amount">'+compareHtml(amountCompare)+'</span><span data-change="count">'+compareHtml(countCompare)+'</span></span>';
    return card(name,money(current[key+'_amount']),foot,key,icon,name+'；'+countText+'；金额'+amountCompare.text+'；笔数'+countCompare.text);
   });
-  cards.push(card('成功率',rate(current.success_count,current.all_count),compareHtml(comparison([current.success_count,current.all_count],[previous.success_count,previous.all_count],options,true)),'success_rate','▥',successBasisDescription(options.queryState).title));
+  cards.push(card('成功率',rate(current.success_count,current.all_count),compare?compareHtml(comparison([current.success_count,current.all_count],[previous.success_count,previous.all_count],options,true)):'','success_rate','▥',successBasisDescription(options.queryState).title));
   if(options.fee){
    const fee=options.fee,label=fee.label||'估算手续费',matched=known(fee.matchedCount),eligible=known(fee.eligibleCount),excluded=known(fee.excludedCount),loading=fee.status==='loading',failed=fee.status==='error';
    const basis=fee.mode==='historical'?'按订单创建时间匹配生效版本':'按当前参考费率估算，非历史实际手续费';

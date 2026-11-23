@@ -11,6 +11,34 @@ function fixture(){const root={Date,Intl,AbortController,HensemLiveFilters:{mult
  page=root.HensemLiveWithdrawPages.create({L,E,C:String,N:String,R:(a,b)=>b?(Number(a)/Number(b)*100).toFixed(2)+'%':'—',box:(_t,b)=>b,table:(h,rows,cls)=>{tables.push({headers:h,rows,cls});return rows.map(r=>'<tr>'+r.join('|')+'</tr>').join('');},page:()=>root.currentPage||'auto_withdraw',onLoading:v=>loading.push(v),render:()=>{html=page.render();},request:(q,o)=>{calls.push({q:copy(q),signal:o?.signal});return handler?handler(q,o):Promise.resolve(q.action==='autoWithdraw'?result(q):q.action==='withdrawReasons'?{available:true,reasonAvailable:true,total:0,rows:[]}:q.action==='withdrawNote'?{...q,version:'saved'}:{});}});
  return{root,L,page,calls,tables,loading,html:()=>{html=page.render();return html;},last:()=>tables.at(-1),handle:f=>handler=f,query:()=>root.withdrawQueryForm()};}
 
+test('single-country platform labels follow the submitted scope and keep the country in the export',async()=>{
+ const h=fixture();await h.query();
+ const platformColumn=()=>{
+  const table=h.last();
+  assert.match(table.headers[0],/withdrawSort\('platform'\).*?>平台/);
+  assert.doesNotMatch(table.headers[0],/withdrawSort\('country'\)/);
+  assert(table.rows.every(cells=>/<strong[^>]*>IN-[AB]<\/strong><\/span>$/.test(cells[0])));
+ };
+ platformColumn();
+ assert.deepEqual(copy(h.page.exportMeta().find(r=>r[0]==='国家 / 地区')),['国家 / 地区','印度']);
+ h.root.withdrawCountry('巴基斯坦');assert.match(h.html(),/上次成功查询结果（印度）/);
+ platformColumn();assert.equal(h.page.exportMeta(),null);assert.equal(h.calls.length,1);
+});
+
+test('mixed, incomplete or absent result scopes retain country labels and country sorting',async()=>{
+ for(const country of ['巴基斯坦','']){
+  const h=fixture();
+  const rows=Array.from({length:21},(_,i)=>row('IN-'+i,i===20?country:'印度'));
+  h.handle(q=>Promise.resolve(result(q,{rows,total:rows.length})));
+  await h.query();
+  assert.match(h.last().headers[0],/withdrawSort\('country'\)/);
+  assert(h.last().rows.some(cells=>cells[0].includes('<span>印度</span>')));
+  assert(!h.page.exportMeta().some(r=>r[0]==='国家 / 地区'));
+ }
+ const h=fixture();h.page.state.data=result({country:'印度',platforms:[],startAt:'2026-10-13T00:00:00Z',endAt:'2026-10-13T23:59:59Z'});
+ h.html();assert.match(h.last().headers[0],/withdrawSort\('country'\)/);
+});
+
 function assertAppliedSnapshot(h,{country='印度',team='M8',from='2026-10-13',to=from,exportable=false}={}){
  const {applied,data}=h.page.state;assert(applied);assert(data);assert.equal(applied.country,country);assert.deepEqual(copy(applied.teams),[team]);assert.equal(applied.query.country,country);
  assert.equal(applied.query.startAt,from+'T00:00:00.000Z');assert.equal(applied.query.endAt,to+'T23:59:59.000Z');assert.equal(data.country,country);assert.equal(data.startDate,from);assert.equal(data.endDate,to);assert(data.rows.every(r=>r.country===country),'displayed records retain the applied native country');
