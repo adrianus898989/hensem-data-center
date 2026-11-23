@@ -66,7 +66,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       return checked;
     });
     const readMode=p.readMode,responseProfile=p.responseProfile;
-    if(readMode!==undefined&&(readMode!=="ready-only-v1"||p.publicationVersion!==2||Object.hasOwn(p,"forceRefresh")||Object.hasOwn(p,"providerReuseNames")||Object.hasOwn(p,"providerLeafAliases")||requests.some(q=>!(q.view==="providers"&&responseProfile===undefined||(q.view||"full")==="full"&&responseProfile==="time-v1"))))throw Error("只读统计探测参数无效");
+    if(readMode!==undefined&&(readMode!=="ready-only-v1"||p.publicationVersion!==2||Object.hasOwn(p,"forceRefresh")||Object.hasOwn(p,"providerReuseNames")||Object.hasOwn(p,"providerLeafAliases")||requests.some(q=>!(q.view==="providers"&&responseProfile===undefined||(q.view||"full")==="full"&&(responseProfile==="time-v1"||responseProfile==="amount-v1")))))throw Error("只读统计探测参数无效");
     if(responseProfile!==undefined&&(p.publicationVersion!==2||requests.length>(readMode==="ready-only-v1"?50:3)||Object.hasOwn(p,"providerReuseNames")||Object.hasOwn(p,"providerLeafAliases")||typeof responseProfile!=="string"||!["time-v1","amount-v1","latency-v1"].includes(responseProfile)||requests.some(q=>(q.view||"full")!=="full"||Object.hasOwn(q,"durationRange")||responseProfile==="latency-v1"&&q.durationVersion!==2)))throw Error("统计响应范围无效");
     if(JSON.stringify(requests).length>128000)throw Error("统计批量参数过大");
     // Optional names are hints for server-native projections, never filters.
@@ -515,8 +515,16 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  const rpc=collectedKyc?"dashboard_admin_deposit_kyc":request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
  if(request.action==="aggregatePrepared"&&!PREPARED_AGGREGATE_PAGES.has(roleContext?.page||""))throw Error("统计页面无效");
  if(request.action==="aggregatePrepared"&&request.readMode!==undefined){
-  const page=roleContext?.page||"",full=(request.requests as Record<string,unknown>[]).some(q=>(q.view||"full")==="full");
-  if(!(full?["teamops","teamcountries","teamplatforms","time"].includes(page):["providers","provider_payout","overview","merchants","teamops","teamcountries","teamplatforms"].includes(page)))throw Error("只读统计探测页面无效");
+  const page=roleContext?.page||"",requests=request.requests as Record<string,unknown>[];
+  if(page==="amount"){
+   if(requests.length>20||requests.some(q=>q.successBasis!=="created"||q.currency!=="INR"||q.status!=="all"||
+      ["amountMin","amountMax","amountMaxExclusive","durationRange"].some(key=>Object.hasOwn(q,key)))||
+      request.responseProfile!==undefined&&request.responseProfile!=="amount-v1")throw Error("金额段只读统计探测参数无效");
+  }else{
+   const pages=request.responseProfile==="time-v1"?["teamops","teamcountries","teamplatforms","time"]:
+    request.responseProfile===undefined?["providers","provider_payout","overview","merchants","teamops","teamcountries","teamplatforms"]:[];
+   if(!pages.includes(page))throw Error("只读统计探测页面无效");
+  }
  }
  if(request.action==="aggregatePrepared"&&request.responseProfile!==undefined&&!(request.responseProfile==="time-v1"&&["teamops","teamcountries","teamplatforms"].includes(roleContext?.page||""))&&({"time-v1":"time","amount-v1":"amount","latency-v1":"latency"} as Record<string,string>)[String(request.responseProfile)]!==roleContext?.page)throw Error("统计响应范围与页面不符");
  const response=await adminLiveFetch(base+"/rest/v1/rpc/"+(roleContext?.assigned&&!collectedKyc?"dashboard_admin_execute":rpc),{method:"POST",body:JSON.stringify(collectedKyc?{p_page:roleContext?.assigned?roleContext.page:null,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:roleContext?.assigned?{p_page:roleContext.page,p_request:request}:request.action==="aggregatePrepared"?{p_page:roleContext?.page,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:{p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
@@ -688,6 +696,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
  const cancel=(id,timeout=false)=>{const q=release(id);if(!q)return;try{parent.postMessage({type:'${LIVE_CANCEL}',channel,id,reason:timeout?'timeout':'cancelled'},hostOrigin)}catch{}q.reject(error(timeout?'正式数据读取超时，请重试':'查询已取消',timeout?'ADMIN_LIVE_TIMEOUT':'ADMIN_LIVE_CANCELLED'))};
  window.HENSEM_PRODUCTION=true;
  window.HENSEM_PREPARED_READY_ONLY=true;
+ window.HENSEM_AMOUNT_READY_ONLY=true;
  window.HENSEM_PROVIDER_SNAPSHOT_SHADOW=${providerSnapshotShadow};
  window.hensemRoleAccess=${JSON.stringify(roleAccess||{mode:"legacy",permissions:[],canView:true}).replace(/</g,"\\u003c")};
  window.hensemDataScope=${JSON.stringify({mode:dataScope?.mode==="all"?"all":"selected",identity:typeof dataScope?.identity==="string"?dataScope.identity.slice(0,1000):"unverified"}).replace(/</g,"\\u003c").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029")};

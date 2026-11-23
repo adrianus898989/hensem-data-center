@@ -1411,18 +1411,24 @@
   return ['time','amount','latency'].includes(page)&&!(page==='amount'&&(request.amountMin!==undefined||request.amountMax!==undefined))?page+'-v1':undefined;
  }
  function readyOnlyProbeOptions(request,responseProfile){
-  if(window.HENSEM_PREPARED_READY_ONLY!==true||!['providers','provider_payout','overview','merchants','teamops','teamcountries','teamplatforms','time'].includes(state.page)||request.status!=='all'||L.status!=='all'||Date.parse(request.endAt)>L.queryNow)return null;
-  if(!(request.view==='providers'&&responseProfile===undefined&&['providers','provider_payout','overview','merchants','teamops','teamcountries','teamplatforms'].includes(state.page)||(request.view||'full')==='full'&&responseProfile==='time-v1'&&readyCompactPages.has(state.page)))return null;
-  const platform=L.catalog.find(p=>p.id===request.platformId);if(!platform)return null;
+  const page=state.page,amount=page==='amount',providerView=request.view==='providers'&&responseProfile===undefined;
+  if(window.HENSEM_PREPARED_READY_ONLY!==true||request.status!=='all'||L.status!=='all'||Date.parse(request.endAt)>L.queryNow)return null;
+  if(amount){
+   const amountView=(request.view||'full')==='full'&&responseProfile==='amount-v1';
+   if(window.HENSEM_AMOUNT_READY_ONLY!==true||L.country!=='印度'||request.currency!=='INR'||request.successBasis!=='created'||!(amountView||providerView))return null;
+  }else if(!(providerView&&['providers','provider_payout','overview','merchants','teamops','teamcountries','teamplatforms'].includes(page)||
+    (request.view||'full')==='full'&&responseProfile==='time-v1'&&readyCompactPages.has(page)))return null;
+  const platform=L.catalog.find(p=>p.id===request.platformId);if(!platform||amount&&platform.country!=='印度')return null;
   try{
    const start=Date.parse(request.startAt),end=Date.parse(request.endAt),a=localClock(start,platform.timezone),b=localClock(end,platform.timezone);
    if(!Number.isFinite(start)||!Number.isFinite(end)||!a.endsWith('T00:00:00')||!b.endsWith('T00:00:00')||Date.parse(b.slice(0,10)+'T00:00:00Z')-Date.parse(a.slice(0,10)+'T00:00:00Z')!==86400000)return null;
    if(request.successBasis==='created'?Object.hasOwn(request,'successStartAt')||Object.hasOwn(request,'successEndAt'):request.successBasis!=='success'||request.successStartAt!==request.startAt||request.successEndAt!==request.endAt)return null;
    const clocks=['startAt','endAt','successStartAt','successEndAt','successBasis'];
-   for(const previous of state.page==='providers'?[false]:[false,true]){
+   for(const previous of amount?[providerView]:page==='providers'?[false]:[false,true]){
     const expected=statisticRequest(platform,previous);
     if(clocks.every(key=>request[key]===expected[key])){
-     const phase=previous?'comparison':state.page==='providers'&&request.successBasis==='created'?'provider-primary':'main';
+     const phase=amount?(previous?'amount-comparison':'amount-main'):
+      previous?'comparison':page==='providers'&&request.successBasis==='created'?'provider-primary':'main';
      return {readyOnlyProbe:true,readyOnlyProbePhase:phase};
     }
    }
