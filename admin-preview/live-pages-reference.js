@@ -206,8 +206,17 @@
   const rateTabs = time ? [['hourly-provider','三方分时成功率'],['hourly-merchant','商户分时成功率']]
     : [['amount-provider','三方分金额段成功率'],['amount-merchant','商户分金额段成功率']];
   const nav = choose([['business', title], ...rateTabs]);
-  const top = '<div class="analysis-compact">' + totals() + nav;
-  if (L.view !== 'business') return top + (c.hourlyRates?.html() || '') + '</div>';
+  const currentIncomplete=aggregateReadState().incomplete;
+  const comparison=!time&&!currentIncomplete&&['loading','error'].includes(L.comparisonStatus)
+   ? '<div class="analysis-status compact-comparison-status" role="status">'+(L.comparisonStatus==='loading'?'正在读取前期对比':
+     '<details><summary>前期对比暂未完成</summary>'+E(L.comparisonError||'前期数据暂未返回')+'</details>')+'</div>' : '';
+  const top = '<div class="analysis-compact">' + totals({comparisonStatusOnce:!time}) + comparison + nav;
+  if (L.view !== 'business') {
+   // The primary read already shows coverage. Don't paint a second set of
+   // empty tables and counters while the amount-statistics source is loading.
+   if (!time && (L.loading || L.queryRetrying)) return top + '</div>';
+   return top + (c.hourlyRates?.html() || '') + '</div>';
+  }
   c.hourlyRates?.pause();
   const pageKey = time ? 'time' : 'amount';
   const rows = groupedData(groupKind);

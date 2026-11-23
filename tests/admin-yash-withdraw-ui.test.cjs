@@ -22,7 +22,7 @@ test('mixed classification shows confirmed sums against all received orders and 
  const totals=yash({total:140,success:110,rejected:15,autoCount:10,manualCount:30,unclassifiedCount:100,classificationPartial:true}),f=fixture({rows:[yash(),ar],total:21,totals}),html=f.render(),t=f.stats();
  assert.equal(t.rows[1][6],'10');assert.match(t.rows[1][8],/^<span class="red">25.00%/);
  for(const row of t.footers){assert.deepEqual(row.slice(1,4),['140','110','15']);assert.deepEqual(row.slice(6,8),['10','30']);assert.match(row[8],/7.14%/);assert.match(row[9],/21.43%/);assert.match(row[0],/分类笔数仅已确认/);}
- assert.match(html,/<label>自动出款<\/label><strong>10<\/strong>/);assert.match(html,/<label>人工处理<\/label><strong>30<\/strong>/);assert.match(html,/未分处理方式 100 笔 · 71.43%/);assert.match(html,/data-withdraw-classification="partial"/);assert.match(html,/已确认笔数 · 占已入库总笔数/);assert.match(html,/自动／人工显示已确认笔数，占比按已入库总笔数计算；未分类单独列出/);
+ assert.match(html,/<label>自动出款<\/label><strong>10<\/strong>/);assert.match(html,/<label>人工处理<\/label><strong>30<\/strong>/);assert.match(html,/未分处理方式 100 笔 · 71.43%/);assert.doesNotMatch(html,/data-withdraw-classification="partial"|自动／人工显示已确认笔数，占比按已入库总笔数计算；未分类单独列出/);assert.match(html,/已确认笔数 · 占已入库总笔数/);
 });
 test('classification capability overrides numeric placeholders, including previous-period comparison',()=>{
  const current=yash({autoCount:0,manualCount:100,previous:yash({autoCount:1,manualCount:99})}),f=fixture({rows:[current],totals:current,previousTotals:current.previous});

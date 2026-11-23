@@ -39,3 +39,11 @@ test('rate differences stay percentage points and multi-day comparisons retain t
  assert.equal(api.comparison([0,0],[1,10],opts,true).text,'较昨日 —');
  const html=api.renderMetrics(current,{...opts,comparisonLabel:'较前一日 <img src=x onerror=bad>'});assert.doesNotMatch(html,/<img/);assert.match(html,/&lt;img/);
 });
+
+test('the amount analysis can move pending comparison status out of the metric cards',()=>{
+ const pending=api.renderMetrics(current,{...opts,comparisonStatusOnce:true,comparisonStatus:'loading'});
+ assert.doesNotMatch(pending,/对比读取中|对比暂不可用|data-change=/);
+ assert.match(pending,/80 笔/);
+ const ready=api.renderMetrics(current,{...opts,comparisonStatusOnce:true});
+ assert.match(cards(ready).all,/较昨日 -20 笔/);
+});

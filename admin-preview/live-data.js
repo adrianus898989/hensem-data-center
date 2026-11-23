@@ -586,12 +586,12 @@
   const fact=mode==='current'?HensemProviderSummary.currentReferenceFeeFacts({...summary,direction,currency,fee_items:rows},L.feeLookupRows,L.country):HensemProviderSummary.feeSummary(rows.map(row=>({...row,...successTimeSummary([row],direction)})));
   return {label,amount:fact.amount,matchedCount:fact.matchedCount,eligibleCount:mode==='current'?fact.eligibleCount:fact.successCount,excludedCount:fact.excludedCount,complete:fact.complete,mode,currency};
  }
- function totals(){
+ function totals({comparisonStatusOnce=false}={}){
   // Panda's order page reads server-paged details only. Both the reference
   // renderer and fallback call this helper; empty aggregates are not zero facts.
   if(state.page==='orders'&&orderSource(orderPlatform())==='panda'||pandaAggregateBlocked())return '';
   if(L.feeEstimateMode!=='historical'&&!L.loading&&L.feeLookupRows===null&&!L.feeLookupLoading&&!L.feeLookupError)ensureFeeLookup();
-  return HensemLiveLayout.totals({directions:visibleDirections().map(direction=>{const rows=L.results.flatMap(r=>r.summary||[]).filter(r=>r.direction===direction),partial=aggregateReadStatus().incomplete,summary=partial&&!rows.length?Object.fromEntries([...countKeys,...amountKeys].map(key=>[key,null])):successTimeSummary(rows,direction),fee=merchantSummaryFee(direction,summary);return {key:direction,label:directionName(direction),coverageHtml:(partial?'<span class="live-subtotal-label">已读小计</span>':'')+platformDataCoverageHtml(direction),summary,previous:successTimeSummary(comparisonRows(direction),direction),fee:partial&&!rows.length?{...fee,amount:null,matchedCount:null,eligibleCount:null,complete:false}:fee}}),currency:L.currency,queryState:L,comparisonStatus:L.comparisonStatus,comparisonLabel:L.comparisonLabel,comparisonError:L.comparisonError,money:N,count:C,rate:R})
+  return HensemLiveLayout.totals({directions:visibleDirections().map(direction=>{const rows=L.results.flatMap(r=>r.summary||[]).filter(r=>r.direction===direction),partial=aggregateReadStatus().incomplete,summary=partial&&!rows.length?Object.fromEntries([...countKeys,...amountKeys].map(key=>[key,null])):successTimeSummary(rows,direction),fee=merchantSummaryFee(direction,summary);return {key:direction,label:directionName(direction),coverageHtml:(partial?'<span class="live-subtotal-label">已读小计</span>':'')+platformDataCoverageHtml(direction),summary,previous:successTimeSummary(comparisonRows(direction),direction),fee:partial&&!rows.length?{...fee,amount:null,matchedCount:null,eligibleCount:null,complete:false}:fee}}),currency:L.currency,queryState:L,comparisonStatusOnce,comparisonStatus:L.comparisonStatus,comparisonLabel:L.comparisonLabel,comparisonError:L.comparisonError,money:N,count:C,rate:R})
  }
 
  function providerCell(r){return '<button class="link" title="'+E(r.provider||'未识别通道')+' · 查看订单号与归类依据" onclick="liveProviderOrders('+E(JSON.stringify(r.provider||'未识别通道'))+','+E(JSON.stringify(r.source||''))+','+E(JSON.stringify(r.direction))+')">'+E(r.provider||'未识别通道')+'</button>'}
@@ -929,7 +929,7 @@
  hourlyRates=window.HensemHourlyRateController?.create({L,E,page:()=>state.page,
   allowed:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')&&L.queryScope===aggregateQueryScope(),
   canDrill:()=>roleAllowed(state.page,'detail'),access:()=>JSON.stringify([aggregateAccessContext(),supplementaryNativeContext()]),
-  platforms:()=>L.queryPlatforms.filter(p=>!notOperating(p)),query:p=>query(p,'aggregate'),request:foregroundRequest,
+  platforms:()=>L.queryPlatforms.filter(p=>!notOperating(p)),selectedProviders:()=>activeValues('provider',''),query:p=>query(p,'aggregate'),request:foregroundRequest,
   denied:e=>['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(e?.code),onDenied:e=>stopInterruptedAggregate(L.serial,e),
   successAvailable:(p,r,d)=>!sourceSuccessTimeUnavailable(p,r,d),
   providerTypes:d=>{const names=window.HensemProviderNames,lookup=window.HensemProviderSummary?.providerType,byName=new Map();
@@ -963,7 +963,16 @@
   const label=L.queryRetrying?'正在继续读取剩余平台':L.queryPaused?'查询已暂停':active?'正在读取':status.done?'查询未完成':'当前范围暂无可用统计';
   const scope=[L.country,L.from&&L.to?L.from+' 至 '+L.to:'',L.successFrom&&L.successTo?'成功时间 '+L.successFrom+' 至 '+L.successTo:'',activeValues('provider','').join(' / ')||'全部三方'].filter(Boolean).join(' · ');
   const detail=status.missing.map(p=>'<div>'+E(p.name)+'：'+E(p.error||(active?'正在读取':'尚未完成'))+'</div>').join('');
-  return '<div class="live-status'+(!active&&!pendingOnly&&failures.length?' live-error':'')+'" data-aggregate-read-status role="status"><strong>'+label+' · 已读 '+C(status.done)+' / '+C(status.total)+' 平台</strong>'+(status.done?'；以下仅为已读取结果（小计）。':'；未完成数据不按 0 计算。')+(!active?'<button type="button" class="link" onclick="liveRetryFailed('+!!L.queryPaused+')">'+(L.queryPaused?'继续查询':'重试未完成平台')+'</button>':'')+'<div data-aggregate-query-scope>'+E(scope)+'</div>'+(detail?'<details><summary>查看未完成平台（'+C(status.missing.length)+'）</summary>'+detail+'</details>':'')+'</div>';
+  const details=detail?'<details><summary>查看未完成平台（'+C(status.missing.length)+'）</summary>'+
+   (state.page==='amount'&&scope?'<div data-aggregate-query-scope>'+E(scope)+'</div>':'')+detail+'</details>':'';
+  const action=!active?'<button type="button" class="link" onclick="liveRetryFailed('+!!L.queryPaused+')">'+(L.queryPaused?'继续查询':'重试未完成平台')+'</button>':'';
+  const style='live-status'+(!active&&!pendingOnly&&failures.length?' live-error':'');
+  if(state.page==='amount')return '<div class="'+style+' compact-read-notice" data-aggregate-read-status role="status"><strong>'+
+   (active?'读取中 '+C(status.done)+' / '+C(status.total)+' 平台':label+' · '+C(status.done)+' / '+C(status.total)+' 平台')+
+   (status.done?' · 已读小计':'')+'</strong>'+action+details+'</div>';
+  return '<div class="'+style+'" data-aggregate-read-status role="status"><strong>'+label+' · 已读 '+C(status.done)+' / '+C(status.total)+' 平台</strong>'+
+   (status.done?'；以下仅为已读取结果（小计）。':'；未完成数据不按 0 计算。')+action+
+   '<div data-aggregate-query-scope>'+E(scope)+'</div>'+details+'</div>';
  }
  function quietCollectionQuery(){return state.page==='providers'&&statisticWindowsEnabled();}
  function unavailableAggregateQuery(){

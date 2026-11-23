@@ -13,7 +13,12 @@ function complete(data){data.sourceComplete=true;data.prepared={...data.prepared
 for(const view of ['auto_withdraw','withdraw_operators']){
  test(view+' keeps the old snapshot and timestamp while restoring observed platform comparisons',async()=>{
   const data=payload(),before=clone(data),h=fixture(data,view);await h.page.load();const html=h.html(),table=h.tables.at(-1);
-  assert.match(html,/更新失败 · 已入库小计/);assert.match(html,/统计生成于 2026-10-21 15:53:03（Asia\/Kolkata）/);assert.match(html,/按同平台、同口径的已入库记录计算，不代表全天完整数据/);
+  const notice=html.match(/data-withdraw-publication="subtotal"[^>]*>([\s\S]*?)<\/div>/)?.[1];assert(notice);
+  const disclosure=notice.match(/<details([^>]*)><summary>(.*?)<\/summary>(.*?)<\/details>/s);assert(disclosure);
+  assert.doesNotMatch(disclosure[1],/\bopen\b/);
+  assert.match(disclosure[2],/更新失败 · 已入库小计/);assert.doesNotMatch(disclosure[2],/统计生成|时区|按同平台/);
+  assert.match(disclosure[3],/统计生成于 2026-10-21 15:53:03（Asia\/Kolkata）/);assert.match(disclosure[3],/按同平台、同口径的已入库记录计算，不代表全天完整数据/);
+  assert.match(notice,/<\/details><button[^>]*onclick="withdrawLoad\(\)"[^>]*>重新查询/);
   assert.match(html,view==='auto_withdraw'?/总笔数<\/label><strong>22000/:/处理笔数<\/label><strong>22000/);
   assert.doesNotMatch(html,/暂不计算涨跌/);assert.doesNotMatch(table.headers.join(''),/已入库小计/);assert.match(JSON.stringify(table.rows),/ pp/);assert.match(JSON.stringify(table.rows),/−400\.00 秒/);
   if(view==='auto_withdraw')assert.match(html,/-45\.00%.*同 1 平台/);

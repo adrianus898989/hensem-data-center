@@ -2,9 +2,9 @@
 (function(root){
  'use strict';
  const zero=()=>({successCount:0,totalCount:0});
+ const validCount=value=>(typeof value==='number'||typeof value==='string'&&value.trim()!=='')&&Number.isSafeInteger(Number(value))&&Number(value)>=0;
  function readCounts(row){
-  const valid=value=>(typeof value==='number'||typeof value==='string'&&value.trim()!=='')&&Number.isSafeInteger(Number(value))&&Number(value)>=0;
-  return valid(row?.success_count)&&valid(row?.all_count)?{successCount:Number(row.success_count),totalCount:Number(row.all_count)}:null;
+  return validCount(row?.success_count)&&validCount(row?.all_count)?{successCount:Number(row.success_count),totalCount:Number(row.all_count)}:null;
  }
  function add(a,b){
   if(!a||!b)return null;
@@ -22,6 +22,51 @@
  const samePlatform=(p,r)=>p.id===r?.platform?.id&&['source','country','currency','timezone'].every(key=>!p[key]||!r.platform[key]||p[key]===r.platform[key]);
  const usable=r=>r&&!r.error&&r.available!==false&&r.partial!==true&&r.complete!==false&&r.hasMore!==true&&r.pandaCoverage?.reason!=='verified_created_prefix_only';
  const parts=r=>Array.isArray(r?._parts)?r._parts:r?[r]:[];
+ // An exact one-provider filter makes that provider's band counts identical to
+ // the verified merchant counts. Accept only one immutable prepared publication
+ // for the original native request; ordinary aggregate marginals are not a crossing.
+ function singleProviderBands(platform,main,request,selected){
+  const canonical=value=>typeof value==='string'&&value.trim()&&(root.HensemProviderNames?.canonical(value,platform.country)??value).trim();
+  const name=canonical(selected),segments=parts(main),r=segments[0],pub=r?._preparedPublication,marker=r?._preparedResultGroups;
+  if(!name||['all','全部'].includes(name)||root.HensemLiveSuccessAnalysis?.providerKind(name)!=='provider'||segments.length!==1)return null;
+  if(!request||request.action!=='aggregate'||(request.view||'full')!=='full'||request.platformId!==platform.id||
+     request.status!=='all'||request.direction!=='all'||request.currency!==platform.currency||
+     !Array.isArray(request.providers)||!request.providers.length||!request.providers.every(v=>canonical(v)===name)||
+     request.successBasis!=='created'||request.successStartAt!==undefined||request.successEndAt!==undefined)return null;
+  if(!pub||pub.status!=='ready'||pub.calculationComplete!==true||typeof pub.id!=='string'||!pub.id||
+     !(Number.isSafeInteger(pub.generation)||typeof pub.generation==='string'&&pub.generation.trim())||
+     marker?.contract!=='prepared-result-groups-v1'||marker.profile!=='amount-v1'||
+     !['amount','amount_range','provider'].every(g=>marker.groups?.includes(g)&&Array.isArray(r.groups?.[g]))||
+     !['id','source','sourceName','country','currency','timezone'].every(k=>platform[k]&&platform[k]===r.platform?.[k]))return null;
+  if(r.error||r.partial===true||r.available===false||r.complete===false||r.rows?.length!==0||
+     r.coverage?.calculationComplete===false||r.coverage?.requestedComplete===false||
+     r.pandaCoverage?.requestedComplete===false||r.pandaCoverage?.reason==='verified_created_prefix_only'||
+     r.successBasis!=='created'||r.capabilities?.successCohort!=='created_at_current_stored_status'||
+     r.capabilities?.independentSuccessWindow!==false||r.successStartAt!==undefined||r.successEndAt!==undefined||
+     !['startAt','endAt'].every(k=>Number.isFinite(Date.parse(request[k]))&&Date.parse(request[k])===Date.parse(r[k]))||
+     r.amountBandsVersion!==1||!['charge','withdraw'].every(d=>root.HensemAmountBands.valid(request.amountBands?.[d])&&sameEdges(r,d,request.amountBands[d]))||
+     !Array.isArray(r.summary)||!Number.isSafeInteger(r.total)||r.total<0)return null;
+  const rows=[r.summary,r.groups.provider,r.groups.amount_range];
+  if(!rows.every(group=>group.every(row=>{
+   const counts=readCounts(row);
+   return counts&&['charge','withdraw'].includes(row.direction)&&row.currency===platform.currency&&
+    counts.successCount<=counts.totalCount&&validCount(row.created_success_count)&&Number(row.created_success_count)===counts.successCount;
+  }))||!r.groups.provider.every(row=>canonical(row.provider)===name))return null;
+  const totals=sum(r.summary.map(readCounts));
+  if(!totals||totals.totalCount!==r.total)return null;
+  const byDirection={};
+  for(const d of ['charge','withdraw']){
+   const [summary,providers,bands]=rows.map(group=>group.filter(row=>row.direction===d));
+   const counts=sum(summary.map(readCounts)),buckets=new Map();
+   if(summary.length>1||!equal(counts,sum(providers.map(readCounts)))||!equal(counts,sum(bands.map(readCounts))))return null;
+   for(const row of bands){
+    if(!validBucket(row.bucket)||buckets.has(row.bucket))return null;
+    buckets.set(row.bucket,readCounts(row));
+   }
+   byDirection[d]=buckets;
+  }
+  return {name,amountBands:r.amountBands,byDirection};
+ }
  function sameEdges(r,d,edges){
   const actual=r?.amountBands?.[d];
   return Array.isArray(actual)&&actual.length===edges.length&&actual.every((v,i)=>v===edges[i]);
@@ -85,7 +130,7 @@
   const total=data?sum(data.values()):null;
   return {key,name,cells,total:total&&partial?{...total,partial:true}:total,partial:partial||!total};
  }
- function build({direction,currency,platforms=[],results=[],amountBands={},providerAmounts=new Map(),successAvailable,providerType}){
+ function build({direction,currency,platforms=[],results=[],amountBands={},providerAmounts=new Map(),singleProviders,successAvailable,providerType}){
   const edges=amountBands?.[direction],valid=root.HensemAmountBands.valid(edges);
   const bases=new Map(),merchantReady=new Set(),providerReady=new Set(),amounts=new Map(),providers=new Map(),special=new Set();
   const expected=new Map(platforms.filter(p=>p?.id).map(p=>[p.id,p]));
@@ -96,14 +141,16 @@
   for(const p of expected.values()){
    const main=bases.get(p.id),candidate=providerAmounts.get(p.id);
    const supplement=candidate&&successAvailable?.(p,candidate,direction)!==false?candidate:null;
-   if(!valid||!samePlatform(p,main)||!usable(main)||successAvailable?.(p,main,direction)===false)continue;
+   const single=singleProviders?.get(p.id);
+   const projection=valid&&p.currency===currency&&single&&!supplement&&sameEdges(single,direction,edges)?single.byDirection[direction]:null;
+   if(!valid||!samePlatform(p,main)||(!projection&&!usable(main))||successAvailable?.(p,main,direction)===false)continue;
    const merchant=Number.isFinite(supplement?._matrixReadAt)
     ?merchantBuckets(supplement,p,direction,currency,edges)
-    :merchantBuckets(main,p,direction,currency,edges)??checkedSupplement(main,supplement,p,direction,currency,edges);
+    :projection??merchantBuckets(main,p,direction,currency,edges)??checkedSupplement(main,supplement,p,direction,currency,edges);
    if(!merchant)continue;
    amounts.set(p.id,merchant);merchantReady.add(p.id);
    for(const key of merchant.keys())if(!key.startsWith('band:'))special.add(key);
-   const grouped=providerBuckets(supplement,p,direction,currency,merchant,edges);
+   const grouped=projection?(projection.size?new Map([[single.name,projection]]):new Map()):providerBuckets(supplement,p,direction,currency,merchant,edges);
    if(!grouped)continue;
    providerReady.add(p.id);
    for(const [name,local] of grouped){
@@ -125,5 +172,5 @@
   return {dimension:'amount',direction,merchant:{columns,rows:merchants,ready:merchantReady,partial:merchantReady.size!==expected.size},
    provider:{columns,rows:providerRows,ready:providerReady,partial,excluded}};
  }
- root.HensemAmountRateData={build};
+ root.HensemAmountRateData={build,singleProviderBands};
 })(typeof window==='undefined'?globalThis:window);

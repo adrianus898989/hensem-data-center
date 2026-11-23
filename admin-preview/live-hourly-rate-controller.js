@@ -69,7 +69,19 @@
    const options={platforms,currency:L.currency,
     successAvailable:(p,r,d)=>(!r?._matrixDirections||r._matrixDirections.includes(d))&&c.successAvailable?.(p,r,d)!==false&&c.successAvailable?.(p,main.get(p.id),d)!==false};
    const provider=kind()==='provider',amount=isAmount();
-   const data=amount?{results:L.results,amountBands:bands(),providerAmounts:s.values}:{
+   const selected=amount&&c.canDrill()?c.selectedProviders?.():null;
+   if(selected?.length===1&&!s.singleProviders){
+    s.singleProviders=new Map();
+    for(const p of platforms){
+     const result=main.get(p.id);
+     if(!result)continue;
+     try{
+      const projection=root.HensemAmountRateData.singleProviderBands(p,result,c.query(p),selected[0]);
+      if(projection)s.singleProviders.set(p.id,projection);
+     }catch{/* Unsupported requests retain the native matrix fallback. */}
+    }
+   }
+   const data=amount?{results:L.results,amountBands:bands(),providerAmounts:s.values,singleProviders:selected?.length===1?s.singleProviders:null}:{
     results:platforms.map(p=>s.values.get(p.id)||main.get(p.id)).filter(Boolean),
     providerHours:provider?new Map([...s.values].map(([id,r])=>[id,{complete:true,rows:r.groups.provider_hour}])):new Map()
    };
@@ -88,7 +100,7 @@
   async function load(retry=false){
    if(!kind())return;
    const s=state();if(!s||s.denied||!c.canDrill()||s.controller||L.loading||L.queryRetrying||L.status!=='all'||L.direction!=='all')return;
-   const list=targets(s,kind()==='merchant'?modelsFor(s):[]).filter(p=>retry||!s.failures.has(p.id)).map(platform=>({platform}));
+   const list=targets(s,isAmount()||kind()==='merchant'?modelsFor(s):[]).filter(p=>retry||!s.failures.has(p.id)).map(platform=>({platform}));
    if(!list.length)return;
    const controller=new AbortController();s.controller=controller;
    let idx=0;const work=async()=>{while(idx<list.length&&active(s)&&!controller.signal.aborted){
