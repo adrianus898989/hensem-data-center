@@ -964,11 +964,11 @@
   const scope=[L.country,L.from&&L.to?L.from+' 至 '+L.to:'',L.successFrom&&L.successTo?'成功时间 '+L.successFrom+' 至 '+L.successTo:'',activeValues('provider','').join(' / ')||'全部三方'].filter(Boolean).join(' · ');
   const detail=status.missing.map(p=>'<div>'+E(p.name)+'：'+E(p.error||(active?'正在读取':'尚未完成'))+'</div>').join('');
   const details=detail?'<details><summary>查看未完成平台（'+C(status.missing.length)+'）</summary>'+
-   (state.page==='amount'&&scope?'<div data-aggregate-query-scope>'+E(scope)+'</div>':'')+detail+'</details>':'';
+   (state.page==='amount'?(scope?'<div data-aggregate-query-scope>'+E(scope)+'</div>':'')+(!status.done?'<div>未完成数据不按 0 计算。</div>':''):'')+detail+'</details>':'';
   const action=!active?'<button type="button" class="link" onclick="liveRetryFailed('+!!L.queryPaused+')">'+(L.queryPaused?'继续查询':'重试未完成平台')+'</button>':'';
   const style='live-status'+(!active&&!pendingOnly&&failures.length?' live-error':'');
   if(state.page==='amount')return '<div class="'+style+'" data-aggregate-read-status="compact" role="status"><strong>'+
-   (active?'读取中 '+C(status.done)+' / '+C(status.total)+' 平台':label+' · '+C(status.done)+' / '+C(status.total)+' 平台')+
+   (active?'读取中':label)+' · 已读 '+C(status.done)+' / '+C(status.total)+' 平台'+
    (status.done?' · 已读小计':'')+'</strong>'+action+details+'</div>';
   return '<div class="'+style+'" data-aggregate-read-status role="status"><strong>'+label+' · 已读 '+C(status.done)+' / '+C(status.total)+' 平台</strong>'+
    (status.done?'；以下仅为已读取结果（小计）。':'；未完成数据不按 0 计算。')+action+
