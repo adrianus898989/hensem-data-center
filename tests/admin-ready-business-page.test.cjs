@@ -7,7 +7,7 @@ const mainStart='2026-09-21T18:30:00.000Z',priorStart='2026-09-20T18:30:00.000Z'
 const reads=h=>h.calls.filter(q=>q.action==='aggregatePrepared');
 function result(p,natives=platforms){return {version:2,...(p.readMode?{readMode:p.readMode}:{}),items:p.requests.map(request=>{
  const r={...completeAggregate(natives.find(n=>n.id===request.platformId),100,40),version:1,startAt:request.startAt,endAt:request.endAt,...(request.successBasis==='created'?{successBasis:'created',capabilities:{successCohort:'created_at_current_stored_status',successMetricBasis:'created',independentSuccessWindow:false}}:{successStartAt:request.successStartAt,successEndAt:request.successEndAt,successBasis:request.successBasis})};
- if(request.amountBands)Object.assign(r.groups,{amount_range:[],matrix_range:[]});
+ if(request.amountBands){Object.assign(r,{amountBands:request.amountBands,amountBandsVersion:1});Object.assign(r.groups,{amount_range:[],matrix_range:[]});}
  const v={request,status:'ready',publication:{id:'synthetic-'+request.platformId+'-'+request.startAt,generation:1,computedAt:'2026-09-23T11:59:00Z',expiresAt:'2026-09-23T12:09:00Z',cutoff:'2026-09-23T11:00:00Z',calculationComplete:true,sourceComplete:false,freshness:'fresh',refreshState:'idle'},result:r};
  if(p.responseProfile){
   assert(['time-v1','amount-v1'].includes(p.responseProfile));
@@ -19,9 +19,9 @@ function result(p,natives=platforms){return {version:2,...(p.readMode?{readMode:
  })};}
 const other=q=>q.action==='rates'?{rows:[],total:0}:q.action==='providerOptions'?{providers:[]}:{};
 function dates(h){Object.assign(h.L,{from:'2026-09-22T00:00:00',to:'2026-09-22T23:59:59',successFrom:'',successTo:''});}
-async function setup(page,count=43,natives=platforms.slice(0,count)){
+async function setup(page,count=43,natives=platforms.slice(0,count),extraModules=[]){
  const h=harness({page,platforms:natives,roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true,
-  extraModules:['live-statistic-windows.js','live-prepared-aggregates.js',...(page==='amount'?['live-matrix-custom-range.js']:[])],beforeLive:c=>{c.HENSEM_PREPARED_READY_ONLY=true;c.HENSEM_AMOUNT_READY_ONLY=true;}});
+  extraModules:['live-statistic-windows.js','live-prepared-aggregates.js',...(page==='amount'?['live-matrix-custom-range.js']:[]),...extraModules],beforeLive:c=>{c.HENSEM_PREPARED_READY_ONLY=true;c.HENSEM_AMOUNT_READY_ONLY=true;}});
  await settle();dates(h);h.setHandler(q=>q.action==='aggregatePrepared'?result(q,natives):other(q));return h;
 }
 for(const page of ['teamops','teamcountries','teamplatforms'])test(page+' full current and provider comparison use two exact probes for 43 platforms',async()=>{
@@ -151,4 +151,105 @@ test('a genuine empty amount projection is usable while a failed platform cannot
  assert(!h.L.results.some(r=>r.platform.id===missing.id));
  assert(h.L.queryFailures.some(r=>r.id===missing.id));
  assert.deepEqual(reads(h).filter(p=>!p.readMode&&p.requests[0].startAt===mainStart).flatMap(p=>p.requests.map(q=>q.platformId)),[missing.id]);
+});
+
+// One real selected-provider range, deliberately placed on the last page.
+const feeDirectory=Array.from({length:1001},(_,id)=>({
+ id,scopeType:'country',country:'印度',provider:id===1000?'Synthetic provider':'Other '+id,
+ collectFee:'4%',collectLimit:'250-25000',payoutFee:'2%',payoutLimit:'500-100000'
+}));
+function feePage(offset,count=500,total=feeDirectory.length){
+ return {rows:feeDirectory.slice(offset,offset+count),total,offset,limit:500};
+}
+async function pendingFeeQuery(page='amount',configure=()=>{},refresh=false){
+ const h=await setup(page,1,undefined,['live-amount-bands.js']);
+ h.L.provider='Synthetic provider';h.L.multi.provider=[h.L.provider];configure(h);
+ const pending=[],original=h.c.hensemLiveRequest;
+ h.c.hensemLiveRequest=(request,options)=>{
+  if(request.action!=='rates')return original(request,options);
+  const gate=deferred();pending.push({...gate,request,signal:options.signal});return gate.promise;
+ };
+ const run=refresh?h.c.liveRefresh():h.c.liveQuery();await settle();
+ const offsets=()=>pending.map(p=>p.request.offset);
+ assert.deepEqual(offsets(),[0]);
+ return {h,pending,offsets,run};
+}
+
+test('historical India amount preflight waits for exact total then merges the two remaining fee pages in offset order',async()=>{
+ const {h,pending,offsets,run}=await pendingFeeQuery();
+ pending[0].resolve(feePage(0));await settle();assert.deepEqual(offsets(),[0,500,1000]);
+ assert(pending.every(({request})=>request.country==='IN'&&request.scopeType==='all'&&request.limit===500));
+ pending[2].resolve(feePage(1000));await settle();
+ assert.equal(h.L.feeLookupRows,null);assert.equal(reads(h).length,0);
+ pending[1].resolve(feePage(500));await run;await settle();
+ assert.deepEqual(Array.from(h.L.feeLookupRows,r=>r.id),feeDirectory.map(r=>r.id));
+ assert.deepEqual(offsets(),[0,500,1000]);assert.equal(h.L.results.length,1);
+ const current=reads(h).find(q=>q.requests[0].startAt===mainStart).requests[0];
+ assert.equal(current.amountBands.charge[0],250);assert.equal(current.amountBands.withdraw.at(-1),100000);
+});
+
+test('a short middle fee page resumes from the actual next offset and discards the speculative tail',async()=>{
+ const {h,pending,offsets,run}=await pendingFeeQuery();
+ pending[0].resolve(feePage(0));await settle();assert.deepEqual(offsets(),[0,500,1000]);
+ pending[2].resolve({...feePage(1000),rows:[{id:'unused speculative row'}]});
+ pending[1].resolve(feePage(500,318));await settle();assert.deepEqual(offsets(),[0,500,1000,818]);
+ assert.equal(h.L.feeLookupRows,null);assert.equal(reads(h).length,0);
+ pending[3].resolve(feePage(818));await run;await settle();
+ assert.equal(h.L.feeLookupError,'');
+ assert.deepEqual(Array.from(h.L.feeLookupRows,r=>r.id),feeDirectory.map(r=>r.id));
+});
+
+test('a short first fee page advances by its real length before any read-ahead',async()=>{
+ const {h,pending,offsets,run}=await pendingFeeQuery();
+ pending[0].resolve(feePage(0,275));await settle();assert.deepEqual(offsets(),[0,275]);
+ pending[1].resolve(feePage(275));await settle();assert.deepEqual(offsets(),[0,275,775]);
+ pending[2].resolve(feePage(775));await run;await settle();
+ assert.deepEqual(Array.from(h.L.feeLookupRows,r=>r.id),feeDirectory.map(r=>r.id));
+});
+
+for(const changedOffset of [500,1000])test('changed fee total at offset '+changedOffset+' never publishes a partial directory',async()=>{
+ const {h,pending,offsets,run}=await pendingFeeQuery();
+ pending[0].resolve(feePage(0));await settle();assert.deepEqual(offsets(),[0,500,1000]);
+ for(const p of pending.slice(1))p.resolve(feePage(p.request.offset,500,p.request.offset===changedOffset?1002:1001));
+ await run;await settle();
+ assert.equal(h.L.feeLookupRows,null);assert.match(h.L.feeLookupError,/目录不完整/);
+ assert.deepEqual(offsets(),[0,500,1000]);
+});
+
+for(const transition of ['navigate','permission denial'])test('late fee pages cannot publish after '+transition,async()=>{
+ const {h,pending,offsets,run}=await pendingFeeQuery();
+ pending[0].resolve(feePage(0));await settle();assert.deepEqual(offsets(),[0,500,1000]);
+ if(transition==='navigate'){
+  h.c.setPage('time');assert(pending.slice(1).every(p=>p.signal.aborted));
+ }else{
+  h.c.hensemRoleAllowed=(page,action)=>page!=='amount'||action!=='query';
+  pending[2].reject(Object.assign(Error('Synthetic grant revoked'),{code:'ADMIN_LIVE_PERMISSION_DENIED'}));
+  await settle();assert(pending[1].signal.aborted,'the still-pending sibling is cancelled');
+ }
+ for(const p of pending.slice(1))p.resolve(feePage(p.request.offset));
+ await run;await settle();assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.results.length,0);
+ assert.deepEqual(offsets(),[0,500,1000]);
+});
+
+for(const replacement of ['role','account'])test('successful late fee pages still recheck '+replacement+' authority',async()=>{
+ const {h,pending,offsets,run}=await pendingFeeQuery();
+ pending[0].resolve(feePage(0));await settle();assert.deepEqual(offsets(),[0,500,1000]);
+ pending[2].resolve(feePage(1000));await settle();
+ if(replacement==='role')h.c.hensemRoleAllowed=(page,action)=>page!=='amount'||action!=='query';
+ else h.c.hensemDataScope={mode:'selected',identity:'new synthetic account'};
+ pending[1].resolve(feePage(500));await run;await settle();
+ assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.results.length,0);
+});
+
+for(const name of ['time','matrix','unfinished amount','last half-second in India','explicit refresh','flag disabled'])test(name+' keeps sequential fee pagination',async()=>{
+ const page=['time','matrix'].includes(name)?name:'amount';
+ const {h,pending,offsets,run}=await pendingFeeQuery(page,h=>{
+  if(name==='unfinished amount'){h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';}
+  if(name==='last half-second in India')h.setNow('2026-09-22T18:29:59.500Z');
+  if(name==='flag disabled')h.c.HENSEM_AMOUNT_READY_ONLY=false;
+ },name==='explicit refresh');
+ pending[0].resolve(feePage(0));await settle();assert.deepEqual(offsets(),[0,500]);
+ pending[1].resolve(feePage(500));await settle();assert.deepEqual(offsets(),[0,500,1000]);
+ pending[2].resolve(feePage(1000));await run;await settle();
+ assert.deepEqual(Array.from(h.L.feeLookupRows,r=>r.id),feeDirectory.map(r=>r.id));
 });

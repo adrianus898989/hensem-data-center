@@ -286,13 +286,37 @@
   const serial=++L.feeLookupSerial,batch={controller:new AbortController(),cachedSnapshot:validFeeSnapshot(feeLookupSnapshot,context)?feeLookupSnapshot:null,context,countries:feeLookupCountries(),page:state.page,intent:feeLookupIntent,querySerial:L.serial,dirtyScope:force&&L.dirty?aggregateQueryScope():null};feeLookupBatch=batch;L.feeLookupLoading=true;L.feeLookupError='';render();
   const owned=()=>serial===L.feeLookupSerial&&feeLookupBatch===batch&&isCurrent();
   const authorized=()=>context===feeLookupContext()&&roleAllowed(state.page,'view')&&roleAllowed(state.page,'query');
-  try{const rows=[];for(const country of batch.countries||[null]){let total=null,offset=0;do{
-   const result=await readFeeLookupPage({action:'rates',scopeType:'all',...(country?{country}:{}),offset,limit:500},batch.controller.signal);if(!owned())return;
-   if(!authorized()){clearFeeLookupCache();syncFeeLookupIdentity();L.feeLookupError='费率查询范围或权限已变化，请点击查询或重试费率';render();return;}
-   if(!currentFeeIntent(batch)){cancelFeeLookup();return;}
-   const page=Array.isArray(result?.rows)?result.rows:null,nextTotal=result?.total;if(!page||typeof nextTotal!=='number'||!Number.isSafeInteger(nextTotal)||nextTotal<0||nextTotal>20000||(total!==null&&nextTotal!==total)||(!page.length&&offset<nextTotal)||offset+page.length>nextTotal||rows.length+page.length>20000)throw Error('费率目录不完整，请重试');total=nextTotal;offset+=page.length;rows.push(...page);
-  }while(offset<total);}feeLookupSnapshot={rows,context,readAt:Date.now()};L.feeLookupRows=rows;
-  }catch(e){if(!owned())return;if(state.page==='providers'&&L.providerReadMode==='published'&&window.HensemProviderPublished?.denied(e)){clearFeeLookupCache();clearPublishedAuthority();render();return;}feeLookupSnapshot=null;L.feeLookupError=e.message||'费率读取失败';L.feeLookupRows=null;
+  const pageSize=500;
+  const readAhead=!force&&preparedRefreshScope?.serial!==L.serial&&window.HENSEM_AMOUNT_READY_ONLY===true&&
+   batch.page==='amount'&&L.country==='印度'&&L.currency==='INR'&&batch.countries?.length===1&&batch.countries[0]==='IN'&&
+   L.status==='all'&&!window.HensemStatisticWindows?.hasSuccessWindow(L)&&L.from.slice(0,10)===L.to.slice(0,10)&&
+   L.from.endsWith('T00:00:00')&&L.to.endsWith('T23:59:59')&&Date.parse(L.to+'+05:30')+1000<=L.queryNow;
+  try{
+   const rows=[];
+   for(const country of batch.countries||[null]){
+    let total=null,offset=0,fullPage=false;
+    do{
+     // Page zero establishes the authorized total. Keep at most two requests in flight,
+     // and consume results in offset order using the same ownership and total checks.
+     const offsets=readAhead&&fullPage&&total-offset>pageSize?[offset,offset+pageSize]:[offset];
+     const pages=await Promise.all(offsets.map(start=>readFeeLookupPage({
+      action:'rates',scopeType:'all',...(country?{country}:{}),offset:start,limit:pageSize
+     },batch.controller.signal)));
+     if(!owned())return;
+     if(!authorized()){clearFeeLookupCache();syncFeeLookupIdentity();L.feeLookupError='费率查询范围或权限已变化，请点击查询或重试费率';render();return;}
+     if(!currentFeeIntent(batch)){cancelFeeLookup();return;}
+     for(const [index,result] of pages.entries()){
+      if(offsets[index]!==offset)break; // A short page shifts the next offset. Do not skip rows.
+      const page=Array.isArray(result?.rows)?result.rows:null,nextTotal=result?.total;
+      if(!page||typeof nextTotal!=='number'||!Number.isSafeInteger(nextTotal)||nextTotal<0||nextTotal>20000||
+         (total!==null&&nextTotal!==total)||(!page.length&&offset<nextTotal)||offset+page.length>nextTotal||rows.length+page.length>20000)
+       throw Error('费率目录不完整，请重试');
+      total=nextTotal;offset+=page.length;fullPage=page.length===pageSize;rows.push(...page);
+     }
+    }while(offset<total);
+   }
+   feeLookupSnapshot={rows,context,readAt:Date.now()};L.feeLookupRows=rows;
+  }catch(e){batch.controller.abort();if(!owned())return;if(state.page==='providers'&&L.providerReadMode==='published'&&window.HensemProviderPublished?.denied(e)){clearFeeLookupCache();clearPublishedAuthority();render();return;}feeLookupSnapshot=null;L.feeLookupError=e.message||'费率读取失败';L.feeLookupRows=null;
   }finally{const resumeTrend=owned()&&currentFeeIntent(batch)&&authorized()&&!phasedReadBusy()&&deferredMerchantTrend&&state.page==='merchants'&&L.view==='trend';if(feeLookupBatch===batch)feeLookupBatch=null;if(serial===L.feeLookupSerial){L.feeLookupLoading=false;render();window.liveMerchantFeeRefresh?.();if(resumeTrend){deferredMerchantTrend=false;void loadMerchantTrend();}}}
  }
  window.liveRetryFeeLookup=async()=>{if(!feeLookupPages.has(state.page)||!roleAllowed(state.page,'view')||L.feeLookupLoading)return Promise.resolve();await ensureFeeLookup(true);capturePublishedView();render()};
