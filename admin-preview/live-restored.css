@@ -81,5 +81,5 @@ body.live-admin .live-query-prompt{background:transparent;border:0;padding:4px 1
 body.live-admin :is(.live-table,.df-platform-table-scroll,.risk-monitor-scroll,.risk-compact-scroll,.report-table-wrap)>table>thead>tr>th{white-space:nowrap!important;word-break:normal;overflow-wrap:normal}
 body.live-admin :is(.live-table,.df-platform-table-scroll,.risk-monitor-scroll,.risk-compact-scroll,.report-table-wrap)>table>thead>tr>th>:is(button,a){white-space:nowrap;word-break:normal;overflow-wrap:normal}
 
-.compact-read-notice,.live-status[data-withdraw-publication="subtotal"]{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px}
-.compact-read-notice summary,.compact-comparison-status summary,.live-status[data-withdraw-publication="subtotal"] summary{cursor:pointer}
+[data-aggregate-read-status="compact"],.live-status[data-withdraw-publication="subtotal"]{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px}
+[data-aggregate-read-status="compact"] summary,.compact-comparison-status summary,.live-status[data-withdraw-publication="subtotal"] summary{cursor:pointer}
