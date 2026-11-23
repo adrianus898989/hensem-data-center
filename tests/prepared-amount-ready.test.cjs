@@ -227,3 +227,114 @@ test('guarded rollback restores the exact previous definition and private ACL; e
     assert.equal(await scalar("select has_function_privilege($1,'private.dashboard_serving_ready_read(text,jsonb)','execute')",[role]),false);
   }
 });
+
+require('node:test').describe('single-provider comparison uses native-platform alias selection', () => {
+  const installSubset = fs.readFileSync(path.join(maintenance, 'prepared-amount-provider-subset.sql'),'utf8');
+  const undoSubset = fs.readFileSync(path.join(maintenance, 'prepared-amount-provider-subset.rollback.sql'),'utf8');
+  let exactResolver;
+  before(async () => {
+    const original = await scalar("select pg_get_functiondef('private.dashboard_serving_ready_read(text,jsonb)'::regprocedure)");
+    await db.exec(original.replace('private.dashboard_serving_ready_read(', 'private.fixture_before_amount_subset('));
+    await db.exec('drop function private.dashboard_admin_live_provider_canonical(text,text,text)');
+    // A table with the same unique native key permits inserting synthetic mappings.
+    const native = fs.readFileSync(path.join(__dirname,'fixtures/deposit-recovery-provider-batch-dependencies.sql'),'utf8')
+      .replace('create materialized view private.dashboard_admin_provider_registry','create table private.dashboard_admin_provider_registry');
+    await db.exec(native);
+    const projection = fs.readFileSync(path.join(__dirname,'fixtures/prepared-interactive-refresh/fixtures/dashboard_prepared_provider_projection.sql'),'utf8');
+    await db.exec(projection);
+    await db.exec('revoke all on function private.dashboard_prepared_provider_projection(jsonb,jsonb,jsonb) from public,anon,authenticated,service_role');
+    exactResolver = await scalar("select pg_get_functiondef('private.dashboard_admin_live_provider_canonical(text,text,text)'::regprocedure)");
+    await db.exec(installSubset);
+  });
+  beforeEach(async () => {
+    await db.exec('truncate private.dashboard_admin_provider_registry,private.dashboard_admin_provider_overrides');
+  });
+  const baselineRead = qs => scalar('select private.fixture_before_amount_subset($1,$2)',['amount',JSON.stringify({readMode:'ready-only-v1',publicationVersion:2,requests:qs})]);
+  const currentRead = qs => read(qs,{profile:null});
+  const query = (i,label,direction='all') => ({...prior(i), providers:[label],direction});
+  async function fixture(i, leaves, rename) {
+    await seed(i,{allProviders:true});
+    const normal = e.f.target(i);
+    const target = rename ? {...normal,name:rename,source_name:rename} : normal;
+    if (rename) {
+      await db.query('update private.fixture_targets set name=$1,source_name=$1 where id=$2',[rename,normal.id]);
+      await db.query("update private.prepared_aggregate_jobs set target=$1 where target->>'id'=$2",[JSON.stringify(target),normal.id]);
+      await db.exec('update private.prepared_aggregate_jobs set request_key=private.prepared_aggregate_key(request,target);update private.prepared_aggregate_jobs set request_fingerprint=md5(request_key::text)');
+    }
+    await db.query("update private.prepared_aggregate_artifacts a set payload=jsonb_set(jsonb_set(payload,'{platform}',(payload->'platform')||jsonb_build_object('name',$1::text,'sourceName',$1::text)),'{groups,provider}',$2::jsonb) from private.prepared_aggregate_jobs j where j.id=a.job_id and j.target->>'id'=$3",
+      [target.source_name,JSON.stringify(leaves),normal.id]);
+  }
+  const leaf = (name, dir='withdraw', extra={}) => e.f.row(name,dir,extra);
+  const registry = (platform,raw,values) => db.query('insert into private.dashboard_admin_provider_registry(country,platform,raw_provider,canonical_values)values($1,$2,$3,$4)',['印度',platform,raw,values]);
+  const override = (platform,raw,name) => db.query('insert into private.dashboard_admin_provider_overrides values($1,$2,$3,$4,1,now(),gen_random_uuid())',['印度',platform,raw,name]);
+  async function equal(qs) {
+    const expected = await baselineRead(qs);
+    const state = await e.snapshot();
+    const result = await currentRead(qs);
+    assert.deepEqual(result,expected);
+    assert.deepEqual(await e.snapshot(),state);
+    return result.items;
+  }
+  test('native aliases are not shared across platforms and every matched leaf, duplicate, clock and amount is preserved',async () => {
+    const names = [leaf('CedarPay'),leaf('CedarPayINR'),leaf('raw-one'),leaf('raw-one','charge'),leaf('raw-one'),leaf('raw-many'),leaf('force'),leaf('unrelated')];
+    await fixture(1,names); await fixture(2,names);
+    await registry('PLATFORM-1','raw-one',['CedarPayINR']); await registry('PLATFORM-2','raw-one',['Different']);
+    await registry('PLATFORM-1','raw-many',['A','B']); await registry('PLATFORM-1','force',['Different']);
+    await override('PLATFORM-1','force','CedarPayINR');
+    const items = await equal([query(1,'CedarPayINR'),query(2,'CedarPayINR')]);
+    const names1 = items[0].result.groups.provider.map(x=>x.provider);
+    assert.equal(names1.filter(n=>n==='raw-one').length,3);
+    assert.ok(names1.includes('force'));
+    assert.ok(!names1.includes('raw-many'));
+    assert.ok(!items[1].result.groups.provider.some(x=>x.provider==='raw-one'));
+    await equal([query(1,'CedarPayINR','withdraw'),query(2,'raw-many','charge')]);
+    await equal([query(1,'No such provider')]);
+  });
+  test('YASH WinPay native exception and its owner override both match the previous projector',async () => {
+    const names = [leaf('WinPay'),leaf('NewWinPay'),leaf('CedarPayINR'),leaf('other')];
+    await fixture(1,names,'YASH.BET');
+    let items = await equal([query(1,'NewWinPay')]);
+    assert.ok(items[0].result.groups.provider.some(r=>r.provider==='WinPay'));
+    await override('YASH.BET','WinPay','TestOverride');
+    items = await equal([query(1,'TestOverride')]);
+    assert.ok(items[0].result.groups.provider.some(r=>r.provider==='WinPay'));
+  });
+  test('empty, tiny and multi-provider inputs retain the previous semantics, including malformed unrelated leaves',async () => {
+    await fixture(1,[]); await fixture(2,[leaf('CedarPayINR')]);
+    await equal([query(1,'CedarPayINR'),query(2,'CedarPayINR')]);
+    await fixture(3,[leaf('CedarPayINR'),leaf('CedarPay'),leaf('unrelated'),leaf('other')]);
+    await equal([{...query(3,'CedarPayINR'),providers:['CedarPayINR','CedarPay']}]);
+    await db.exec("update private.prepared_aggregate_artifacts set payload=jsonb_set(payload,'{groups,provider,3,direction}','null') where jsonb_array_length(payload#>'{groups,provider}')=4");
+    await assert.rejects(baselineRead([query(3,'CedarPayINR')]), {code:'22023'});
+    await assert.rejects(currentRead([query(3,'CedarPayINR')]), {code:'22023'});
+  });
+  test('provider-only heads preserve zero totals, null monetary evidence and unrelated native payload members',async () => {
+    const leaves=[leaf('CedarPayINR','withdraw',{all_count:0,all_amount:null,success_amount:null,fee_unpriced_count:0,created_success_count:0}),leaf('CedarPayINR','charge',{all_count:0,all_amount:'0'}),leaf('CedarPay'),leaf('other')];
+    await fixture(1,leaves);
+    await db.exec(`update private.prepared_aggregate_jobs set request=(request-array['amountBands','durationVersion'])||'{"view":"providers"}'::jsonb;
+      update private.prepared_aggregate_jobs set request_key=private.prepared_aggregate_key(request,target);
+      update private.prepared_aggregate_jobs set request_fingerprint=md5(request_key::text);
+      update private.prepared_aggregate_artifacts set payload=(payload-array['amountBands','amountBandsVersion','durationVersion'])
+       ||jsonb_build_object('groups',jsonb_build_object('provider',payload#>'{groups,provider}'),'customNativeEvidence','{"status":"pending","cutoff":null}'::jsonb)`);
+    const [item]=await equal([query(1,'CedarPayINR','withdraw')]);
+    assert.equal(item.status,'ready');
+    assert.deepEqual(item.result.customNativeEvidence,{status:'pending',cutoff:null});
+    assert.equal(item.result.groups.provider[0].all_amount,null);
+    assert.equal(item.result.total,0);
+    assert.equal(item.publication.sourceComplete,false);
+  });
+  test('a changed native classifier automatically falls back, preserving newly classified labels',async () => {
+    await fixture(1,[leaf('new-label'),leaf('CedarPayINR'),leaf('old-label'),leaf('other')]);
+    try {
+      await db.exec("create or replace function private.dashboard_admin_live_provider_canonical(p_country text,p_platform text,p_raw text) returns text language sql stable security definer set search_path='' as $$select case when p_raw='new-label' then 'CedarPayINR' else p_raw end$$");
+      const items = await equal([query(1,'CedarPayINR')]);
+      assert.ok(items[0].result.groups.provider.some(x=>x.provider==='new-label'));
+    } finally { await db.exec(exactResolver); }
+  });
+  test('the independent rollback restores the deployed batch reader and ACL exactly',async () => {
+    await db.exec(undoSubset);
+    assert.equal(await scalar("select md5(pg_get_functiondef('private.dashboard_serving_ready_read(text,jsonb)'::regprocedure))"),'a556549c122d06bc0c4a92a9a795aafc');
+    await db.exec(installSubset);
+    for (const role of ['anon','authenticated','service_role']) assert.equal(await scalar("select has_function_privilege($1,'private.dashboard_serving_ready_read(text,jsonb)','execute')",[role]),false);
+  });
+});
