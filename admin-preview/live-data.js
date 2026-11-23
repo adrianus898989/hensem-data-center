@@ -967,7 +967,7 @@
    (state.page==='amount'&&scope?'<div data-aggregate-query-scope>'+E(scope)+'</div>':'')+detail+'</details>':'';
   const action=!active?'<button type="button" class="link" onclick="liveRetryFailed('+!!L.queryPaused+')">'+(L.queryPaused?'继续查询':'重试未完成平台')+'</button>':'';
   const style='live-status'+(!active&&!pendingOnly&&failures.length?' live-error':'');
-  if(state.page==='amount')return '<div class="'+style+' compact-read-notice" data-aggregate-read-status role="status"><strong>'+
+  if(state.page==='amount')return '<div class="'+style+'" data-aggregate-read-status="compact" role="status"><strong>'+
    (active?'读取中 '+C(status.done)+' / '+C(status.total)+' 平台':label+' · '+C(status.done)+' / '+C(status.total)+' 平台')+
    (status.done?' · 已读小计':'')+'</strong>'+action+details+'</div>';
   return '<div class="'+style+'" data-aggregate-read-status role="status"><strong>'+label+' · 已读 '+C(status.done)+' / '+C(status.total)+' 平台</strong>'+
