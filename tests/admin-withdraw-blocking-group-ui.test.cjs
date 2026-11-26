@@ -5,6 +5,29 @@ const escape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>'
 function fixture(response){let html='',page;const calls=[],root={Intl,Date,document:{querySelector(){return null},getElementById(){return null}},HensemLiveFilters:{multi(){return ''}}};root.window=root;vm.createContext(root);vm.runInContext(source,root);const draw=()=>{html=page.render()};page=root.HensemLiveWithdrawPages.create({L:{catalogReady:true,catalog:[{country:'印度',name:'SYNTHETIC'}],country:'印度',from:'2026-09-26T00:00:00',to:'2026-09-26T23:59:59'},E:escape,N:String,C:String,R:(n,d)=>d?(100*n/d).toFixed(2)+'%':'—',page:()=> 'auto_withdraw',box:(_,body)=>body,table:(headers,rows)=>'<table>'+headers.join('|')+rows.map(r=>'<tr>'+r.map(v=>'<td>'+v+'</td>').join('')+'</tr>').join('')+'</table>',request:async q=>{calls.push(q);return typeof response==='function'?response(q):response},render:draw});page.state.data={country:'印度',rows:[{country:'印度',platform:'SYNTHETIC'}],totals:{},notes:[]};page.state.reason={country:'印度',platform:'SYNTHETIC',date:'2026-09-26',kind:'blocking'};page.state.reasonData=typeof response==='function'?response({offset:0}):response;draw();return {root,page,calls,html:()=>html,draw};}
 const settle=async()=>{for(let i=0;i<3;i++)await new Promise(setImmediate)};
 const grouped={available:true,source:'Synthetic',noteCount:120,total:2,canViewOrders:true,coverage:{collected:160},rows:[{reason:'首存金额超过19999',reasonKey:'a'.repeat(32),sourceReason:'首存金额大于19999,首存金额:25000',sourceVariantCount:7,count:90},{reason:'首存金额超过29999',reasonKey:'b'.repeat(32),sourceReason:'首存金额大于29999,首存金额:35000',sourceVariantCount:3,count:30}]};
+test('all reason order lists keep the order number, formatted amount and order status in distinct cells',()=>{
+ const formats=[undefined,'yash_withdraw_notes_v1','game66_withdraw_notes_v1','duoli_withdraw_source_notes_v1','lg_business_notes_v1'];
+ for(const sourceNoteFormat of formats){
+  const rows=['1234.567',0,null,' ','invalid'].map((amount,index)=>({orderNumber:'ID<'+index+'>',amount,currency:'INR',status:'已驳回'}));
+  const h=fixture({...grouped,sourceNoteFormat,canViewBlockingOrders:true,rows,total:rows.length});
+  for(const kind of sourceNoteFormat==='lg_business_notes_v1'?['orders']:['orders','blockingOrders']){
+   h.page.state.reason.kind=kind;h.draw();
+   const list=h.html().match(/<table>(订单号[^<]+)(<tr>[\s\S]*?)<\/table>/);
+   assert.ok(list,(sourceNoteFormat||'generic')+' '+kind);
+   const headers=list[1].split('|'),status=headers.findIndex(label=>label.includes('订单状态'));
+   assert.deepEqual(headers.slice(0,2),['订单号','金额']);assert(status>1);
+   const orders=Array.from(list[2].matchAll(/<tr>(.*?)<\/tr>/gs),row=>Array.from(row[1].matchAll(/<td>(.*?)<\/td>/gs),cell=>cell[1]));
+   assert.equal(orders.length,rows.length);
+   for(const [i,cells] of orders.entries()){
+    assert.equal(cells.length,headers.length);assert.match(cells[0],new RegExp('>ID&lt;'+i+'&gt;</strong>$'));
+    assert.equal(cells[status],'已驳回');
+   }
+   assert.equal(orders[0][1],'<span>1,234.567 INR</span>');
+   assert.equal(orders[1][1],'<span>0.00 INR</span>');
+   assert.deepEqual(orders.slice(2).map(row=>row[1]),['—','—','—']);
+  }
+ }
+});
 test('grouped first-deposit thresholds stay distinct while the full original remains readable',()=>{const h=fixture(grouped);assert.match(h.html(),/>首存金额超过19999<\/button>/);assert.match(h.html(),/>首存金额超过29999<\/button>/);assert.match(h.html(),/已合并 7 种原文/);assert.match(h.html(),/75\.00%/);assert.match(h.html(),/25\.00%/);assert.match(h.html(),/共 2 条/);h.root.withdrawReasonOriginal(grouped.rows[0].sourceReason,'自动出款拦截原文（代表样本）');assert.match(h.html(),/aria-label="自动出款拦截原文（代表样本）"/);assert.match(h.html(),/<pre>首存金额大于19999,首存金额:25000<\/pre>/);});
 test('reason paging uses grouped category count and keeps the total-note denominator',async()=>{const h=fixture(q=>({...grouped,total:21,rows:q.offset?[grouped.rows[1]]:grouped.rows}));h.root.withdrawReasonPage(2);await settle();assert.equal(h.calls[0].kind,'blocking');assert.equal(h.calls[0].offset,20);assert.equal(h.calls[0].limit,20);assert.match(h.html(),/共 21 条 · 21–21/);assert.match(h.html(),/2 \/ 2/);assert.match(h.html(),/25\.00%/);assert.match(h.html(),/disabled onclick="withdrawReasonPage\(3\)"/);});
 test('existing rejection-original order drilldown retains its own key and source scope',async()=>{const reasonKey='c'.repeat(32),h=fixture({...grouped,rows:[{reason:'原始驳回说明',sourceReason:'原始驳回说明',reasonKey,count:12}]});h.page.state.reason.kind='rejection';h.root.withdrawReasonDrill(0,'reason');await settle();assert.equal(h.calls[0].kind,'orders');assert.equal(h.calls[0].reasonKey,reasonKey);assert.equal(h.calls[0].country,'印度');assert.equal(h.calls[0].platform,'SYNTHETIC');assert.equal(h.calls[0].date,'2026-09-26');assert.equal(h.calls[0].offset,0);});

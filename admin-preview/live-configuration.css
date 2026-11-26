@@ -127,11 +127,6 @@ body.live-admin .withdraw-distribution-table td:first-child{max-width:600px;min-
 body.live-admin .withdraw-distribution-table th{background:#f5f8fd;color:#7186a8}
 body.live-admin .withdraw-distribution-table td{padding-top:14px;padding-bottom:14px}
 body.live-admin .withdraw-distribution-table td:last-child{white-space:nowrap}
-body.live-admin .withdraw-order-table table{min-width:960px;table-layout:fixed}
-body.live-admin .withdraw-order-table th:nth-child(1){width:19%}
-body.live-admin .withdraw-order-table th:nth-child(2){width:32%}
-body.live-admin .withdraw-order-table th:nth-child(3){width:13%}
-body.live-admin .withdraw-order-table th:nth-child(4){width:17%}
 body.live-admin .withdraw-order-table td{vertical-align:top;text-align:left;white-space:normal;overflow-wrap:anywhere;line-height:1.7;max-width:none}
 body.live-admin .withdraw-order-number{font-size:11px;font-weight:600;overflow-wrap:anywhere}
 body.live-admin .withdraw-reason-category{display:inline-block;padding:3px 7px;margin-bottom:7px;color:#4b68a2;background:#edf3ff;border-radius:4px;font-size:11px}
@@ -272,11 +267,14 @@ body.live-admin .workorder-summary-metrics .live-metric strong{font-size:16px;li
 
 /* Order remarks stay inside their own column; complete originals open on click. */
 body.live-admin .withdraw-order-table table{width:100%;min-width:1120px;table-layout:fixed}
-body.live-admin .withdraw-order-table th:nth-child(1){width:240px}
-body.live-admin .withdraw-order-table th:nth-child(2){width:30%}
-body.live-admin .withdraw-order-table th:nth-child(3){width:128px}
-body.live-admin .withdraw-order-table th:nth-child(4){width:178px}
-body.live-admin .withdraw-order-table th:nth-child(5){width:auto}
+body.live-admin .withdraw-order-table th:first-child{width:210px}
+body.live-admin :is(.withdraw-order-table,.withdraw-blocking-orders) th:nth-child(2){width:136px}
+body.live-admin :is(.withdraw-order-table,.withdraw-blocking-orders) :is(th,td):nth-child(2){text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+body.live-admin .withdraw-order-table th:nth-child(3){width:98px}
+body.live-admin .withdraw-order-table:not(.withdraw-rejected-orders) th:last-child,
+body.live-admin .withdraw-rejected-orders th:nth-child(6){width:166px}
+body.live-admin .withdraw-order-table:not(.withdraw-rejected-orders) th:nth-last-child(2),
+body.live-admin .withdraw-rejected-orders th:nth-child(5){width:112px}
 body.live-admin .withdraw-order-table td{min-width:0;overflow:hidden}
 body.live-admin .withdraw-order-table .withdraw-source-note{width:100%;min-width:0;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 body.live-admin .withdraw-order-table .withdraw-order-number,body.live-admin .withdraw-order-table .withdraw-operator-name{display:block;max-width:100%;white-space:nowrap;overflow-wrap:normal;word-break:normal;overflow:hidden;text-overflow:ellipsis}
@@ -377,7 +375,7 @@ body.live-admin .wo-analysis-basis{font-size:10px;margin:6px 0 8px}
 @media(max-width:650px){body.live-admin .wo-analysis-grid.wo-analysis-counts{grid-template-columns:1fr}body.live-admin .wo-linkage-values{grid-template-columns:1fr}}
 body.live-admin .withdraw-blocking-orders table{min-width:1280px}
 body.live-admin .withdraw-blocking-orders td{vertical-align:top;text-align:left}
-body.live-admin .withdraw-blocking-orders td:nth-child(5){min-width:260px;max-width:380px;white-space:normal;overflow-wrap:anywhere}
+body.live-admin .withdraw-blocking-orders td:nth-child(6){min-width:260px;max-width:380px;white-space:normal;overflow-wrap:anywhere}
 body.live-admin .withdraw-drawer .withdraw-filter-chip{flex-wrap:wrap}
 
 body.live-admin .config-platform-filters{display:grid;grid-template-columns:repeat(5,minmax(125px,1fr)) auto;gap:10px;align-items:end}

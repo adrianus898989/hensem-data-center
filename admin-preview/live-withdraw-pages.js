@@ -24,8 +24,12 @@
   const sourceNote=(value,empty='（源备注为空）',title='驳回原文',label='',exact=false)=>{const sanitized=S.reasonData?.reasonTextSanitized===true&&S.reasonData?.reasonTextFormat==='sanitized_label_v1';if(sanitized&&title!=='备注来源状态')title='采集说明（已脱敏）';const raw=String(value??''),full=exact?(raw.trim()?raw:empty):cleanNote(value)||empty,preview=label||(full.length>96?full.slice(0,96)+'…':full);return '<button type="button" class="withdraw-source-note" title="'+(title==='备注来源状态'?'点击查看备注来源状态':sanitized?'点击查看采集说明（已脱敏）':'点击查看完整原文')+'" onclick="withdrawReasonOriginal('+jsArgument(full)+','+jsArgument(title)+(exact?',true':'')+')">'+E(preview)+'</button>'};
   const rejectionSourceNote=(value,row={})=>{if(row.rejectionNoteState==='withheld'){const labels={remark:'主备注',front:'前台备注',back:'后台备注'},sources=(row.hiddenNoteSources||[]).map(key=>labels[key]).filter(Boolean);return sourceNote(null,'（'+(sources.length?sources.join('、'):'源业务备注')+'已隐藏，驳回备注待核对）','备注来源状态','',true)}if(row.rejectionNoteState==='missing')return sourceNote(null,'（未采集到明确驳回备注）','备注来源状态','',true);if(row.rejectionNoteState==='empty')return sourceNote(null,'（源备注为空）','备注来源状态','',true);return sourceNote(value,'（源备注为空）','驳回原文','',true)};
   const sourceNoteStates=row=>{if(!row.sourceNoteStates)return '';const labels={remark:'主备注',front:'前台备注',back:'后台备注'},hidden=new Set(row.hiddenNoteSources||[]);return '<small class="cell-sub">'+Object.entries(labels).map(([key,label])=>{const state=row.sourceNoteStates[key],text=key==='front'&&row.verifiedRejectionNote?.sourceField==='frontRemark'&&row.verifiedRejectionNote?.verificationMethod==='manual_source_ui'?'已在源站核实':state==='empty'?'为空':hidden.has(key)?state==='redacted'?'部分已隐藏':'已隐藏':state==='template'?'已采集业务模板':'未取得可用文本';return E(label+'：'+text)}).join(' · ')+'</small>'};
-  const reasonSemantics=new Map();
-  let reasonSnapshot=null,reasonRead=null;
+  const reasonSemantics=new Map(),reasonCache=new Map();
+  let reasonRead=null;
+  function clearReasonCache(semanticScope){
+   if(semanticScope===undefined){reasonCache.clear();return;}
+   for(const [key,entry] of reasonCache)if(entry.semanticScope===semanticScope)reasonCache.delete(key);
+  }
   function stopReasonRead(){const job=reasonRead;reasonRead=null;S.reasonBusy=false;if(job){root.clearTimeout?.(job.pollTimer);root.clearTimeout?.(job.deadlineTimer);job.controller?.abort();job.cancel();}}
   const view=()=>ctx.page()==='withdraw_operators'?'operators':'auto';
   const sumKey=()=>view()==='operators'?'processed':'total';
@@ -36,7 +40,7 @@
   const resultDaily=()=>S.applied?.query.daily??S.daily;
   const displayAllowed=p=>root.HensemLiveReportData?.displayAllowed?.(p)!==false;
   const accessKey=()=>{const a=root.hensemRoleAccess||{},s=root.hensemDataScope||{},entries=[...(L.catalog||[]),...(L.withdrawCatalog||[])].map(p=>JSON.stringify([p.id||'',p.source||p.system||'',p.identityCountry??p.country,p.sourceName||p.source_name||p.name,p.team||'',p.scopeGroup||p.scope_group||'',displayAllowed(p)])).sort();return JSON.stringify([s.mode||'document',s.identity||'document',a.mode||'document',a.roleId||'',a.version??null,a.assignmentVersion??null,a.canView??null,Array.isArray(a.permissions)?a.permissions.slice().sort():[],entries]);};
-  function clearResult(){reasonSnapshot=null;reasonSemantics.clear();S.serial++;stopRead();stopReasonRead();S.reasonSerial++;setLoading(false);Object.assign(S,{applied:null,data:null,dataKey:'',loadingKey:'',localSnapshot:false,serverPaging:false,reason:null,reasonData:null,reasonBusy:false,reasonError:'',reasonSelectionChanged:false,reasonLabel:'',reasonQuery:'',reasonSelectionGrouping:'',originalNote:'',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false,prepared:null,error:'',dirty:true});}
+  function clearResult(){clearReasonCache();reasonSemantics.clear();S.serial++;stopRead();stopReasonRead();S.reasonSerial++;setLoading(false);Object.assign(S,{applied:null,data:null,dataKey:'',loadingKey:'',localSnapshot:false,serverPaging:false,reason:null,reasonData:null,reasonBusy:false,reasonError:'',reasonSelectionChanged:false,reasonLabel:'',reasonQuery:'',reasonSelectionGrouping:'',originalNote:'',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false,prepared:null,error:'',dirty:true});}
   const retiredYashClassification=data=>{
    const retired=value=>value?.classificationBasis==='confirmed_manual_only';
    // Retire only the superseded YASH policy, including saved tabs and prior rows.
@@ -79,7 +83,7 @@
    }
    return base;
   }
-  function invalidate(){ctx.onDraft?.();reasonSnapshot=null;S.serial++;stopRead();stopReasonRead();setLoading(false);S.loadingKey='';S.error='';S.prepared=null;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;}
+  function invalidate(){ctx.onDraft?.();clearReasonCache();S.serial++;stopRead();stopReasonRead();setLoading(false);S.loadingKey='';S.error='';S.prepared=null;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;}
   function preparedProgress(prepared){
    const p=prepared.progress;if(p==null)return null;
    if(prepared.contract!=='withdraw-independent-windows-v2'||prepared.status!=='building'||p.contract!=='withdraw-stages-v1'||typeof p.generation!=='string'||!/^[a-f0-9]{32}$/.test(p.generation)
@@ -89,7 +93,7 @@
    return {generation:p.generation,done:p.doneParts,at:Date.parse(p.lastProgressAt),running:p.running};
   }
   async function load(reset=false,override=null){
-   resultAllowed();stopReasonRead();reasonSnapshot=null;S.reasonSerial++;S.reason=null;S.reasonData=null;
+   resultAllowed();stopReasonRead();clearReasonCache();S.reasonSerial++;S.reason=null;S.reasonData=null;
    if(!L.catalogReady)return;if(reset)S.page=1;
    if(root.hensemRoleAccess?.canView===false)return;
    const scope=override?.applied.scopeKey||selectionKey();
@@ -382,11 +386,24 @@
    if(!reasonSemanticCompatible(data,semanticScope))throw Error('原因规则已更新，旧组合统计不再展示，请重试。');
    if(data.reasonGrouping!==atomicGrouping||reasonSemantics.has(semanticScope))return;
    reasonSemantics.set(semanticScope,atomicGrouping);
-   if(reasonSnapshot?.semanticScope===semanticScope)reasonSnapshot=null;
+   clearReasonCache(semanticScope);
   }
   const blockingReasonLabel=(value,row={})=>cleanNote(value)==='检测没备注'?(row.noteState==='unknown'?'未采集到说明':row.noteState==='present'?cleanNote(value):'未记录拦截说明'):cleanNote(value);
   const missingBlockingHelp='已计入人工处理，但当前采集记录没有可用拦截说明；具体转人工原因待核对，不代表提现失败。';
   const blockingSourceNote=(value,row={})=>row.noteState==='unknown'?sourceNote(null,'（未采集到说明，源字段是否为空尚未核验）','备注来源状态','',true):row.blockingNoteState==='withheld'?sourceNote(null,'（拦截说明已隐藏，具体原因待核对）','备注来源状态','',true):row.blockingNoteState==='empty'?sourceNote(null,'（采集字段为空，具体转人工原因待核对）','备注来源状态','',true):row.blockingNoteState==='missing'?sourceNote(null,'（未采集到明确拦截说明）','备注来源状态','',true):sourceNote(value,'（当前采集记录未提供拦截说明）','自动出款拦截原文');
+  function reasonOrderTable(headers,rows,details,classes){
+   return table(['订单号','金额',...headers],rows.map(row=>{
+    const id=E(row.orderNumber||'—'),value=row.amount;
+    const numericText=['number','string'].includes(typeof value)&&known(value)?String(value).trim():'';
+    const decimal=numericText.match(/^([+-]?)(\d*)(?:\.(\d*))?$/);
+    const currency=row.currency?' '+E(row.currency):'';
+    const formatted=decimal&&(decimal[2]||decimal[3])
+     ?decimal[1]+(decimal[2]||'0').replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+(decimal[3]||'').padEnd(2,'0')
+     :/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)e[+-]?\d+$/i.test(numericText)?numericText:'';
+    const amount=formatted?'<span>'+E(formatted)+currency+'</span>':'—';
+    return ['<strong class="withdraw-order-number" title="'+id+'">'+id+'</strong>',amount,...details(row)];
+   }),'withdraw-reason-table '+classes);
+  }
   function yashNotesBody(d,r){
    const blocking=blockingKinds.includes(r.kind),rows=d.rows||[],states=d.summary?.sourceNoteStates||{},count=d.noteCount,field=blocking?'风控备注':'订单备注';
    const note=(value,state)=>state==='missing'?'<span class="muted">未采集'+field+'（含超长未保留）</span>':state==='empty'?'<span class="muted">源'+field+'为空</span>':sourceNote(value,'（说明未提供）','采集说明（已脱敏）','',true);
@@ -394,7 +411,7 @@
    if(['orders','blockingOrders'].includes(r.kind)){
     body+='<form class="withdraw-order-search" onsubmit="event.preventDefault();withdrawReasonSearch()" onkeydown="withdrawReasonQueryKey(event)"><input aria-label="搜索订单号" type="search" maxlength="200" placeholder="搜索订单号" value="'+E(S.reasonQuery)+'" oninput="withdrawReasonQuery(this.value)"><button class="btn" type="button" onclick="withdrawReasonSearch()">搜索订单</button></form>';
     if(r.kind==='blockingOrders')body+='<div class="withdraw-filter-chip">当前说明：'+E(S.reasonLabel||'所选说明')+' <button class="link" onclick="withdrawReasonKind(\'blocking\')">返回风控备注</button></div>';
-    body+=table(['订单号 / 金额','订单状态','订单备注（已脱敏）','风控备注（已脱敏）','最后操作人','申请 / 完成时间'],rows.map(x=>['<strong>'+E(x.orderNumber||'—')+'</strong><small class="cell-sub">'+E(x.amount??'—')+' '+E(x.currency||'')+'</small>',E(x.status||'—'),x.orderNoteState==='missing'?'<span class="muted">未采集订单备注（含超长未保留）</span>':x.orderNoteState==='empty'?'<span class="muted">源订单备注为空</span>':sourceNote(x.orderNote,'（说明未提供）','采集说明（已脱敏）','',true),x.riskNoteState==='missing'?'<span class="muted">未采集风控备注（含超长未保留）</span>':x.riskNoteState==='empty'?'<span class="muted">源风控备注为空</span>':sourceNote(x.riskNote,'（说明未提供）','采集说明（已脱敏）','',true),E(x.operator||'—'),E(x.createdAt||'—')+'<small class="cell-sub">'+E(x.completedAt||'—')+'</small>']),'withdraw-reason-table withdraw-order-table');
+    body+=reasonOrderTable(['订单状态','订单备注（已脱敏）','风控备注（已脱敏）','最后操作人','申请 / 完成时间'],rows,x=>[E(x.status||'—'),x.orderNoteState==='missing'?'<span class="muted">未采集订单备注（含超长未保留）</span>':x.orderNoteState==='empty'?'<span class="muted">源订单备注为空</span>':sourceNote(x.orderNote,'（说明未提供）','采集说明（已脱敏）','',true),x.riskNoteState==='missing'?'<span class="muted">未采集风控备注（含超长未保留）</span>':x.riskNoteState==='empty'?'<span class="muted">源风控备注为空</span>':sourceNote(x.riskNote,'（说明未提供）','采集说明（已脱敏）','',true),E(x.operator||'—'),E(x.createdAt||'—')+'<small class="cell-sub">'+E(x.completedAt||'—')+'</small>'],'withdraw-order-table');
    }else if(r.kind==='operators')body+=table(['最后操作人','驳回笔数','未采集或源空备注','详情'],rows.map((x,i)=>[E(x.operator||'—'),C(x.count),C(x.missingReasonCount),'<button class="btn small" onclick="withdrawReasonDrill('+i+',\'operator\')">查看订单</button>']),'withdraw-reason-table');
    else body+=table([field+'（已脱敏）','笔数',blocking?'占已入库提现订单':'占已入库驳回订单','详情'],rows.map((x,i)=>[note(x.sourceReason,x.noteState),C(x.count),known(count)&&Number(count)>0?R(x.count,count):'—','<button class="btn small" onclick="'+(blocking?'withdrawBlockingDrill('+i+',\'blockingOrders\')':'withdrawReasonDrill('+i+',\'category\')')+'">查看订单</button>']),'withdraw-reason-table withdraw-distribution-table');
    if(!rows.length)body+='<div class="live-empty">'+(d.coverage?.complete===true?'当前筛选无记录。':'当前条件下没有已入库记录；不能据此推定源站没有数据。')+'</div>';
@@ -408,7 +425,7 @@
    let body='<div class="withdraw-reason-summary">'+[['已入库'+(blocking?'提现':'驳回')+'订单',count],['有业务备注',states.present],['源字段为空',states.empty],['未取得备注',states.missing]].map(([label,value])=>'<div><span>'+label+'</span><strong>'+(known(value)?C(value):'—')+'</strong></div>').join('')+'</div><p class="withdraw-denominator">'+(blocking?'展示源自动出款备注，可能记录审核拦截说明；不据此判断订单最终驳回或自动／人工处理。':'只按源状态码 -1 选择已入库驳回订单，分别展示审核、原因字段和提现备注；业务备注不等同已确认驳回原因。')+' 只统计已入库记录，范围完整性尚未确认。</p><div class="config-help">GAME66 业务备注已脱敏 · 按印度当地创建日期 · 更新时间 '+E(d.updatedAt||'—')+'</div>';
    if(['orders','blockingOrders'].includes(r.kind)){
     body+='<form class="withdraw-order-search" onsubmit="event.preventDefault();withdrawReasonSearch()" onkeydown="withdrawReasonQueryKey(event)"><input aria-label="搜索订单号" type="search" maxlength="200" placeholder="搜索订单号" value="'+E(S.reasonQuery)+'" oninput="withdrawReasonQuery(this.value)"><button class="btn" type="button" onclick="withdrawReasonSearch()">搜索订单</button></form>';
-    body+=table(['订单号 / 金额','源订单状态','源业务备注（已脱敏）','操作人','创建 / 更新时间'],rows.map(x=>['<strong>'+E(x.orderNumber||'—')+'</strong><small class="cell-sub">'+E(x.amount??'—')+' '+E(x.currency||'')+'</small>',E(x.status||'—'),labels(x.sourceNotes,[['auto_reason','自动出款备注'],['audit_remark','审核备注'],['reason','原因字段备注'],['withdraw_remark','提现备注']]),E(x.operator||'—'),E(x.createdAt||'—')+'<small class="cell-sub">更新：'+E(x.updatedAt||'—')+'</small>']),'withdraw-reason-table withdraw-order-table');
+    body+=reasonOrderTable(['源订单状态','源业务备注（已脱敏）','操作人','创建 / 更新时间'],rows,x=>[E(x.status||'—'),labels(x.sourceNotes,[['auto_reason','自动出款备注'],['audit_remark','审核备注'],['reason','原因字段备注'],['withdraw_remark','提现备注']]),E(x.operator||'—'),E(x.createdAt||'—')+'<small class="cell-sub">更新：'+E(x.updatedAt||'—')+'</small>'],'withdraw-order-table');
    }else if(r.kind==='operators')body+=table(['操作人','已入库驳回笔数','未取得或源空备注','详情'],rows.map((x,i)=>[E(x.operator||'—'),C(x.count),C(x.missingReasonCount),'<button class="btn small" onclick="withdrawReasonDrill('+i+',\'operator\')">查看订单</button>']),'withdraw-reason-table');
    else body+=table(['源业务备注（已脱敏）','笔数',blocking?'占已入库提现订单':'占已入库驳回订单','详情'],rows.map((x,i)=>[labels(x.sourceNotes),C(x.count),known(count)&&Number(count)>0?R(x.count,count):'—','<button class="btn small" onclick="'+(blocking?'withdrawBlockingDrill('+i+',\'blockingOrders\')':'withdrawReasonDrill('+i+',\'category\')')+'">查看订单</button>']),'withdraw-reason-table withdraw-distribution-table');
    if(!rows.length)body+='<div class="live-empty">当前条件下没有已入库记录；不能据此推定源站没有数据。</div>';
@@ -422,7 +439,7 @@
    let body='<div class="withdraw-reason-summary">'+[['已入库'+(all?'提现':'驳回')+'订单',count],['含文本',states.present],['源字段为空',states.empty],['已隐藏',states.withheld],['未采集',states.missing],...(Number(states.stale)>0?[['旧备注待更新',states.stale]]:[]),...(Number(states.invalid)>0?[['格式异常',states.invalid]]:[])].map(([label,value])=>'<div><span>'+label+'</span><strong>'+(known(value)?C(value):'—')+'</strong></div>').join('')+'</div><p class="withdraw-denominator">'+(all?'按已入库提现订单展示来源字段。':'按源状态码 4、7 展示已入库驳回订单的来源字段。')+' condition / remark 尚未核实为自动拦截或驳回原因，不据此归类。</p><div class="config-help">按印尼当地创建日期 · 已脱敏 · 订单范围尚未完整核验 · 备注更新 '+E(d.updatedAt||'—')+'</div>';
    if(['orders','blockingOrders'].includes(r.kind)){
     body+='<form class="withdraw-order-search" onsubmit="event.preventDefault();withdrawReasonSearch()" onkeydown="withdrawReasonQueryKey(event)"><input aria-label="搜索订单号" type="search" maxlength="200" placeholder="搜索订单号" value="'+E(S.reasonQuery)+'" oninput="withdrawReasonQuery(this.value)"><button class="btn" type="button" onclick="withdrawReasonSearch()">搜索订单</button></form>';
-    body+=table(['订单号 / 金额','源订单状态','来源备注（已脱敏）','操作人','创建 / 更新时间'],rows.map(x=>['<strong>'+E(x.orderNumber||'—')+'</strong><small class="cell-sub">'+E(x.amount??'—')+' '+E(x.currency||'')+'</small>',E(x.status||x.statusCode||'—'),labels(x),E(x.operator||'—'),E(x.createdAt||'—')+'<small class="cell-sub">'+E(x.updatedAt||'—')+'</small>']),'withdraw-reason-table withdraw-order-table');
+    body+=reasonOrderTable(['源订单状态','来源备注（已脱敏）','操作人','创建 / 更新时间'],rows,x=>[E(x.status||x.statusCode||'—'),labels(x),E(x.operator||'—'),E(x.createdAt||'—')+'<small class="cell-sub">'+E(x.updatedAt||'—')+'</small>'],'withdraw-order-table');
    }else if(r.kind==='operators')body+=table(['操作人','已入库驳回笔数','无可展示文本','详情'],rows.map((x,i)=>[E(x.operator||'—'),C(x.count),C(x.missingReasonCount),'<button class="btn small" onclick="withdrawReasonDrill('+i+',\'operator\')">查看订单</button>']),'withdraw-reason-table');
    else body+=table(['来源备注（已脱敏）','笔数',all?'占已入库提现订单':'占已入库驳回订单','详情'],rows.map((x,i)=>[labels(x),C(x.count),known(count)&&Number(count)>0?R(x.count,count):'—','<button class="btn small" onclick="'+(all?'withdrawBlockingDrill('+i+',\'blockingOrders\')':'withdrawReasonDrill('+i+',\'category\')')+'">查看订单</button>']),'withdraw-reason-table withdraw-distribution-table');
    if(!rows.length)body+='<div class="live-empty">当前条件下没有已入库记录；未采集不代表源字段为空。</div>';
@@ -434,7 +451,7 @@
    let body='<div class="withdraw-reason-summary">'+[['已入库驳回订单',count],['有业务备注',states.present],['源字段为空',states.empty],['隐私内容已隐藏',states.redacted],['未采集',states.missing]].map(([label,value])=>'<div><span>'+label+'</span><strong>'+(known(value)?C(value):'—')+'</strong></div>').join('')+'</div><p class="withdraw-denominator">只按源状态 rejected 选择已入库驳回订单，分别展示源备注 remark 和应用备注 appRemark；业务备注不等同已确认驳回原因。旧采集未提供备注时显示未采集，源字段确实为空时单独显示为空。只统计已入库记录，范围完整性尚未确认。</p><div class="config-help">LG 业务备注已脱敏 · 按平台当地创建日期 '+E(d.timezone||'')+' · 更新时间 '+E(d.updatedAt||'—')+'</div>';
    if(r.kind==='orders'){
     body+='<form class="withdraw-order-search" onsubmit="event.preventDefault();withdrawReasonSearch()" onkeydown="withdrawReasonQueryKey(event)"><input aria-label="搜索订单号" type="search" maxlength="200" placeholder="搜索订单号" value="'+E(S.reasonQuery)+'" oninput="withdrawReasonQuery(this.value)"><button class="btn" type="button" onclick="withdrawReasonSearch()">搜索订单</button></form>';
-    body+=table(['订单号 / 金额','源订单状态','源业务备注（已脱敏）','操作人','创建 / 更新时间'],rows.map(x=>['<strong>'+E(x.orderNumber||'—')+'</strong><small class="cell-sub">'+E(x.amount??'—')+' '+E(x.currency||'')+'</small>',E(x.status||'—'),labels(x),E(x.operator||'—'),E(x.createdAt||'—')+'<small class="cell-sub">更新：'+E(x.updatedAt||'—')+'</small>']),'withdraw-reason-table withdraw-order-table');
+    body+=reasonOrderTable(['源订单状态','源业务备注（已脱敏）','操作人','创建 / 更新时间'],rows,x=>[E(x.status||'—'),labels(x),E(x.operator||'—'),E(x.createdAt||'—')+'<small class="cell-sub">更新：'+E(x.updatedAt||'—')+'</small>'],'withdraw-order-table');
    }else if(r.kind==='operators')body+=table(['操作人','已入库驳回笔数','未取得或源空备注','详情'],rows.map((x,i)=>[E(x.operator||'—'),C(x.count),C(x.missingReasonCount),'<button class="btn small" onclick="withdrawReasonDrill('+i+',\'operator\')">查看订单</button>']),'withdraw-reason-table');
    else body+=table(['源业务备注（已脱敏）','笔数','占已入库驳回订单','详情'],rows.map((x,i)=>[labels(x),C(x.count),known(count)&&Number(count)>0?R(x.count,count):'—','<button class="btn small" onclick="withdrawReasonDrill('+i+',\'category\')">查看订单</button>']),'withdraw-reason-table withdraw-distribution-table');
    if(!rows.length)body+='<div class="live-empty">当前条件下没有已入库记录；不能据此推定源站没有数据。</div>';
@@ -472,12 +489,12 @@
     }
     if(['orders','blockingOrders'].includes(r.kind))body+='<form class="withdraw-order-search" onsubmit="event.preventDefault();withdrawReasonSearch()" onkeydown="withdrawReasonQueryKey(event)"><input aria-label="搜索'+(blocking?'拦截':'驳回')+'订单号" type="search" maxlength="200" placeholder="搜索订单号" value="'+E(S.reasonQuery)+'" oninput="withdrawReasonQuery(this.value)"><button class="btn" type="button" onclick="withdrawReasonSearch()">搜索订单</button></form>';
     const detailButton=(index,key,label='查看订单')=>'<button class="btn small" '+(d.canViewOrders===false?'disabled':'')+' onclick="withdrawReasonDrill('+index+',\''+key+'\')">'+label+'</button>';
-    if(r.kind==='blockingOrders')body+=table(['订单号 / 金额','规则分类','规则阈值','实际值',fullTextLabel,'订单状态','操作人账号','申请 / 完成时间'],rows.map(x=>[
-     '<strong class="withdraw-order-number">'+E(x.orderNumber||'—')+'</strong><small class="cell-sub">'+N(x.amount)+'</small>',E(blockingReasonLabel(x.blockingReason||S.reasonLabel||'未归类',x)),E(x.blockingThreshold??'—'),x.blockingActualValue==null?'—':E((x.blockingActualField?x.blockingActualField+'：':'')+x.blockingActualValue),blockingSourceNote(x.rawManualRemark||x.manualRemark,x),E(x.status||'—'),E(x.operator||'（源账号为空）'),E(String(x.createdAt||'—').replace('T',' '))+'<small class="cell-sub">'+E(String(x.completedAt||'—').replace('T',' '))+'</small>']),'withdraw-reason-table withdraw-blocking-orders');
+    if(r.kind==='blockingOrders')body+=reasonOrderTable(['规则分类','规则阈值','实际值',fullTextLabel,'订单状态','操作人账号','申请 / 完成时间'],rows,x=>[
+     E(blockingReasonLabel(x.blockingReason||S.reasonLabel||'未归类',x)),E(x.blockingThreshold??'—'),x.blockingActualValue==null?'—':E((x.blockingActualField?x.blockingActualField+'：':'')+x.blockingActualValue),blockingSourceNote(x.rawManualRemark||x.manualRemark,x),E(x.status||'—'),E(x.operator||'（源账号为空）'),E(String(x.createdAt||'—').replace('T',' '))+'<small class="cell-sub">'+E(String(x.completedAt||'—').replace('T',' '))+'</small>'],'withdraw-blocking-orders');
     else if(r.kind==='blockingVariants')body+=table([fullTextLabel,'笔数','成功','驳回','其他状态','占人工处理记录'],rows.map(x=>[blockingSourceNote(x.canonicalReason==='检测没备注'?x.sourceReason:x.sourceReason||x.reason,x)+blockingStateSummary(x),C(x.count),C(x.success),C(x.rejected),C(x.other),share(x.count)]),'withdraw-reason-table withdraw-distribution-table');
-    else if(r.kind==='orders')body+=table(['订单号 / 金额',noteStates?'驳回备注 / 来源状态':'驳回原因 / 完整原备注','操作人账号','申请 / 完成时间','自动出款拦截 / 转人工说明'],rows.map(x=>[
-     '<strong class="withdraw-order-number" title="'+E(x.orderNumber)+'">'+E(x.orderNumber)+'</strong><small class="cell-sub">'+N(x.amount)+' · '+E(x.status)+'</small>',
-     rejectionSourceNote(x.rawRejectionReason??x.rejectionReason,x)+sourceNoteStates(x),'<span class="withdraw-operator-name" title="'+E(x.operator||'（源账号为空）')+'">'+E(x.operator||'（源账号为空）')+'</span>','<span class="withdraw-order-time">'+E(String(x.createdAt||'—').replace('T',' '))+'</span><small class="cell-sub">'+E(String(x.completedAt||'—').replace('T',' '))+'</small>',sourceNote(x.manualRemark,'（源字段为空）','自动出款拦截原文')]),'withdraw-reason-table withdraw-order-table');
+    else if(r.kind==='orders')body+=reasonOrderTable(['订单状态',noteStates?'驳回备注 / 来源状态':'驳回原因 / 完整原备注','操作人账号','申请 / 完成时间','自动出款拦截 / 转人工说明'],rows,x=>[
+     E(x.status||'—'),
+     rejectionSourceNote(x.rawRejectionReason??x.rejectionReason,x)+sourceNoteStates(x),'<span class="withdraw-operator-name" title="'+E(x.operator||'（源账号为空）')+'">'+E(x.operator||'（源账号为空）')+'</span>','<span class="withdraw-order-time">'+E(String(x.createdAt||'—').replace('T',' '))+'</span><small class="cell-sub">'+E(String(x.completedAt||'—').replace('T',' '))+'</small>',sourceNote(x.manualRemark,'（源字段为空）','自动出款拦截原文')],'withdraw-order-table withdraw-rejected-orders');
     else if(r.kind==='categories')body+=table([noteStates?'驳回备注 / 来源状态':'驳回原文','笔数','占全部驳回订单','详情'],rows.map((x,i)=>[rejectionSourceNote(x.sourceReason??x.rawReason??x.reason??(d.rejectionGrouping==='exact_source_text_v1'?x.category:null),x),C(x.count),share(x.count),detailButton(i,'category')+' <button class="link" onclick="withdrawReasonVariants('+i+')">原备注分布</button>']),'withdraw-reason-table withdraw-distribution-table');
     else if(r.kind==='operators')body+=table(['操作人账号','驳回笔数','占全部驳回订单',noteStates?'已知原备注种类':'不同原备注',noteStates?'无可用驳回备注':'备注为空','详情'],rows.map((x,i)=>[E(x.operator||'（源账号为空）'),C(x.count),share(x.count),C(x.categoryCount),C(x.missingReasonCount),detailButton(i,'operator')]),'withdraw-reason-table withdraw-distribution-table');
     else if(r.kind==='blocking')body+=table(['自动出款拦截分类',atomic?'命中笔数':'笔数','占人工处理记录','详情'],rows.map((x,i)=>['<button class="withdraw-source-note" onclick="withdrawBlockingDrill('+i+',\'blockingVariants\')">'+E(blockingReasonLabel(x.reason,x))+'</button>'+blockingStateSummary(x)+(Number(x.sourceVariantCount)>1?'<small class="cell-sub">已合并 '+C(x.sourceVariantCount)+' 种'+(sanitized?'采集说明':'原文')+'</small>':''),C(x.count),share(x.count),'<button class="btn small" onclick="withdrawBlockingDrill('+i+',\'blockingVariants\')">'+variantsLabel+'</button> <button class="btn small" '+(d.canViewBlockingOrders===true?'':'disabled ')+'onclick="withdrawBlockingDrill('+i+',\'blockingOrders\')">查看订单</button>']),'withdraw-reason-table withdraw-distribution-table');
@@ -629,11 +646,23 @@
    if(next){next.scrollLeft=position.left;next.scrollTop=position.top}
    if(Number.isFinite(x)&&Number.isFinite(y)&&(root.scrollX!==x||root.scrollY!==y))root.scrollTo?.(x,y);
   }
-  function rememberReasonSnapshot(scope,query,data,semanticScope){
-   // Only a proven complete result may be sliced locally. Source coverage is a
-   // separate fact: this does not claim that every upstream order was collected.
-   const total=data?.total;
-   if(!data?.publication&&data?.available===true&&!data.error&&data.hasMore!==true&&data.partial!==true&&data.complete!==false&&query.offset===0&&total!==null&&total!==undefined&&total!==''&&typeof total!=='boolean'&&Number.isSafeInteger(Number(total))&&Number(total)>=0&&Array.isArray(data.rows)&&data.rows.length===Number(total))reasonSnapshot={scope,data,semanticScope};
+  function rememberReasonPage(scope,key,query,data,semanticScope){
+   // Reuse a verified response to this page. Only an entire result can supply
+   // other page sizes or offsets. Source coverage remains a separate fact.
+   const rawTotal=data?.total,total=Number(rawTotal),{offset,limit}=query;
+   if(data?.publication||data?.available!==true||data.error||data.partial===true||data.complete===false||
+      rawTotal==null||rawTotal===''||typeof rawTotal==='boolean'||!Number.isSafeInteger(total)||total<offset||
+      !Array.isArray(data.rows)||data.rows.length!==Math.min(limit,total-offset)||
+      (data.offset!=null&&data.offset!==offset)||(data.limit!=null&&data.limit!==limit)||
+      (data.hasMore!=null&&data.hasMore!==(offset+data.rows.length<total)))return;
+   const entry={data,semanticScope};
+   const put=id=>{
+    reasonCache.delete(id);
+    reasonCache.set(id,entry);
+    if(reasonCache.size>32)reasonCache.delete(reasonCache.keys().next().value);
+   };
+   put(key);
+   if(offset===0&&data.rows.length===total)put(scope);
   }
   function reasonTimestamp(value){
    if(typeof value!=='string')return false;
@@ -677,16 +706,26 @@
     job.preparationExpired=true;throw Error('原因统计仍在后台更新，请稍后重试。');
    }finally{root.clearTimeout(job.pollTimer);root.clearTimeout(job.deadlineTimer);job.pollTimer=job.deadlineTimer=null;}
   }
-  async function reasonsLoad(force=false,presentationOnly=false){
+  async function reasonsLoad({force=false,presentationOnly=false,reuseTab=false}={}){
    if(!resultAllowed()||!S.reason)return;
    if(typeof root.hensemRoleAllowed==='function'&&!root.hensemRoleAllowed(ctx.page(),'query')){clearResult();render();return;}
    const context=reasonContext(),base={action:'withdrawReasons',...S.reason,platform:rowPlatform(S.reason)},semanticScope=reasonSemanticScope(base),scope=JSON.stringify([context,base]),query={...base,offset:(S.reasonPage-1)*S.reasonSize,limit:S.reasonSize},key=JSON.stringify([context,query]);
    if(reasonRead?.key===key&&(!force||reasonRead.force)){S.reasonBusy=true;renderReason();return reasonRead.promise;}
    stopReasonRead();const serial=++S.reasonSerial;
    S.reasonError='';S.reasonSelectionChanged=false;
-   // Pagination can slice the complete active response. Reopening the drawer always rereads it.
-   if(!force&&presentationOnly&&reasonSnapshot?.scope===scope&&(!blockingKinds.includes(base.kind)||reasonSemanticCompatible(reasonSnapshot.data,semanticScope))){const data=reasonSnapshot.data;S.reasonPage=Math.min(S.reasonPage,Math.max(1,Math.ceil(Number(data.total)/S.reasonSize)));const offset=(S.reasonPage-1)*S.reasonSize;S.reasonData={...data,rows:data.rows.slice(offset,offset+S.reasonSize),offset,limit:S.reasonSize};S.reasonBusy=false;renderReason(true);reasonFocus();return}
-   reasonSnapshot=null;
+   if(force)clearReasonCache(semanticScope);
+   if(!force&&(presentationOnly||reuseTab)){
+    const full=reasonCache.get(scope)?.data;
+    const data=full||reasonCache.get(key)?.data;
+    if(data&&(!blockingKinds.includes(base.kind)||reasonSemanticCompatible(data,semanticScope))){
+     if(full){
+      S.reasonPage=Math.min(S.reasonPage,Math.max(1,Math.ceil(Number(full.total)/S.reasonSize)));
+      const offset=(S.reasonPage-1)*S.reasonSize;
+      S.reasonData={...full,rows:full.rows.slice(offset,offset+S.reasonSize),offset,limit:S.reasonSize};
+     }else S.reasonData=data;
+     renderReason(presentationOnly);reasonFocus();return;
+    }
+   }
    const controller=typeof root.AbortController==='function'?new root.AbortController():null;
    const job={key,serial,context,force,controller};const cancelled=new Promise(resolve=>{job.cancel=()=>resolve(null);});reasonRead=job;
    S.reasonBusy=true;S.reasonData=null;renderReason();reasonFocus();
@@ -696,12 +735,12 @@
      // A legacy combination key is not an atomic key, even if the new reader
      // returns an empty selection. Reopen the rule list once through the same
      // cancellable request path; never turn that mismatch into a zero result.
-     if(data?.reasonGrouping===atomicGrouping&&query.reasonKey&&blockingKinds.includes(query.kind)&&S.reasonSelectionGrouping!==atomicGrouping){S.reason.kind='blocking';clearReasonFilters();S.reasonData=null;return reasonsLoad(force);}
-     const lastComplete=reasonLastComplete(data),max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad(force)}if(!lastComplete)rememberReasonSnapshot(scope,query,data,semanticScope);S.reasonData=data;S.reasonBusy=false;renderReason();reasonFocus()}
+     if(data?.reasonGrouping===atomicGrouping&&query.reasonKey&&blockingKinds.includes(query.kind)&&S.reasonSelectionGrouping!==atomicGrouping){S.reason.kind='blocking';clearReasonFilters();S.reasonData=null;return reasonsLoad({force});}
+     const lastComplete=reasonLastComplete(data),max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad({force})}if(!lastComplete)rememberReasonPage(scope,key,query,data,semanticScope);S.reasonData=data;S.reasonBusy=false;renderReason();reasonFocus()}
     catch(e){if(!currentReasonRead(job))return;if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(e?.code||''))||/^(preview_denied|synthetic_session_denied|assigned_role_required|page_action_denied|role_permission_denied|session_denied)$/.test(String(e?.message||''))){clearResult();S.error='登录或查询权限已变化，请重新验证后查询。';render();return;}if(e?.code==='WITHDRAW_REASON_SELECTION_CHANGED'&&['blockingVariants','blockingOrders'].includes(query.kind)){
       // Only retire the exact authorized native/day's blocking selections.
       // A stale or cancelled response never reaches this branch.
-      if(reasonSnapshot?.semanticScope===semanticScope)reasonSnapshot=null;
+      clearReasonCache(semanticScope);
       S.reasonSelectionChanged=true;S.reasonError='原因分类已更新，请返回原因列表重新选择。';
      }else S.reasonError=e.message;S.reasonBusy=false;S.reasonData=null;renderReason();reasonFocus()}
     finally{if(job.preparationExpired)job.controller?.abort();if(reasonRead===job)reasonRead=null;}
@@ -769,9 +808,9 @@
   root.withdrawSort=key=>{if(!['country','platform','account','total','processed','success','rejected','autoCount','manualCount','avgSeconds','successRate','rejectRate','autoRate','manualRate','previousAvgSeconds','durationChange'].includes(key))return;if(!localReady()&&S.data&&draftChanged()){render();return;}S.asc=S.sort===key?!S.asc:false;S.sort=key;S.page=1;if(localReady()||S.loading&&view()==='auto'&&!S.daily&&!S.serverPaging)renderLocal();else if(!draftChanged()&&S.data)readApplied(true);else render()};
   root.withdrawDaily=index=>{if(!resultAllowed())return;const row=S.data?.rows?.[index];if(!row)return;if(S.applied){const daily=!resultDaily(),query={...S.applied.query,country:rawTarget(row),platforms:[rowPlatform(row)],daily,sort:'total',ascending:false,offset:0,limit:daily?S.size:500};delete query.scopeTargets;load(true,{query,applied:{...S.applied,platforms:[platformLabel(row)],rowCountry:rawTarget(row)}});return;}S.platforms=[platformLabel(row)];S.rowCountry=rawTarget(row);S.daily=!S.daily;S.localSnapshot=false;S.serverPaging=false;load(true)};
   function clearReasonFilters(){if(!S.reason)return;for(const key of ['category','reasonKey','operatorKey','query'])delete S.reason[key];S.reasonLabel='';S.reasonQuery='';S.reasonSelectionGrouping='';S.reasonPage=1}
-  root.withdrawReasons=(index,kind='blocking')=>{if(!resultAllowed())return;const row=S.data?.rows?.[index];if(!row||row.reasonAvailable===false&&!duoliNotesRow(row)||!['blocking','rejection'].includes(kind))return;S.reason={country:row.country,platform:rowPlatform(row),date:resultDaily()?row.dataDate:resultDates().from,kind:kind==='rejection'?'categories':kind};S.reasonTrigger={index,kind};S.reasonData=null;clearReasonFilters();reasonsLoad()};
-  root.withdrawReasonKind=kind=>{if(!S.reason||!['blocking','categories','rejection','operators','orders'].includes(kind))return;if(kind==='blocking'||kind==='categories'||blockingKinds.includes(S.reason.kind))clearReasonFilters();S.reason.kind=kind;S.reasonPage=1;reasonsLoad()};
-  root.withdrawReasonDate=date=>{if(!S.reason||!/^\d{4}-\d{2}-\d{2}$/.test(date))return;S.reason.date=date;if(blockingKinds.includes(S.reason.kind))S.reason.kind='blocking';clearReasonFilters();S.reasonData=null;reasonsLoad()};
+  root.withdrawReasons=(index,kind='blocking')=>{if(!resultAllowed())return;const row=S.data?.rows?.[index];if(!row||row.reasonAvailable===false&&!duoliNotesRow(row)||!['blocking','rejection'].includes(kind))return;if(S.reasonTrigger?.index!==index||S.reasonTrigger?.kind!==kind)clearReasonCache();S.reason={country:row.country,platform:rowPlatform(row),date:resultDaily()?row.dataDate:resultDates().from,kind:kind==='rejection'?'categories':kind};S.reasonTrigger={index,kind};S.reasonData=null;clearReasonFilters();reasonsLoad()};
+  root.withdrawReasonKind=kind=>{if(!S.reason||!['blocking','categories','rejection','operators','orders'].includes(kind))return;if(kind==='blocking'||kind==='categories'||blockingKinds.includes(S.reason.kind))clearReasonFilters();S.reason.kind=kind;S.reasonPage=1;reasonsLoad({reuseTab:true})};
+  root.withdrawReasonDate=date=>{if(!S.reason||!/^\d{4}-\d{2}-\d{2}$/.test(date))return;clearReasonCache();S.reason.date=date;if(blockingKinds.includes(S.reason.kind))S.reason.kind='blocking';clearReasonFilters();S.reasonData=null;reasonsLoad()};
   root.withdrawReasonClear=()=>{if(blockingKinds.includes(S.reason?.kind))S.reason.kind='blocking';clearReasonFilters();reasonsLoad()};
   root.withdrawReasonDrill=(index,key)=>{const row=S.reasonData?.rows?.[index];if(!S.reason||!row||S.reasonData.canViewOrders===false||!['category','reason','operator'].includes(key))return;const field={category:'category',reason:'reasonKey',operator:'operatorKey'}[key],value=row[{category:'categoryKey',reason:'reasonKey',operator:'operatorKey'}[key]];if(!/^[a-f0-9]{32}$/.test(value||''))return;S.reason[field]=value;S.reasonLabel=[S.reasonLabel,key==='operator'?row.operator||'源账号为空':row.sourceReason??row.rawReason??row[{category:'category',reason:'reason'}[key]]??'（源备注为空）'].filter(Boolean).join(' · ');S.reason.kind='orders';S.reasonPage=1;reasonsLoad()};
   root.withdrawBlockingDrill=(index,kind)=>{const row=S.reasonData?.rows?.[index];if(!row||!S.reason||!['blockingVariants','blockingOrders'].includes(kind)||!/^[a-f0-9]{32}$/.test(row.reasonKey||'')||kind==='blockingOrders'&&S.reasonData.canViewBlockingOrders!==true)return;const grouping=S.reasonData.reasonGrouping||'legacy';clearReasonFilters();S.reasonSelectionGrouping=grouping;S.reason.reasonKey=row.reasonKey;S.reasonLabel=blockingReasonLabel(row.reason,row);S.reason.kind=kind;reasonsLoad()};
@@ -779,13 +818,13 @@
   root.withdrawReasonVariants=index=>{const row=S.reasonData?.rows?.[index];if(!S.reason||!row||!/^[a-f0-9]{32}$/.test(row.categoryKey||''))return;S.reason.category=row.categoryKey;S.reasonLabel=row.sourceReason??row.reason??row.category??'（源备注为空）';S.reason.kind='rejection';S.reasonPage=1;reasonsLoad()};
   root.withdrawReasonQuery=value=>{S.reasonQuery=String(value).slice(0,200)};
   root.withdrawReasonSearch=()=>{if(!S.reason)return;S.reason.query=S.reasonQuery.trim();S.reasonPage=1;reasonsLoad()};
-  root.withdrawReasonPage=page=>{if(S.reasonBusy||!Number.isInteger(page)||page<1)return;const max=Math.max(1,Math.ceil(Number(S.reasonData?.total||0)/S.reasonSize)),next=Math.min(max,page);if(next===S.reasonPage)return;S.reasonPage=next;reasonsLoad(false,true)};
-  root.withdrawReasonSize=size=>{if(S.reasonBusy||![20,50,100].includes(Number(size))||S.reasonSize===Number(size))return;S.reasonSize=Number(size);S.reasonPage=1;reasonsLoad(false,true)};
+  root.withdrawReasonPage=page=>{if(S.reasonBusy||!Number.isInteger(page)||page<1)return;const max=Math.max(1,Math.ceil(Number(S.reasonData?.total||0)/S.reasonSize)),next=Math.min(max,page);if(next===S.reasonPage)return;S.reasonPage=next;reasonsLoad({presentationOnly:true})};
+  root.withdrawReasonSize=size=>{if(S.reasonBusy||![20,50,100].includes(Number(size))||S.reasonSize===Number(size))return;S.reasonSize=Number(size);S.reasonPage=1;reasonsLoad({presentationOnly:true})};
   root.withdrawReasonJump=value=>{if(/^\d+$/.test(String(value)))root.withdrawReasonPage(Number(value))};
   root.withdrawReasonOriginal=(value,title='驳回原文',exact=false)=>{S.originalNote=exact?String(value??''):cleanNote(value);S.originalNoteTitle=String(title||'驳回原文');renderReason(true);document.querySelector?.('.withdraw-original-dialog')?.querySelector('button')?.focus?.({preventScroll:true})};
   root.withdrawReasonOriginalClose=()=>{S.originalNote='';renderReason(true);reasonFocus()};
-  root.withdrawReasonReturnToList=()=>{if(!S.reason||!S.reasonSelectionChanged||!['blockingVariants','blockingOrders'].includes(S.reason.kind))return;S.reason.kind='blocking';clearReasonFilters();S.reasonData=null;return reasonsLoad(true);};
-  root.withdrawReasonClose=()=>{const trigger=S.reasonTrigger;reasonSnapshot=null;stopReasonRead();S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';renderReason();if(trigger)document.querySelector?.('[data-withdraw-reason="'+trigger.index+'-'+trigger.kind+'"]')?.focus?.({preventScroll:true})};root.withdrawReasonRetry=()=>S.reasonSelectionChanged?root.withdrawReasonReturnToList():reasonsLoad(true);
+  root.withdrawReasonReturnToList=()=>{if(!S.reason||!S.reasonSelectionChanged||!['blockingVariants','blockingOrders'].includes(S.reason.kind))return;S.reason.kind='blocking';clearReasonFilters();S.reasonData=null;return reasonsLoad({force:true});};
+  root.withdrawReasonClose=()=>{const trigger=S.reasonTrigger;clearReasonCache();stopReasonRead();S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';renderReason();if(trigger)document.querySelector?.('[data-withdraw-reason="'+trigger.index+'-'+trigger.kind+'"]')?.focus?.({preventScroll:true})};root.withdrawReasonRetry=()=>S.reasonSelectionChanged?root.withdrawReasonReturnToList():reasonsLoad({force:true});
   root.withdrawReasonKey=event=>{if(event.key==='Escape'){event.preventDefault();root.withdrawReasonClose();return}if(event.key!=='Tab')return;const panel=document.getElementById('withdraw-reasons'),items=[...(panel?.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex="0"]')||[])].filter(e=>e.getClientRects().length);const first=items[0],last=items[items.length-1];if(!first)return;if(event.shiftKey&&(document.activeElement===first||document.activeElement===panel)){event.preventDefault();last.focus()}else if(!event.shiftKey&&(document.activeElement===last||document.activeElement===panel)){event.preventDefault();first.focus()}};
   function setNote(row,date){const previous=noteFor(row,date);S.note={country:row.country,platform:row.platform,date,storageCountry:previous?.country||row.country,storagePlatform:previous?.platform||row.platform,expectedVersion:previous?.version||'',original:previous?.reason||''};S.noteDraft=S.note.original;S.noteError='';S.noteSaving=false;render()}
   root.withdrawNoteOpen=index=>{if(!resultAllowed())return;const row=S.data?.rows?.[index];if(row&&S.data?.canWriteNotes)setNote(row,resultDaily()?row.dataDate:resultDates().to)};

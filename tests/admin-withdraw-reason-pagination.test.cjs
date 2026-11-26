@@ -52,3 +52,51 @@ test('all reason views use complete snapshots without starting a second request 
   const h=fixture();h.page.state.reason={country:'巴西',platform:'SYNTHETIC',date:'2026-10-11',kind};h.ctx.withdrawReasonRetry();h.respond(7);await settle();h.ctx.withdrawReasonSize(50);assert.equal(h.requests.length,1,kind);
  }
 });
+
+test('switching through the five reason tabs reuses each loaded response without painting a loading message',async()=>{
+ const h=fixture();h.ctx.withdrawReasons(0);h.respond(2);await settle();
+ const kinds=['categories','rejection','operators','orders'];
+ for(const [index,kind] of kinds.entries()){
+  h.ctx.withdrawReasonKind(kind);assert.equal(h.requests.at(-1).kind,kind);
+  h.respond(index+3);await settle();
+ }
+ h.advance();
+ const paints=h.paints.length;
+ for(const [index,kind] of ['blocking',...kinds].entries()){
+  h.ctx.withdrawReasonKind(kind);
+  assert.equal(h.page.state.reasonData.total,index+2);
+ }
+ assert.equal(h.requests.length,5);
+ assert(h.paints.slice(paints).every(html=>!html.includes('正在读取')));
+});
+
+test('a tab returns to its already loaded first page of a longer list',async()=>{
+ const h=fixture();
+ h.ctx.withdrawReasons(0);h.respond(45,{rows:rows(20),offset:0,limit:20,hasMore:true});await settle();
+ h.ctx.withdrawReasonKind('categories');h.respond(2);await settle();
+ h.ctx.withdrawReasonKind('blocking');
+ assert.equal(h.requests.length,2);
+ assert.equal(h.page.state.reasonData.total,45);
+ assert.equal(h.page.state.reasonData.rows.length,20);
+ h.ctx.withdrawReasonPage(2);assert.equal(h.requests.length,3);
+ assert.equal(h.requests.at(-1).offset,20);
+});
+
+test('unavailable or incomplete tab replies still need a fresh read on return',async()=>{
+ for(const patch of [{available:false},{partial:true},{complete:false},{error:'unavailable'},{offset:20},{limit:50},{hasMore:true}]){
+  const h=fixture();
+  h.ctx.withdrawReasons(0);h.respond(2,patch);await settle();
+  h.ctx.withdrawReasonKind('categories');h.respond(2);await settle();
+  h.ctx.withdrawReasonKind('blocking');
+  assert.equal(h.requests.length,3,JSON.stringify(patch));
+ }
+});
+
+test('refreshing one reason tab invalidates the other tabs for the same platform and date',async()=>{
+ const h=fixture();h.ctx.withdrawReasons(0);h.respond(2);await settle();
+ h.ctx.withdrawReasonKind('categories');h.respond(3);await settle();
+ h.ctx.withdrawReasonRetry();h.respond(4);await settle();
+ h.ctx.withdrawReasonKind('blocking');
+ assert.equal(h.requests.length,4);
+ assert.equal(h.page.state.reasonData,null);
+});
