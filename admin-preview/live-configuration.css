@@ -270,6 +270,7 @@ body.live-admin .withdraw-order-table table{width:100%;min-width:1120px;table-la
 body.live-admin .withdraw-order-table th:first-child{width:210px}
 body.live-admin :is(.withdraw-order-table,.withdraw-blocking-orders) th:nth-child(2){width:136px}
 body.live-admin :is(.withdraw-order-table,.withdraw-blocking-orders) :is(th,td):nth-child(2){text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+body.live-admin :is(.withdraw-order-table,.withdraw-blocking-orders) td:nth-child(2)>span{display:block;white-space:normal;overflow-wrap:anywhere}
 body.live-admin .withdraw-order-table th:nth-child(3){width:98px}
 body.live-admin .withdraw-order-table:not(.withdraw-rejected-orders) th:last-child,
 body.live-admin .withdraw-rejected-orders th:nth-child(6){width:166px}

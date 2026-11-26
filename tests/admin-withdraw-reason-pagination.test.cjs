@@ -83,7 +83,7 @@ test('a tab returns to its already loaded first page of a longer list',async()=>
 });
 
 test('unavailable or incomplete tab replies still need a fresh read on return',async()=>{
- for(const patch of [{available:false},{partial:true},{complete:false},{error:'unavailable'},{offset:20},{limit:50},{hasMore:true}]){
+ for(const patch of [{available:false},{partial:true},{complete:false},{error:'unavailable'},{offset:20},{limit:50},{hasMore:true},{prepared:{status:'stale'}}]){
   const h=fixture();
   h.ctx.withdrawReasons(0);h.respond(2,patch);await settle();
   h.ctx.withdrawReasonKind('categories');h.respond(2);await settle();

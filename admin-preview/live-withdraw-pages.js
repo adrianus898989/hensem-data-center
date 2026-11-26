@@ -651,8 +651,10 @@
    // other page sizes or offsets. Source coverage remains a separate fact.
    const rawTotal=data?.total,total=Number(rawTotal),{offset,limit}=query;
    if(data?.publication||data?.available!==true||data.error||data.partial===true||data.complete===false||
-      rawTotal==null||rawTotal===''||typeof rawTotal==='boolean'||!Number.isSafeInteger(total)||total<offset||
-      !Array.isArray(data.rows)||data.rows.length!==Math.min(limit,total-offset)||
+      (data.prepared!=null&&data.prepared.status!=='ready')||
+      (typeof rawTotal!=='number'&&(typeof rawTotal!=='string'||!/^\d+$/.test(rawTotal)))||
+      !Number.isSafeInteger(total)||total<offset||!Array.isArray(data.rows)||data.rows.length!==Math.min(limit,total-offset)||
+      data.rows.some(row=>!row||typeof row!=='object'||Array.isArray(row))||
       (data.offset!=null&&data.offset!==offset)||(data.limit!=null&&data.limit!==limit)||
       (data.hasMore!=null&&data.hasMore!==(offset+data.rows.length<total)))return;
    const entry={data,semanticScope};
