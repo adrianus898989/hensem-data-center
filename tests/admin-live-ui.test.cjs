@@ -953,9 +953,10 @@ test('retired deposit bookmarks and programmatic navigation open the retained wo
   assert(!h.calls.some(q=>['depositIssues','depositStatistics'].includes(q.action)));
  }
 });
-test('revisiting a reason tab and refreshing its drawer both read current reasons',async()=>{
+test('revisiting a reason tab uses its loaded result while explicit drawer or report refresh reads current reasons',async()=>{
  const h=await ready({page:'auto_withdraw',handler:withdrawalHandler});h.c.withdrawReasons(0);await settle();h.c.withdrawReasonKind('categories');await settle();const n=h.calls.filter(q=>q.action==='withdrawReasons').length;
- h.c.withdrawReasonKind('blocking');await settle();assert.equal(h.calls.filter(q=>q.action==='withdrawReasons').length,n+1);
+ h.c.withdrawReasonKind('blocking');await settle();assert.equal(h.calls.filter(q=>q.action==='withdrawReasons').length,n);
+ await h.c.withdrawReasonRetry();assert.equal(h.calls.filter(q=>q.action==='withdrawReasons').length,n+1);
  await h.c.withdrawLoad(true);h.c.withdrawReasons(0);await settle();assert.equal(h.calls.filter(q=>q.action==='withdrawReasons').length,n+2);
 });
 
