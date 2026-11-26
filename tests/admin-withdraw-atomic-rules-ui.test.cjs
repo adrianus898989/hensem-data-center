@@ -35,10 +35,17 @@ test('atomic observation clears combination cache and resets a legacy selected k
  h.reply(1,atomic({total:0,rows:[]}));await settle();assert.equal(h.calls.length,3);assert.equal(h.calls[2].q.kind,'blocking');assert.equal(h.calls[2].q.reasonKey,undefined);assert.equal(h.api.state.reasonData,null);
  h.reply(2,atomic());await settle();assert.equal(h.api.state.reasonData.total,3);h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,4);assert.equal(h.api.state.reasonData,null);h.reply(3,atomic());await settle();assert.equal(h.api.state.reasonData.reasonGrouping,'atomic_rules_v1');
 });
-test('atomic observation evicts cached variants and orders from the same full scope',async()=>{
- const h=lifecycle();h.open();h.reply(0,legacy());await settle();h.ctx.withdrawBlockingDrill(0,'blockingVariants');h.reply(1,legacy());await settle();h.ctx.withdrawBlockingView('blockingOrders');h.reply(2,legacy());await settle();
- h.ctx.withdrawReasonKind('blocking');assert.equal(h.calls.length,4);h.reply(3,atomic());await settle();
- h.ctx.withdrawBlockingDrill(0,'blockingVariants');assert.equal(h.calls.length,5);h.reply(4,atomic());await settle();h.ctx.withdrawBlockingView('blockingOrders');assert.equal(h.calls.length,6);h.reply(5,atomic());await settle();assert.equal(h.api.state.reasonData.reasonGrouping,'atomic_rules_v1');
+test('atomic observation on an unread page evicts the cached legacy first page and rule selections',async()=>{
+ const h=lifecycle(),original=legacy();
+ h.open();h.reply(0,legacy({total:21,rows:Array.from({length:20},(_,index)=>original.rows[index%3])}));await settle();
+ h.ctx.withdrawBlockingDrill(0,'blockingVariants');h.reply(1,legacy());await settle();
+ h.ctx.withdrawBlockingView('blockingOrders');h.reply(2,legacy());await settle();
+ h.ctx.withdrawReasonKind('blocking');assert.equal(h.calls.length,3);assert.equal(h.api.state.reasonData.reasonGrouping,undefined);
+ h.ctx.withdrawReasonPage(2);assert.equal(h.calls.length,4);h.reply(3,atomic({total:21,rows:[atomic().rows[0]]}));await settle();
+ h.ctx.withdrawReasonKind('blocking');assert.equal(h.calls.length,5);assert.equal(h.api.state.reasonData,null);h.reply(4,atomic());await settle();
+ h.ctx.withdrawBlockingDrill(0,'blockingVariants');assert.equal(h.calls.length,6);h.reply(5,atomic());await settle();
+ h.ctx.withdrawBlockingView('blockingOrders');assert.equal(h.calls.length,7);h.reply(6,atomic());await settle();
+ assert.equal(h.api.state.reasonData.reasonGrouping,'atomic_rules_v1');
 });
 test('known atomic scope refuses legacy last-complete without downgrade or cache admission',async()=>{
  const h=lifecycle();h.open();h.reply(0,atomic());await settle();const refresh=h.ctx.withdrawReasonRetry();h.reply(1,lastComplete(legacy()));await refresh;
