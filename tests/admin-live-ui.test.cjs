@@ -785,6 +785,26 @@ test('withdrawal reason tabs preserve field meaning, exact order numbers and sta
  h.c.withdrawReasonClose();h.c.withdrawReasons(0,'rejection');await settle();assert.equal(h.calls.at(-1).kind,'categories');assert.match(h.html(),/SYNTHETIC-REJECT/);assert.doesNotMatch(h.html(),/SYNTHETIC-BLOCK/);h.c.withdrawReasonKind('orders');await settle();assert.match(h.html(),/SYNTHETIC-ORDER/);assert.match(h.html(),/SYNTHETIC-BLOCK/);assert.match(h.html(),/SYNTHETIC-REJECT/);
  const pending=deferred();h.setHandler(q=>q.action==='withdrawReasons'?pending.promise:withdrawalHandler(q));h.c.withdrawReasonKind('blocking');h.c.withdrawReasonClose();pending.resolve({available:true,rows:[{reason:'STALE-REASON',count:1}],total:1});await settle();assert.doesNotMatch(h.html(),/STALE-REASON/);
 });
+test('auto withdrawal reason drilldowns display the captured user remark returned for each order',async()=>{
+ const remark='SYNTHETIC USER NOTE',handler=q=>{
+  const original=withdrawalHandler(q);
+  if(q.action!=='withdrawReasons')return original;
+  if(q.kind==='blockingOrders')return {...original,canViewBlockingOrders:true,rows:[{orderNumber:'SYNTHETIC-ORDER',amount:100,status:'已通过',blockingReason:'SYNTHETIC-BLOCK',manualRemark:'SYNTHETIC-BLOCK',userRemark:remark}]};
+  if(q.kind==='orders')return {...original,rows:original.rows.map(r=>({...r,userRemark:remark}))};
+  return {...original,canViewBlockingOrders:true};
+ };
+ const h=await ready({page:'auto_withdraw',handler});
+ const assertDetail=reasonHeader=>{
+  const detail=renderedTables(h.html()).find(t=>t.headers.includes('用户备注'));
+  assert(detail);assert.deepEqual(detail.headers.slice(0,2),['订单号','金额']);
+  assert.equal(plain(detail.rows[0][0]),'SYNTHETIC-ORDER');assert.equal(plain(detail.rows[0][1]),'100.00');
+  assert.equal(plain(detail.rows[0][detail.headers.indexOf('用户备注')]),remark);
+  assert.match(plain(detail.rows[0][detail.headers.indexOf(reasonHeader)]),/SYNTHETIC-(BLOCK|REJECT)/);
+ };
+ h.c.withdrawReasons(0);await settle();assert.doesNotMatch(h.html(),/SYNTHETIC USER NOTE/);
+ h.c.withdrawBlockingDrill(0,'blockingOrders');await settle();assert.equal(h.calls.at(-1).kind,'blockingOrders');assertDetail('完整原文');
+ h.c.withdrawReasonKind('orders');await settle();assert.equal(h.calls.at(-1).kind,'orders');assertDetail('驳回原因 / 完整原备注');
+});
 test('rejection drawer drills through categories, raw notes and operators without changing the denominator or claiming an error',async()=>{
  const h=await ready({page:'auto_withdraw',handler:withdrawalHandler});h.c.withdrawReasons(0,'rejection');await settle();
  assert.match(h.html(),/role="dialog" aria-modal="true" aria-label="平台原因详情"/);assert.match(h.html(),/全部 4 笔驳回订单/);assert.match(h.html(),/50\.00%/);assert.doesNotMatch(h.html(),/确认误驳回|确认错误|复核保存/);
