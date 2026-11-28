@@ -273,9 +273,12 @@ body.live-admin :is(.withdraw-order-table,.withdraw-blocking-orders) :is(th,td):
 body.live-admin :is(.withdraw-order-table,.withdraw-blocking-orders) td:nth-child(2)>span{display:block;white-space:normal;overflow-wrap:anywhere}
 body.live-admin .withdraw-order-table th:nth-child(3){width:98px}
 body.live-admin .withdraw-order-table:not(.withdraw-rejected-orders) th:last-child,
-body.live-admin .withdraw-rejected-orders th:nth-child(6){width:166px}
+body.live-admin .withdraw-rejected-orders th:nth-last-child(2){width:166px}
 body.live-admin .withdraw-order-table:not(.withdraw-rejected-orders) th:nth-last-child(2),
-body.live-admin .withdraw-rejected-orders th:nth-child(5){width:112px}
+body.live-admin .withdraw-rejected-orders th:nth-last-child(3){width:112px}
+body.live-admin .withdraw-reason-table th:has(>.withdraw-user-remark-heading){width:176px}
+body.live-admin .withdraw-reason-table .withdraw-user-remark{min-width:96px;max-width:240px}
+body.live-admin .withdraw-reason-table .withdraw-user-remark .withdraw-source-note{width:100%;max-width:100%}
 body.live-admin .withdraw-order-table td{min-width:0;overflow:hidden}
 body.live-admin .withdraw-order-table .withdraw-source-note{width:100%;min-width:0;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 body.live-admin .withdraw-order-table .withdraw-order-number,body.live-admin .withdraw-order-table .withdraw-operator-name{display:block;max-width:100%;white-space:nowrap;overflow-wrap:normal;word-break:normal;overflow:hidden;text-overflow:ellipsis}

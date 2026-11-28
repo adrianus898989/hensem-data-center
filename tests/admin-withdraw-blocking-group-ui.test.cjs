@@ -12,7 +12,7 @@ test('all reason order lists keep the order number, formatted amount and order s
   const h=fixture({...grouped,sourceNoteFormat,canViewBlockingOrders:true,rows,total:rows.length});
   for(const kind of sourceNoteFormat==='lg_business_notes_v1'?['orders']:['orders','blockingOrders']){
    h.page.state.reason.kind=kind;h.draw();
-   const list=h.html().match(/<table>(订单号[^<]+)(<tr>[\s\S]*?)<\/table>/);
+   const list=h.html().match(/<table>(订单号[\s\S]*?)(<tr>[\s\S]*?)<\/table>/);
    assert.ok(list,(sourceNoteFormat||'generic')+' '+kind);
    const headers=list[1].split('|'),status=headers.findIndex(label=>label.includes('订单状态'));
    assert.deepEqual(headers.slice(0,2),['订单号','金额']);assert(status>1);
@@ -26,6 +26,34 @@ test('all reason order lists keep the order number, formatted amount and order s
    assert.equal(orders[1][1],'<span>0.00 INR</span>');
    assert.deepEqual(orders.slice(2).map(row=>row[1]),['—','—','—']);
   }
+ }
+});
+test('capture-backed user remarks appear in separate order cells and open safely in full',()=>{
+ const remark='首行  <img src=x onerror="fail()">\n'+'原备注内容。'.repeat(24)+'最后一行 & 文本';
+ const rows=[{orderNumber:'SYNTHETIC-NOTE',amount:'12000.10',status:'已通过',manualRemark:'规则原文',rawRejectionReason:'驳回原文',userRemark:remark},
+  {orderNumber:'SYNTHETIC-EMPTY',amount:'0',userRemark:'  '},{orderNumber:'SYNTHETIC-ABSENT',amount:null},
+  {orderNumber:'SYNTHETIC-INVALID',amount:null,userRemark:{text:'SYNTHETIC-INVALID-NOTE'}}];
+ const h=fixture({...grouped,reasonTextFormat:'sanitized_label_v1',reasonTextSanitized:true,canViewBlockingOrders:true,rows,total:rows.length});
+ const decodeAttribute=value=>value.replace(/&(amp|lt|gt|quot|#39);/g,(_,entity)=>({amp:'&',lt:'<',gt:'>',quot:'"','#39':"'"})[entity]);
+ for(const kind of ['blockingOrders','orders']){
+  h.page.state.reason.kind=kind;h.draw();
+  assert.match(h.html(),kind==='blockingOrders'?/采集说明（已脱敏）\|<span class="withdraw-user-remark-heading">用户备注<\/span>\|订单状态/:/驳回原因 \/ 完整原备注\|<span class="withdraw-user-remark-heading">用户备注<\/span>\|操作人账号/);
+  const cells=Array.from(h.html().matchAll(/<div class="withdraw-user-remark">([\s\S]*?)<\/div>/g),x=>x[1]);
+  assert.equal(cells.length,rows.length);assert.deepEqual(cells.slice(1),['—','—','—']);
+  assert.match(cells[0],/点击查看用户备注/);assert.match(cells[0],/…<\/button>/);assert.doesNotMatch(h.html(),/<img|SYNTHETIC-INVALID-NOTE/);
+  assert.match(h.html(),/<td><span>12,000\.10<\/span><\/td>/);
+  vm.runInContext(decodeAttribute(cells[0].match(/onclick="([^"]+)"/)[1]),h.root);
+  assert.match(h.html(),/aria-label="用户备注"/);
+  assert.ok(h.html().includes('<pre>'+escape(remark)+'</pre>'));
+  h.root.withdrawReasonOriginalClose();
+ }
+});
+test('a user remark does not appear in grouped lists or in order replies without detail access',()=>{
+ const rows=[{...grouped.rows[0],orderNumber:'SYNTHETIC',userRemark:'SYNTHETIC-DETAIL-ONLY'}];
+ const h=fixture({...grouped,canViewOrders:false,canViewBlockingOrders:false,rows,total:1});
+ for(const kind of ['blocking','blockingVariants','categories','rejection','operators','blockingOrders','orders']){
+  h.page.state.reason.kind=kind;h.draw();assert.doesNotMatch(h.html(),/SYNTHETIC-DETAIL-ONLY/);
+  if(!['blockingOrders','orders'].includes(kind))assert.doesNotMatch(h.html(),/withdraw-user-remark-heading/);
  }
 });
 test('grouped first-deposit thresholds stay distinct while the full original remains readable',()=>{const h=fixture(grouped);assert.match(h.html(),/>首存金额超过19999<\/button>/);assert.match(h.html(),/>首存金额超过29999<\/button>/);assert.match(h.html(),/已合并 7 种原文/);assert.match(h.html(),/75\.00%/);assert.match(h.html(),/25\.00%/);assert.match(h.html(),/共 2 条/);h.root.withdrawReasonOriginal(grouped.rows[0].sourceReason,'自动出款拦截原文（代表样本）');assert.match(h.html(),/aria-label="自动出款拦截原文（代表样本）"/);assert.match(h.html(),/<pre>首存金额大于19999,首存金额:25000<\/pre>/);});
